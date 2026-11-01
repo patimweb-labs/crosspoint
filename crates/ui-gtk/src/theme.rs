@@ -52,17 +52,17 @@ impl Default for Tokens {
     /// Eingebautes Standard-Theme `crosspoint`.
     fn default() -> Self {
         Tokens {
-            grund: "#060A12".into(),
-            panel: "#0E1624".into(),
-            panel_hell: "#18344E".into(),
-            linie: "#18344E".into(),
-            akzent: "#39DD93".into(),
-            akzent_dunkel: "#1C7D54".into(),
-            schrift: "#D6E2F0".into(),
-            gedaempft: "#7C93A8".into(),
-            warnung: "#F3C24B".into(),
-            auf_akzent: "#04140C".into(),
-            font_family: "DejaVu Sans Mono".into(),
+            grund: "#090C10".into(),
+            panel: "#0E1319".into(),
+            panel_hell: "#131A22".into(),
+            linie: "#1F2831".into(),
+            akzent: "#F2A63B".into(),
+            akzent_dunkel: "#8C520C".into(),
+            schrift: "#E9E5DC".into(),
+            gedaempft: "#98A3AF".into(),
+            warnung: "#FFC873".into(),
+            auf_akzent: "#090C10".into(),
+            font_family: "IBM Plex Mono".into(),
             // Lesbarkeit vor Dichte: 15/13/18 px, nichts darunter.
             schrift_basis: 15.0,
             schrift_klein: 13.0,
@@ -166,16 +166,16 @@ pub fn eingebaute_themes() -> BTreeMap<String, Tokens> {
     // Heller Grund, dunkle Schrift, gleicher Akzent. Der Akzent traegt hier
     // keine Schrift, sondern nur Flaechen - Text auf Akzent bleibt dunkel.
     let hell = Tokens {
-        grund: "#EDF1F6".into(),
-        panel: "#FFFFFF".into(),
-        panel_hell: "#DCE4EE".into(),
-        linie: "#B9C6D6".into(),
-        akzent: "#39DD93".into(),
-        akzent_dunkel: "#12A868".into(),
-        schrift: "#101821".into(),
-        gedaempft: "#5A6B7D".into(),
-        warnung: "#B8791A".into(),
-        auf_akzent: "#04140C".into(),
+        grund: "#F6F2EA".into(),
+        panel: "#FFFDF8".into(),
+        panel_hell: "#EFE9DE".into(),
+        linie: "#DED6C6".into(),
+        akzent: "#A96410".into(),
+        akzent_dunkel: "#C9862C".into(),
+        schrift: "#14181D".into(),
+        gedaempft: "#5A6470".into(),
+        warnung: "#8A5A00".into(),
+        auf_akzent: "#FFFDF8".into(),
         ..Tokens::default()
     };
     m.insert("crosspoint-hell".to_string(), hell);
@@ -183,16 +183,16 @@ pub fn eingebaute_themes() -> BTreeMap<String, Tokens> {
     // Graustufen mit hohem Kontrast: Farbe traegt hier keine Bedeutung,
     // Helligkeit schon.
     let mono = Tokens {
-        grund: "#000000".into(),
-        panel: "#111111".into(),
-        panel_hell: "#2B2B2B".into(),
-        linie: "#4E4E4E".into(),
-        akzent: "#EDEDED".into(),
-        akzent_dunkel: "#8C8C8C".into(),
-        schrift: "#FFFFFF".into(),
-        gedaempft: "#A6A6A6".into(),
-        warnung: "#D9D9D9".into(),
-        auf_akzent: "#000000".into(),
+        grund: "#0A0A0A".into(),
+        panel: "#101010".into(),
+        panel_hell: "#161616".into(),
+        linie: "#3D3D3D".into(),
+        akzent: "#E8E6E1".into(),
+        akzent_dunkel: "#B5B2AD".into(),
+        schrift: "#E8E6E1".into(),
+        gedaempft: "#A8A5A0".into(),
+        warnung: "#D6D3CE".into(),
+        auf_akzent: "#0A0A0A".into(),
         ..Tokens::default()
     };
     m.insert("mono".to_string(), mono);
@@ -760,7 +760,7 @@ mod tests {
         assert_eq!(t.grund, "#060A12");
         assert_eq!(t.panel, "#0E1624");
         assert_eq!(t.panel_hell, "#18344E");
-        assert_eq!(t.akzent, "#39DD93");
+        assert_eq!(t.akzent, "#F2A63B");
         assert_eq!(t.schrift, "#D6E2F0");
         assert_eq!(t.gedaempft, "#7C93A8");
         assert!(t.font_family.contains("Mono"));
@@ -769,12 +769,12 @@ mod tests {
     #[test]
     fn css_enthaelt_die_akzentfarbe() {
         let text = css(&Tokens::default());
-        assert!(text.contains("#39DD93"), "Akzent fehlt im CSS");
+        assert!(text.contains("#F2A63B"), "Akzent fehlt im CSS");
         assert!(text.contains(".zug"));
         let mono = eingebaute_themes().remove("mono").unwrap();
         let mono_css = css(&mono);
         assert!(mono_css.contains("#EDEDED"));
-        assert!(!mono_css.contains("#39DD93"));
+        assert!(!mono_css.contains("#F2A63B"));
     }
 
     #[test]
