@@ -766,6 +766,7 @@ impl Shell {
                 eq_editor: Some(Rc::new(move |strip: usize| {
                     crate::dialogs::eq_fenster(&this2.fenster, this2.params.clone(), strip);
                 })),
+                bus_waehlen: None,
                 pegel: Some(this.pegel.clone()),
             };
             let z = strip::zug(
@@ -791,11 +792,13 @@ impl Shell {
         box_.add_css_class("busse");
         box_.set_margin_start(crate::layout::BLOCK_RAND as i32);
         box_.set_margin_end(crate::layout::BLOCK_RAND as i32);
+        let waehler = Shell::bus_waehler(this);
         for i in 0..crosspoint::BUSES {
             let umfeld = ZugUmfeld {
                 geraete: Some(Rc::clone(&this.geraete)),
                 zuordnung: false,
                 eq_editor: None,
+                bus_waehlen: Some(waehler.clone()),
                 pegel: Some(this.pegel.clone()),
             };
             let z = strip::zug(
@@ -819,6 +822,7 @@ impl Shell {
                 this.master.clone(),
                 this.takt.clone(),
                 ZugUmfeld {
+                    bus_waehlen: Some(waehler.clone()),
                     pegel: Some(this.pegel.clone()),
                     ..ZugUmfeld::default()
                 },
@@ -839,6 +843,7 @@ impl Shell {
             this.master.clone(),
             this.takt.clone(),
             ZugUmfeld {
+                bus_waehlen: Some(Shell::bus_waehler(this)),
                 pegel: Some(this.pegel.clone()),
                 ..ZugUmfeld::default()
             },
@@ -846,6 +851,28 @@ impl Shell {
         box_.append(&z.widget);
         this.zuege.borrow_mut().push(z);
         box_.upcast()
+    }
+
+    /// Bus als Master-Ziel waehlen und alle Zuege nachziehen.
+    ///
+    /// Entspricht `selectBus(i)` im Web: Auswahl merken, Master-Felder mit den
+    /// Werten dieses Busses fuellen, Buszuege markieren.
+    fn bus_waehlen(this: &Rc<Shell>, i: usize) {
+        this.master.bus_setzen(i);
+        for z in this.zuege.borrow().iter() {
+            (z.sync)();
+            z.view.queue_draw();
+        }
+    }
+
+    /// Callback-Version fuer `ZugUmfeld` (der Zug kennt die Shell nicht).
+    fn bus_waehler(this: &Rc<Shell>) -> std::rc::Rc<dyn Fn(usize)> {
+        let schwach = Rc::downgrade(this);
+        std::rc::Rc::new(move |i| {
+            if let Some(s) = schwach.upgrade() {
+                Shell::bus_waehlen(&s, i);
+            }
+        })
     }
 
     /// Makro-Raster: 80 Tasten, sechs Seiten, Klick geht an `macros_io`.

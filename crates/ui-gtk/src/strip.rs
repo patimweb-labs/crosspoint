@@ -136,13 +136,44 @@ impl Rolle {
     }
 }
 
-/// Summenzustand des Masters. Der Kern hat kein Master-Feld; der Fader bleibt
-/// deshalb lokal, Mute wirkt auf alle Busse.
+/// Summenzustand des Masters.
+///
+/// Der Web-Master ist **keine** eigene Summe, sondern eine Fernbedienung fuer
+/// den ausgewaehlten Bus (`send("bus", selectedBus, ...)`). Denselben Weg geht
+/// die Oberflaeche hier: alle Master-Bedienelemente schreiben auf
+/// `BusParam` des gewaehlten Busses, damit kein zweiter, wirkungsloser
+/// Summenzustand entsteht.
 #[derive(Default)]
 pub struct Master {
+    /// Nur noch als Anzeige-Rest fuer Zuege ohne Busbezug; die Wirkung liegt
+    /// auf dem gewaehlten Bus.
     pub gain: AtomicU32,
     pub mute: AtomicBool,
+    /// Ausgewaehlter Bus 0..BUSES (A1..B3).
+    pub bus: std::sync::atomic::AtomicUsize,
 }
+
+impl Master {
+    /// Gewaehlter Bus, immer im gueltigen Bereich.
+    pub fn bus(&self) -> usize {
+        self.bus
+            .load(Ordering::Relaxed)
+            .min(crosspoint::BUSES - 1)
+    }
+
+    pub fn bus_setzen(&self, i: usize) {
+        self.bus
+            .store(i.min(crosspoint::BUSES - 1), Ordering::Relaxed);
+    }
+
+    /// SEL-Knopf: naechster Bus, liefert den neuen Index.
+    pub fn bus_weiter(&self) -> usize {
+        let neu = (self.bus() + 1) % crosspoint::BUSES;
+        self.bus_setzen(neu);
+        neu
+    }
+}
+
 
 /// Taktgeber: Sekunden seit Start und ob der Audio-Thread laeuft.
 #[derive(Default)]
@@ -356,19 +387,19 @@ mod imp {
         // ----- Werte lesen/schreiben -------------------------------------
 
         pub fn gain(&self) -> f32 {
-            if self.rolle() == Rolle::Master {
-                return self
-                    .master()
-                    .map(|m| f32::from_bits(m.gain.load(Ordering::Relaxed)))
-                    .unwrap_or(0.0);
-            }
             let Some(p) = self.params() else {
                 return 0.0;
             };
             match self.rolle() {
                 Rolle::Kanal(i) => f32::from_bits(p.strips[i].gain.load(Ordering::Relaxed)),
                 Rolle::Bus(i) => f32::from_bits(p.buses[i].gain.load(Ordering::Relaxed)),
-                Rolle::Master => 0.0,
+                // Der Master zeigt den Fader des gewaehlten Busses - im Web
+                // schreibt der Master-Knopf `send("bus", selectedBus, "gain")`
+                // und spiegelt den Wert in den Buszug.
+                Rolle::Master => match self.master() {
+                    Some(m) => f32::from_bits(p.buses[m.bus()].gain.load(Ordering::Relaxed)),
+                    None => 0.0,
+                },
             }
         }
 
@@ -376,8 +407,8 @@ mod imp {
             let v = v.clamp(-60.0, 12.0);
             match self.rolle() {
                 Rolle::Master => {
-                    if let Some(m) = self.master() {
-                        m.gain.store(v.to_bits(), Ordering::Relaxed);
+                    if let (Some(p), Some(m)) = (self.params(), self.master()) {
+                        p.set("bus", m.bus(), "gain", v);
                     }
                 }
                 Rolle::Kanal(i) => {
@@ -459,7 +490,12 @@ mod imp {
             match self.rolle() {
                 Rolle::Kanal(i) => bank.strip(i),
                 Rolle::Bus(i) => bank.bus(i),
-                Rolle::Master => bank.master(),
+                // Im Web zeigt der Master-Pegel den gewaehlten Bus
+                // (`setBusMeter(selectedBus)`), nicht das Maximum aller Busse.
+                Rolle::Master => match self.master() {
+                    Some(m) => bank.bus(m.bus()),
+                    None => bank.master(),
+                },
             }
         }
 
@@ -1223,6 +1259,8 @@ pub struct ZugUmfeld {
     pub zuordnung: bool,
     /// Oeffnet den EQ-Editor des Streifens.
     pub eq_editor: Option<std::rc::Rc<dyn Fn(usize)>>,
+    /// Waehlt einen Bus als Master-Ziel (Klick auf den Buskopf).
+    pub bus_waehlen: Option<std::rc::Rc<dyn Fn(usize)>>,
     /// Pegelbank des Kerns (die Anzeige liest direkt daraus).
     pub pegel: Option<Arc<crosspoint::pegel::Pegelbank>>,
 }
@@ -1532,6 +1570,22 @@ pub fn zug(
     kopf.append(&sub);
     box_.append(&kopf);
 
+    // Klick auf den Buskopf waehlt diesen Bus als Master-Ziel
+    // (Web: `u.head.addEventListener("click", () => selectBus(i))`).
+    if let Rolle::Bus(i) = rolle {
+        if let Some(f) = umfeld.bus_waehlen.clone() {
+            let klick = gtk::GestureClick::new();
+            klick.set_button(gtk::gdk::BUTTON_PRIMARY);
+            klick.connect_released(move |_, n, _, _| {
+                if n == 1 {
+                    f(i);
+                }
+            });
+            kopf.add_controller(klick);
+            kopf.set_cursor_from_name(Some("pointer"));
+        }
+    }
+
     // ----- Zeichenflaeche -----
     let view = StripView::neu(
         params.clone(),
@@ -1624,9 +1678,7 @@ pub fn zug(
     } else {
         None
     };
-    let mono = if rolle.ist_kanal() {
-        Some(knopf("MONO", "mono"))
-    } else if matches!(rolle, Rolle::Bus(_)) {
+    let mono = if rolle.ist_kanal() || matches!(rolle, Rolle::Bus(_) | Rolle::Master) {
         Some(knopf("MONO", "mono"))
     } else {
         None
@@ -1663,10 +1715,9 @@ pub fn zug(
         mute.connect_toggled(move |b| {
             let an = b.is_active();
             if r == Rolle::Master {
-                m.mute.store(an, Ordering::Relaxed);
-                for i in 0..crosspoint::BUSES {
-                    p.set("bus", i, "mute", if an { 1.0 } else { 0.0 });
-                }
+                // Master-Mute ist der Mute des gewaehlten Busses
+                // (Web: send("bus", selectedBus, "mute")).
+                p.set("bus", m.bus(), "mute", if an { 1.0 } else { 0.0 });
             } else {
                 let (ziel, idx) = r.ziel();
                 p.set(ziel, idx, "mute", if an { 1.0 } else { 0.0 });
@@ -1689,6 +1740,7 @@ pub fn zug(
     if let Some(b) = &mono {
         let p = params.clone();
         let r = rolle;
+        let m_mono = master.clone();
         b.connect_toggled(move |b| {
             let an = if b.is_active() { 1.0 } else { 0.0 };
             match r {
@@ -1698,7 +1750,10 @@ pub fn zug(
                 Rolle::Bus(i) => {
                     p.set("bus", i, "mono", an);
                 }
-                Rolle::Master => {}
+                // Master-Mono ist der Mono-Schalter des gewaehlten Busses.
+                Rolle::Master => {
+                    p.set("bus", m_mono.bus(), "mono", an);
+                }
             }
         });
     }
@@ -1916,7 +1971,13 @@ pub fn zug(
                 label.set_tooltip_text(Some(&name));
             }
             let (mute_an, solo_an, mono_an) = match r {
-                Rolle::Master => (m.mute.load(Ordering::Relaxed), false, false),
+                // Master spiegelt den gewaehlten Bus (Web: selectBus() zieht
+                // Mute/Mono/EQ/Lim in die Master-Tasten nach).
+                Rolle::Master => (
+                    p.buses[m.bus()].mute.load(Ordering::Relaxed),
+                    false,
+                    p.buses[m.bus()].mono.load(Ordering::Relaxed),
+                ),
                 Rolle::Kanal(i) => (
                     p.strips[i].mute.load(Ordering::Relaxed),
                     p.strips[i].solo.load(Ordering::Relaxed),
