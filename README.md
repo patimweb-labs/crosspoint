@@ -7,6 +7,32 @@ Ring: `rtrb`, JACK: `jack`) - siehe `docs/08-refactor-bibliotheken.md`. Die Engi
 JACK-Client; die Oberfläche läuft als Web-App auf `127.0.0.1:8770` und wird als
 eigenes Fenster gestartet.
 
+## Installation
+
+Fertige Pakete liegen unter [Releases](https://github.com/patimweb-labs/crosspoint/releases):
+
+| System | Paket | Befehl |
+| --- | --- | --- |
+| Linux (Flatpak) | `crosspoint-*.flatpak` | `flatpak install ./crosspoint-*.flatpak` |
+| Fedora | `crosspoint-*.rpm` | `sudo dnf install ./crosspoint-*.rpm` |
+| Debian/Ubuntu | `crosspoint-*.deb` | `sudo apt install ./crosspoint-*.deb` |
+
+Voraussetzungen: PipeWire mit `pipewire-jack` und `pactl`. Aus dem Quelltext
+bauen: siehe „Bauen und starten".
+
+## Screenshots
+
+| Dunkel | Hell |
+| --- | --- |
+| ![Pult im dunklen Theme](docs/ui-gtk-2560x1440.png) | ![Pult im hellen Theme](docs/ui-gtk-hell.png) |
+
+## Daten und Datenschutz
+
+Crosspoint arbeitet ausschließlich lokal. Die Steuer-API hört auf
+`127.0.0.1:8770`, VBAN nur auf dem eingestellten UDP-Port. Keine Telemetrie,
+keine Konten, keine Cloud-Verbindung. Konfiguration und Presets liegen unter
+`~/.config/crosspoint`, Aufnahmen im eingestellten Tape-Ordner.
+
 ## Signalkette
 
 ```

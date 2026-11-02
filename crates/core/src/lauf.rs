@@ -2,7 +2,7 @@
 //!
 //! Bis hierhin stand dieser Ablauf in `src/main.rs` des Binaries. Damit die
 //! Oberflaeche im **selben** Prozess laufen kann (siehe
-//! `docs/09-architektur.md`), ist er hierher gewandert:
+//! `docs/architektur.md`), ist er hierher gewandert:
 //!
 //! ```ignore
 //! let lauf = crosspoint::lauf::starte(crosspoint::lauf::Konfig::vorgabe())?;
