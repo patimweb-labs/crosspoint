@@ -136,6 +136,18 @@ impl Rolle {
     }
 }
 
+/// Anzeigename eines Busses: A1..A5 (Hardware), B1..B3 (virtuell).
+///
+/// Entspricht `BUS_NAMES` im Web; der Master zeigt damit an, welchen Bus er
+/// gerade fernbedient.
+pub fn busname(i: usize) -> String {
+    if i < 5 {
+        format!("A{}", i + 1)
+    } else {
+        format!("B{}", i - 4)
+    }
+}
+
 /// Summenzustand des Masters.
 ///
 /// Der Web-Master ist **keine** eigene Summe, sondern eine Fernbedienung fuer
@@ -1664,6 +1676,25 @@ pub fn zug(
     };
 
     let mute = knopf("M", "mute");
+
+    // SEL im Master: naechster Bus als Master-Ziel
+    // (Web: `$("mSel").onclick = () => selectBus((selectedBus + 1) % BUS_NAMES.length)`).
+    let sel_knopf = if rolle == Rolle::Master {
+        let b = gtk::Button::with_label("SEL");
+        b.add_css_class("knopf");
+        b.set_hexpand(true);
+        b.set_tooltip_text(Some("Naechster Bus als Master-Ziel"));
+        if let Some(f) = umfeld.bus_waehlen.clone() {
+            let m3 = master.clone();
+            b.connect_clicked(move |_| {
+                let neu = m3.bus_weiter();
+                f(neu);
+            });
+        }
+        Some(b)
+    } else {
+        None
+    };
     let eq_knopf = if let (Rolle::Kanal(i), Some(f)) = (rolle, umfeld.eq_editor.clone()) {
         let b = gtk::Button::with_label("EQ");
         b.add_css_class("knopf");
@@ -1848,6 +1879,10 @@ pub fn zug(
     };
     let (sx, sy) = naechster_platz();
     knopf_zeile.attach(&mute, sx, sy, 1, 1);
+    if let Some(b) = &sel_knopf {
+        let (x, y) = naechster_platz();
+        knopf_zeile.attach(b, x, y, 1, 1);
+    }
     if let Some(b) = &eq_knopf {
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
@@ -1954,7 +1989,9 @@ pub fn zug(
         std::rc::Rc::new(move || {
             let (ziel, idx) = r.ziel();
             let name = if ziel == "master" {
-                r.name()
+                // Wie im Web traegt der Master den Namen des gewaehlten
+                // Busses (mSelName), statt eines eigenen "MASTER".
+                format!("MAS {}", busname(m.bus()))
             } else {
                 match p.label(ziel, idx) {
                     Some(l) if !l.is_empty() => l,
