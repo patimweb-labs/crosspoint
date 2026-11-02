@@ -22,9 +22,7 @@ bauen: siehe „Bauen und starten".
 
 ## Screenshots
 
-| Dunkel | Hell |
-| --- | --- |
-| ![Pult im dunklen Theme](docs/ui-gtk-2560x1440.png) | ![Pult im hellen Theme](docs/ui-gtk-hell.png) |
+![Pult in der GTK-Oberfläche](docs/ui-gtk-2560x1440.png)
 
 ## Daten und Datenschutz
 
