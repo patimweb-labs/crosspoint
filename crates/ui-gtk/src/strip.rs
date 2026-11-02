@@ -1715,6 +1715,14 @@ pub fn zug(
         None
     };
 
+    // LIM gibt es an Bussen und am Master (Web: mLim/bus limiter); der Kern
+    // schaltet `bus.limiter_on`, die DSP-Kette haelt die Decke.
+    let lim = if matches!(rolle, Rolle::Bus(_) | Rolle::Master) {
+        Some(knopf("LIM", "lim"))
+    } else {
+        None
+    };
+
     // Die vier Stufen der Sprache gibt es nur an Kanaelen: Lowcut (Rumpeln),
     // TK (Klackser/Poltern), NR (Rauschen unter dem Signal), GATE (Pausen).
     // Busse haben sie nicht.
@@ -1785,6 +1793,24 @@ pub fn zug(
                 Rolle::Master => {
                     p.set("bus", m_mono.bus(), "mono", an);
                 }
+            }
+        });
+    }
+
+    if let Some(b) = &lim {
+        let p = params.clone();
+        let r = rolle;
+        let m_lim = master.clone();
+        b.connect_toggled(move |b| {
+            let an = if b.is_active() { 1.0 } else { 0.0 };
+            match r {
+                Rolle::Bus(i) => {
+                    p.set("bus", i, "limiter", an);
+                }
+                Rolle::Master => {
+                    p.set("bus", m_lim.bus(), "limiter", an);
+                }
+                Rolle::Kanal(_) => {}
             }
         });
     }
@@ -1895,6 +1921,10 @@ pub fn zug(
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
     }
+    if let Some(b) = &lim {
+        let (x, y) = naechster_platz();
+        knopf_zeile.attach(b, x, y, 1, 1);
+    }
     if let Some(b) = &lc {
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
@@ -1979,6 +2009,7 @@ pub fn zug(
         let mute = mute.clone();
         let solo = solo.clone();
         let mono = mono.clone();
+        let lim = lim.clone();
         let lc = lc.clone();
         let tk = tk.clone();
         let nr = nr.clone();
@@ -2037,6 +2068,16 @@ pub fn zug(
             if let Some(b) = &mono {
                 if b.is_active() != mono_an {
                     b.set_active(mono_an);
+                }
+            }
+            if let Some(b) = &lim {
+                let lim_an = match r {
+                    Rolle::Bus(i) => p.buses[i].limiter_on.load(Ordering::Relaxed),
+                    Rolle::Master => p.buses[m.bus()].limiter_on.load(Ordering::Relaxed),
+                    Rolle::Kanal(_) => false,
+                };
+                if b.is_active() != lim_an {
+                    b.set_active(lim_an);
                 }
             }
             if let Rolle::Kanal(i) = r {

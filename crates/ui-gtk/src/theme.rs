@@ -509,6 +509,7 @@ button.knopf:hover {{ border-color: {akzent}; color: {schrift}; }}
 button.knopf:checked {{ background-color: {akzent}; color: {auf_akzent}; border-color: {akzent}; }}
 button.knopf.solo:checked {{ background-color: {schrift}; color: {grund}; border-color: {schrift}; }}
 button.knopf.mono:checked {{ background-color: {akzent_d}; color: {schrift}; border-color: {akzent_d}; }}
+button.knopf.lim:checked {{ background-color: {akzent_d}; color: {schrift}; border-color: {akzent_d}; }}
 /* Lowcut, TK, NR und Gate: aktiver Zustand im Signalgruen (Akzent). */
 button.knopf.lc:checked, button.knopf.tk:checked, button.knopf.nr:checked, button.knopf.gate:checked {{
     background-color: {akzent};
