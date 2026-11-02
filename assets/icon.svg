@@ -2,8 +2,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" shape-rendering="crispEdges">
   <title>Crosspoint</title>
   <!-- Erzeugt von markenwerk aus marken/crosspoint.pm. Nicht von Hand ändern:
-       die Quelle ist das Raster, nicht dieses Bild. -->
-  <rect width="512" height="512" fill="#C9862C"/>
+       die Quelle ist das Raster, nicht dieses Bild. Kachelform: Achteck. -->
+  <path d="M 112 0 H 400 L 512 112 V 400 L 400 512 H 112 L 0 400 V 112 Z" fill="#C9862C"/>
 <rect x="80" y="80" width="96" height="16" fill="#E9E5DC"/>
 <rect x="336" y="80" width="96" height="16" fill="#E9E5DC"/>
 <rect x="80" y="96" width="96" height="16" fill="#E9E5DC"/>
