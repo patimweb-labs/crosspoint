@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "crosspoint"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "crosspoint-core",
  "crosspoint-ui",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "crosspoint-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "jack",
  "macros",
@@ -794,7 +794,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "macros"
-version = "0.1.0"
+version = "0.5.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "tape"
-version = "0.1.0"
+version = "0.5.1"
 dependencies = [
  "hound",
 ]
@@ -1283,7 +1283,7 @@ checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "vban"
-version = "0.1.0"
+version = "0.5.1"
 
 [[package]]
 name = "version-compare"
