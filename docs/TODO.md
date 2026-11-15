@@ -4,30 +4,66 @@ Stand: 2026-10-29. Erledigt ist alles bis Release `v0.2.0` (natives Fenster,
 Zustand merken, Autostart, Tray). Diese Liste ist die Arbeitsgrundlage für das,
 was noch fehlt — sortiert nach Nutzen pro Aufwand.
 
+## 0. Stand 2026-11-14 (Fehlerrunde)
+
+Erledigt in dieser Runde:
+
+- [x] **Autosave aus dem Fenster**: Änderungen in der GTK-Oberfläche wurden nie
+      gespeichert (nur HTTP/OSC markierten). Der Autosave erkennt Änderungen
+      jetzt selbst (`restore::Beobachter`) und sichert beim Beenden.
+- [x] **Preset vollständig**: Namen (`label`), EQ-Bänder (`eq_cells`),
+      Kompressor (`comp_*`) und Gate-Zeiten werden gespeichert **und** geladen.
+- [x] **VBAN-Dialog** auf echten Daten (vorher Beispieldaten): Senden/Empfangen
+      schalten, Host/Port/Stream, Incoming/Outgoing-Tabelle, Reset/Load/Save.
+      `vban.json` wird beim Start geladen.
+- [x] **MIDI-Dialog**: MIDI-Geräte aus dem ALSA-Sequencer statt Audio-Eingängen;
+      erzeugte `midimonster.cfg` mit gültigem Instanznamen, `write` = Ausgang,
+      Wertebereichen (sonst Fader bei 0..1 dB) und Lern-Weiterleitung
+      `cc{0..127} > /midi/cc/{0..127}`; LEARN verwirft alte CC-Meldungen;
+      Ziele `/strip/8..12` (gibt es nicht) ersetzt durch Bus-Gain bzw. Solo.
+- [x] OSC `/midi/cc/0 <wert>` wurde verworfen (CC 0 = Fader 1).
+- [x] **COMP** je Kanalzug (Rechtsklick: Schwelle, Ratio, Attack, Release,
+      Ausgang), **T/D** am Master (Trim und Delay des gewählten Busses).
+- [x] `cargo fmt`, `clippy -D warnings`, zwei veraltete Tests (Theme-Farben,
+      WebSocket-Startframe).
+
+Nachgezogen am 2026-11-15:
+
+- [x] `crates/macros/target/` aus dem Index genommen (stand schon in `.gitignore`).
+- [x] Web-Referenz: COMP- und GATE-Regler schalten die Stufe jetzt ein
+      (Anschlag = aus) und folgen dem Zustand aus `/api/state`.
+- [x] MIDIMonster: `[a-b]` ist dort eine Zeichenklasse, keine Zahlenspanne –
+      CC-Muster daher `/midi/cc/*` (geprüft an `backends/osc.md`).
+- [x] Screenshots in allen drei Themes (Pult, VBAN, MIDI), erzeugt mit
+      `CROSSPOINT_NO_WIRE=1 CROSSPOINT_NO_RESTORE=1` auf eigenem Xwayland;
+      dabei Schalter und Eingabefelder der Dialoge an die Tokens angebunden.
+- [x] Speichern von Ende zu Ende belegt: Name, Comp, EQ-Band, Trim setzen,
+      schließen, neu starten – Werte sind wieder da.
+
 ## 1. Läuft gerade
 
-- [ ] **VBAN-Dialog im Original-Look**: `IP Audio Network Configuration` mit
+- [x] **VBAN-Dialog im Original-Look**: `IP Audio Network Configuration` mit
       VBAN an/aus, UDP-Port, IP, Main Stream 48 000 Hz, Incoming- und
       Outgoing-Tabelle (Streamname, IP, SR, Ch, Format, Quality, Destination
       bzw. Source, Net Quality, Errors), Reset/Load/Save Config.
       Abnahme: Dialog per Screenshot, `GET/POST /api/vban/config` per `curl`
       gesetzt und zurückgelesen.
-- [ ] **Eigene Namen für Ein- und Ausgänge**: Parameter `label` je Streifen und
+- [x] **Eigene Namen für Ein- und Ausgänge**: Parameter `label` je Streifen und
       Bus, Anzeige im Kanalzug statt `HW IN 1` / `Bus A1`, gespeichert über den
       vorhandenen Autosave.
       Abnahme: `curl` setzt Label, UI zeigt es, nach Neustart noch da.
 
 ## 2. MIDI — über MIDIMonster, nicht selbst gebaut
 
-- [ ] **OSC-Eingang in der Engine**: `POST`/UDP-OSC auf `127.0.0.1:9000`,
+- [x] **OSC-Eingang in der Engine**: `POST`/UDP-OSC auf `127.0.0.1:9000`,
       Nachrichten `/strip/<n>/<param> <wert>` und `/bus/<n>/<param> <wert>`,
       angewendet über dieselbe Funktion wie `/api/set`.
       Abnahme: `oscsend` setzt einen Fader, `/api/state` zeigt den Wert.
-- [ ] **MIDIMonster-Konfiguration** mitliefern (`data/midimonster.cfg`):
+- [x] **MIDIMonster-Konfiguration** mitliefern (`data/midimonster.cfg`):
       MIDI-Backend auf das vorhandene Gerät, Mapping CC → OSC-Pfad, ein
       Beispiel-Mapping für acht Fader und Mute.
       Abnahme: CC `B0 07 64` bewegt Streifen 1 über den ganzen Weg.
-- [ ] **Learn-Hilfe im UI**: Zeile anklicken, Fader bewegen, Zuordnung wird in
+- [x] **Learn-Hilfe im UI**: Zeile anklicken, Fader bewegen, Zuordnung wird in
       `midimonster.cfg` nachgetragen (die Map-Tabelle bleibt Anzeige + Editor,
       die Arbeit macht MIDIMonster).
       Abnahme: neuer Eintrag in der Datei, nach Neustart wirksam.
@@ -59,18 +95,19 @@ was noch fehlt — sortiert nach Nutzen pro Aufwand.
       (ohne Signatur „Right-click → Open" dokumentieren)
 - [ ] **Flathub-Einreichung**: Metainfo ist da, Screenshots im Repo,
       Einreichung als PR gegen `flathub/flathub`
-- [ ] **Host-Betrieb ohne Flatpak** ebenfalls nativ (braucht
-      `webkit2gtk4.1-devel`; auf Bazzite nur per Layering — dokumentieren oder
-      bewusst beim Browser-Fallback bleiben)
+- [x] **Host-Betrieb ohne Flatpak** ebenfalls nativ: `crosspoint-launch.sh`
+      startet `crosspoint` (GTK4, `cargo build --release --features ui`)
 - [ ] release-please-Kette einmal komplett durchlaufen lassen
       (Feature-Commit → Release-PR → Merge), bisher wird per Tag ausgelöst
 
 ## 6. Aufräumen
 
 - [ ] `docs/04-abgleich-original.md` nach jedem Feature nachziehen
-- [ ] Brave-Reste des alten Fensterpfads entfernen (`pkill -f crosspoint-browser`)
-- [ ] `tools/fenster_screenshot.py`: CDP-Timeout beheben (Screenshot über
-      `Page.captureScreenshot` bricht nach 30 s ab)
+- [x] Brave-Reste des alten Fensterpfads entfernt: `crosspoint-launch.sh`
+      startet das native Fenster, `crosspoint-browser-prefs.sh` und
+      `tools/fenster_screenshot.py` (CDP gegen Brave) sind weg (2026-11-15)
+- [ ] Tray im nativen Fenster (`crosspoint --minimized`); bis dahin übernimmt
+      `crosspoint-fenster` (WebKitGTK) den Tray-Betrieb
 
 ## Nicht geplant (bewusste Entscheidung)
 
