@@ -209,10 +209,10 @@ pub fn starten(app_id: &str, args: Args) {
                 gtk::glib::timeout_add_local_once(Duration::from_millis(600), move || {
                     match was.as_str() {
                         "vban" => {
-                            dialogs::vban_fenster(&s2.fenster, &dialogs::BeispielVban);
+                            dialogs::vban_fenster(&s2.fenster, &s2.vban);
                         }
                         "midi" => {
-                            dialogs::midi_fenster(&s2.fenster, &[]);
+                            dialogs::midi_fenster(&s2.fenster);
                         }
                         "darstellung" => {
                             dialogs::darstellung_fenster(&s2);
