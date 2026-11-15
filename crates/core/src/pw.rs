@@ -276,7 +276,7 @@ impl Graph {
 
     fn nach_anzeige(&self, passt: impl Fn(&Node) -> bool) -> Vec<&Node> {
         let mut liste: Vec<&Node> = self.nodes.iter().filter(|n| passt(n)).collect();
-        liste.sort_by(|a, b| a.anzeige().to_lowercase().cmp(&b.anzeige().to_lowercase()));
+        liste.sort_by_key(|a| a.anzeige().to_lowercase());
         liste
     }
 
@@ -639,7 +639,7 @@ impl Bestand {
             if rest.is_empty() {
                 continue;
             }
-            if beste.map_or(true, |(laenge, _)| name.len() > laenge) {
+            if beste.is_none_or(|(laenge, _)| name.len() > laenge) {
                 beste = Some((name.len(), *id));
             }
         }
@@ -1175,7 +1175,7 @@ async fn lauf(
         Ok(loop_) => loop_,
         Err(e) => return Some(format!("PipeWire-MainLoop nicht anlegbar: {e:?}")),
     };
-    let context = match pw::context::ContextBox::new(&main_loop.loop_(), None) {
+    let context = match pw::context::ContextBox::new(main_loop.loop_(), None) {
         Ok(context) => context,
         Err(e) => return Some(format!("PipeWire-Context nicht anlegbar: {e:?}")),
     };
@@ -1538,6 +1538,7 @@ fn verbinden(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn trennen(
     registry: &pw::registry::Registry,
     core: &pw::core::Core,

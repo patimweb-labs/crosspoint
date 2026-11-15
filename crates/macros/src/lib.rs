@@ -43,7 +43,7 @@
 //!
 //! * `off`   - keine Aktion, Flanken werden verbraucht.
 //! * `on`    - rastend, jede Flanke schaltet um **und** fuehrt die Aktionen aus,
-//!             damit der Zielparameter dem Tastenzustand folgt.
+//!   damit der Zielparameter dem Tastenzustand folgt.
 //! * `color` - wie `on`, nur mit anderer Anzeige.
 //! * `trigger` - tastenartig, jede Flanke fuehrt die Aktionen einmal aus.
 //!

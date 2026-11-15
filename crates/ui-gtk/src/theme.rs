@@ -758,12 +758,12 @@ mod tests {
     #[test]
     fn standard_theme_hat_die_palette() {
         let t = Tokens::default();
-        assert_eq!(t.grund, "#060A12");
-        assert_eq!(t.panel, "#0E1624");
-        assert_eq!(t.panel_hell, "#18344E");
+        assert_eq!(t.grund, "#090C10");
+        assert_eq!(t.panel, "#0E1319");
+        assert_eq!(t.panel_hell, "#131A22");
         assert_eq!(t.akzent, "#F2A63B");
-        assert_eq!(t.schrift, "#D6E2F0");
-        assert_eq!(t.gedaempft, "#7C93A8");
+        assert_eq!(t.schrift, "#E9E5DC");
+        assert_eq!(t.gedaempft, "#98A3AF");
         assert!(t.font_family.contains("Mono"));
     }
 
@@ -774,7 +774,7 @@ mod tests {
         assert!(text.contains(".zug"));
         let mono = eingebaute_themes().remove("mono").unwrap();
         let mono_css = css(&mono);
-        assert!(mono_css.contains("#EDEDED"));
+        assert!(mono_css.contains("#E8E6E1"));
         assert!(!mono_css.contains("#F2A63B"));
     }
 

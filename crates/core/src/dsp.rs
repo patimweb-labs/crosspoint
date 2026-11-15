@@ -579,6 +579,8 @@ impl C5Limiter {
     }
 
     /// Ein Sample durch die Drei-Band-Kette.
+    // Je Band werden fuenf parallele Felder gelesen (Band, Gain, Comp, Limiter).
+    #[allow(clippy::needless_range_loop)]
     pub fn process(&mut self, x: f32, cfg: &C5Config, sr: f32) -> f32 {
         if !cfg.enabled {
             return x;
@@ -616,10 +618,12 @@ mod c5_tests {
 
     #[test]
     fn begrenzt_auf_decke() {
-        let mut cfg = C5Config::default();
-        cfg.enabled = true;
-        cfg.ceiling_db = [-6.0; 3];
-        cfg.comp_on = [false; 3];
+        let cfg = C5Config {
+            enabled: true,
+            ceiling_db: [-6.0; 3],
+            comp_on: [false; 3],
+            ..C5Config::default()
+        };
         let mut c5 = C5Limiter::default();
         let mut peak = 0f32;
         for i in 0..9600 {
@@ -635,10 +639,12 @@ mod c5_tests {
 
     #[test]
     fn leises_signal_bleibt_erhalten() {
-        let mut cfg = C5Config::default();
-        cfg.enabled = true;
-        cfg.ceiling_db = [0.0; 3];
-        cfg.comp_on = [false; 3];
+        let cfg = C5Config {
+            enabled: true,
+            ceiling_db: [0.0; 3],
+            comp_on: [false; 3],
+            ..C5Config::default()
+        };
         let mut c5 = C5Limiter::default();
         let mut peak = 0f32;
         for i in 0..9600 {

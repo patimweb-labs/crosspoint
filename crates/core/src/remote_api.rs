@@ -142,6 +142,11 @@ impl Target {
             Target::Bus => BUSES,
         }
     }
+
+    /// Ein Ziel hat immer Indizes; der Vollstaendigkeit halber (Clippy).
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Eine geparste Zuweisung aus dem `SetParameters`-Text.

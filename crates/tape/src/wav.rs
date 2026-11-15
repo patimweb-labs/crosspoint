@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn kopf_pcm24_quad_ist_extensible() {
-        let b = datei(Format::Pcm24, 4, &vec![0.0f32; 4]);
+        let b = datei(Format::Pcm24, 4, &[0.0f32; 4]);
         assert_eq!(u16_at(&b, 22), 4);
         assert_eq!(u16_at(&b, 20), 0xFFFE);
         let (off, len) = data_chunk(&b);

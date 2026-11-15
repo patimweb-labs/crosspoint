@@ -725,7 +725,7 @@ mod tests {
     #[test]
     fn bank_laesst_hoechstens_80_tasten_zu() {
         assert_eq!(Bank::new().len(), MAX_BUTTONS);
-        let zu_viele: Vec<Button> = (0..MAX_BUTTONS + 1).map(|i| Button::standard(i)).collect();
+        let zu_viele: Vec<Button> = (0..MAX_BUTTONS + 1).map(Button::standard).collect();
         assert!(Bank::from_buttons(zu_viele).is_err());
         let mut bank = Bank::new();
         assert!(bank.set(80, Button::standard(80)).is_err());

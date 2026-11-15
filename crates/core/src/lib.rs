@@ -451,13 +451,17 @@ mod tests {
 
     #[test]
     fn grenzwerte_wie_im_original() {
-        let mut c = EngineConfig::default();
-        c.sample_rate = 44_100;
+        let mut c = EngineConfig {
+            sample_rate: 44_100,
+            ..EngineConfig::default()
+        };
         assert!(c.validate().is_ok());
         c.sample_rate = 50_000;
         assert!(c.validate().is_err());
-        let mut c = EngineConfig::default();
-        c.block_frames = 2049;
+        let mut c = EngineConfig {
+            block_frames: 2049,
+            ..EngineConfig::default()
+        };
         assert!(c.validate().is_err());
         c.block_frames = 2048;
         assert!(c.validate().is_ok());
