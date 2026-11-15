@@ -55,11 +55,13 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
                 ));
             }
         }
+        // Crosspoint hat acht Streifen (0..7); die zweite Seite fuehrt
+        // deshalb die acht Busse statt weiterer virtueller Streifen.
         1 => {
-            for i in 0..8 {
+            for (i, name) in crosspoint::BUS_NAMES.iter().enumerate() {
                 z.push(Zeile::neu(
-                    format!("Gain of Virtual Strip #{}", i + 1),
-                    format!("/strip/{}/gain", i + 5),
+                    format!("Gain Fader Bus {name}"),
+                    format!("/bus/{i}/gain"),
                 ));
             }
         }
@@ -82,8 +84,8 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
         4 => {
             for i in 0..8 {
                 z.push(Zeile::neu(
-                    format!("Solo Virtual Strip #{}", i + 1),
-                    format!("/strip/{}/solo", i + 5),
+                    format!("Solo Strip #{}", i + 1),
+                    format!("/strip/{i}/solo"),
                 ));
             }
         }
@@ -104,8 +106,8 @@ impl Karte {
     pub fn leer() -> Karte {
         Karte {
             name: "Crosspoint".into(),
-            eingang: "kein Geraet".into(),
-            ausgang: "kein Geraet".into(),
+            eingang: KEIN_GERAET.into(),
+            ausgang: KEIN_GERAET.into(),
             zeilen: seiten_ziele(0),
         }
     }
@@ -192,8 +194,47 @@ fn cc_aus(quelle: &str) -> Option<u8> {
     nr.trim_matches(|c| c == '{' || c == '}').parse().ok()
 }
 
+/// Name der MIDIMonster-Instanz in der erzeugten Datei.
+///
+/// Fest und ohne Leerzeichen: MIDIMonster erwartet einen Bezeichner, der
+/// echte Geraetename (oft mit Leerzeichen) steht in `read`/`write`.
+pub const INSTANZ: &str = "controller";
+
+/// Platzhalter, wenn noch kein Geraet gewaehlt ist (wie `data/midimonster.cfg`).
+pub const PLATZHALTER: &str = "nanoKONTROL2";
+
+/// Kein Geraet gewaehlt.
+pub const KEIN_GERAET: &str = "kein Geraet";
+
+/// Wertebereiche der OSC-Ziele. Ohne sie schickt MIDIMonster 0.0..1.0, und
+/// ein Fader stuende in der Engine zwischen 0 und 1 dB.
+const BEREICHE: &[&str] = &[
+    "/strip/[0-7]/gain = f -60.0 12.0",
+    "/bus/[0-7]/gain = f -60.0 12.0",
+    "/strip/[0-7]/pan = f -1.0 1.0",
+    "/strip/[0-7]/mute = f 0.0 1.0",
+    "/strip/[0-7]/solo = f 0.0 1.0",
+    "/strip/[0-7]/mono = f 0.0 1.0",
+    "/bus/[0-7]/mute = f 0.0 1.0",
+    // `[a-b]` ist bei MIDIMonster eine Zeichenklasse (ein Zeichen), keine
+    // Zahlenspanne: fuer die mehrstelligen CC-Nummern deshalb `*`.
+    "/midi/cc/* = f 0.0 127.0",
+];
+
+fn gewaehlt(name: &str) -> Option<&str> {
+    let n = name.trim();
+    if n.is_empty() || n == KEIN_GERAET {
+        None
+    } else {
+        Some(n)
+    }
+}
+
 impl Karte {
     /// Datei lesen. Fehlt sie, kommt eine leere Karte.
+    ///
+    /// Versteht die erzeugte Datei (`read`/`write` im `[midi ...]`-Abschnitt,
+    /// `; name = ...`) und die mitgelieferte `data/midimonster.cfg`.
     pub fn laden(p: impl AsRef<Path>) -> Karte {
         let mut k = Karte::leer();
         k.alle();
@@ -201,36 +242,49 @@ impl Karte {
             return k;
         };
         let mut abschnitt = String::new();
+        let mut instanz: Option<String> = None;
+        let mut name: Option<String> = None;
         for roh in text.lines() {
             let zeile = roh.trim();
+            if let Some(rest) = zeile.strip_prefix("; name =") {
+                name = Some(rest.trim().to_string());
+                continue;
+            }
             if zeile.starts_with(';') || zeile.is_empty() {
                 continue;
             }
             if zeile.starts_with('[') {
                 abschnitt = zeile.trim_matches(|c| c == '[' || c == ']').to_string();
                 let mut teile = abschnitt.split_whitespace();
-                match (teile.next(), teile.next()) {
-                    (Some("midi"), Some(name)) => {
-                        if k.eingang == "kein Geraet" {
-                            k.eingang = name.to_string();
-                            k.ausgang = name.to_string();
-                        }
-                        k.name = name.to_string();
-                    }
-                    _ => {}
+                if let (Some("midi"), Some(n)) = (teile.next(), teile.next()) {
+                    instanz = Some(n.to_string());
                 }
                 continue;
             }
-            if !abschnitt.starts_with("map") || !zeile.contains("<>") {
+            if abschnitt.starts_with("midi") {
+                if let Some((schluessel, wert)) = zeile.split_once('=') {
+                    match schluessel.trim() {
+                        "read" => k.eingang = wert.trim().to_string(),
+                        "write" => k.ausgang = wert.trim().to_string(),
+                        _ => {}
+                    }
+                }
                 continue;
             }
-            let (von, nach) = zeile.split_once("<>").unwrap_or((zeile, ""));
+            if !abschnitt.starts_with("map") || !zeile.contains('>') {
+                continue;
+            }
+            let (von, nach) = zeile
+                .split_once("<>")
+                .or_else(|| zeile.split_once('>'))
+                .unwrap_or((zeile, ""));
             let ziel = nach.trim().replace("crosspoint.", "");
             let cc = cc_aus(von.trim());
             if let (Some(cc), true) = (cc, ziel.starts_with('/')) {
                 k.binden(&ziel, cc);
             }
         }
+        k.name = name.or(instanz).unwrap_or(k.name);
         k
     }
 
@@ -240,33 +294,80 @@ impl Karte {
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        let geraet = if self.eingang == "kein Geraet" || self.eingang.is_empty() {
-            "nanokontrol2".to_string()
-        } else {
-            self.eingang.clone()
-        };
+        std::fs::write(p, self.als_text()).map_err(|e| format!("{}: {e}", p.display()))
+    }
+
+    /// Inhalt der Datei in MIDIMonster-Syntax.
+    pub fn als_text(&self) -> String {
+        let lesen = gewaehlt(&self.eingang).unwrap_or(PLATZHALTER);
+        let schreiben = gewaehlt(&self.ausgang);
         let mut s = String::new();
         s.push_str("; Crosspoint: MIDI -> OSC ueber MIDIMonster\n");
         s.push_str("; Erzeugt von der GTK-Oberflaeche (Dialog MIDI-Mapping).\n");
-        s.push_str("; Start: crosspoint-engine, dann midimonster <diese Datei>.\n\n");
-        s.push_str(&format!("[midi {geraet}]\n"));
-        s.push_str(&format!("read = {geraet}\n"));
-        s.push_str(&format!("write = {geraet}\n\n"));
+        s.push_str("; Start: crosspoint, dann midimonster <diese Datei>.\n");
+        s.push_str(&format!("; name = {}\n\n", self.name.trim()));
+        s.push_str(&format!("[midi {INSTANZ}]\n"));
+        s.push_str(&format!("read = {lesen}\n"));
+        if let Some(w) = schreiben {
+            s.push_str(&format!("write = {w}\n"));
+        }
+        s.push('\n');
         s.push_str("[osc crosspoint]\n");
         s.push_str("bind = 127.0.0.1 9001\n");
-        s.push_str("dest = 127.0.0.1 9000\n\n");
-        s.push_str("; Rueckmeldung an die Oberflaeche (Lernmodus): jede eingehende\n");
-        s.push_str("; CC-Nachricht zusaetzlich als /midi/cc <kanal> <cc> <wert>.\n");
-        s.push_str("[map]\n");
-        for z in self.zeilen.iter().filter(|z| z.cc.is_some()) {
-            s.push_str(&format!(
-                "{geraet}.ch0.cc{} <> crosspoint.{}\n",
-                z.cc.unwrap(),
-                z.ziel
-            ));
+        s.push_str("dest = 127.0.0.1 9000\n");
+        for b in BEREICHE {
+            s.push_str(b);
+            s.push('\n');
         }
-        std::fs::write(p, s).map_err(|e| format!("{}: {e}", p.display()))
+        s.push('\n');
+        s.push_str("[map]\n");
+        s.push_str("; Lernmodus: jede CC geht zusaetzlich als /midi/cc/<nr> an die\n");
+        s.push_str("; Engine, die Oberflaeche liest daraus die Nummer.\n");
+        s.push_str(&format!(
+            "{INSTANZ}.ch0.cc{{0..127}} > crosspoint./midi/cc/{{0..127}}\n"
+        ));
+        for z in self.zeilen.iter() {
+            if let Some(cc) = z.cc {
+                s.push_str(&format!("{INSTANZ}.ch0.cc{cc} <> crosspoint.{}\n", z.ziel));
+            }
+        }
+        s
     }
+}
+
+/// MIDI-Anschluesse aus `/proc/asound/seq/clients`.
+///
+/// Liefert die Namen der Clients mit mindestens einem Port, ohne die
+/// System-Clients (`System`, `Midi Through`, `PipeWire-*`). Diese Namen
+/// nimmt MIDIMonster als `read`/`write` (Praefix des Geraetenamens).
+pub fn midi_geraete_aus(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for zeile in text.lines() {
+        let Some(rest) = zeile.strip_prefix("Client") else {
+            continue;
+        };
+        let Some((_, nach)) = rest.split_once(':') else {
+            continue;
+        };
+        let Some(name) = nach.split('"').nth(1) else {
+            continue;
+        };
+        let system = name == "System"
+            || name == "Midi Through"
+            || name.starts_with("PipeWire")
+            || name.is_empty();
+        if !system && !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Angeschlossene MIDI-Geraete (leer, wenn die Datei fehlt).
+pub fn midi_geraete() -> Vec<String> {
+    std::fs::read_to_string("/proc/asound/seq/clients")
+        .map(|t| midi_geraete_aus(&t))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -285,15 +386,18 @@ mod tests {
         let p = temp("rundlauf");
         let mut k = Karte::leer();
         k.alle();
-        k.eingang = "nanokontrol2".into();
-        k.ausgang = "nanokontrol2".into();
+        k.name = "Mein Pult".into();
+        k.eingang = "nanoKONTROL2".into();
+        k.ausgang = "nanoKONTROL2 Out".into();
         k.binden("/strip/0/gain", 0);
         k.binden("/strip/7/pan", 17);
         k.binden("/strip/6/solo", 43);
         k.speichern(&p).unwrap();
 
         let gelesen = Karte::laden(&p);
-        assert_eq!(gelesen.name, "nanokontrol2");
+        assert_eq!(gelesen.name, "Mein Pult");
+        assert_eq!(gelesen.eingang, "nanoKONTROL2");
+        assert_eq!(gelesen.ausgang, "nanoKONTROL2 Out");
         assert_eq!(gelesen.zeilen.len(), k.zeilen.len());
         let cc = |ziel: &str| gelesen.zeilen.iter().find(|z| z.ziel == ziel).unwrap().cc;
         assert_eq!(cc("/strip/0/gain"), Some(0));
@@ -335,9 +439,12 @@ mod tests {
         assert_eq!(s2[0].ziel, "/strip/0/pan");
         let s3 = seiten_ziele(3);
         assert_eq!(s3[0].titel, "Mute Strip #1");
+        let s1 = seiten_ziele(1);
+        assert_eq!(s1[0].titel, "Gain Fader Bus A1");
+        assert_eq!(s1[7].ziel, "/bus/7/gain");
         let s4 = seiten_ziele(4);
-        assert_eq!(s4[0].titel, "Solo Virtual Strip #1");
-        assert_eq!(s4[0].ziel, "/strip/5/solo");
+        assert_eq!(s4[0].titel, "Solo Strip #1");
+        assert_eq!(s4[0].ziel, "/strip/0/solo");
         let s5 = seiten_ziele(5);
         assert_eq!(s5.len(), FREIE_CCS);
         assert_eq!(s5[55].titel, "Control Change 55");
@@ -369,5 +476,86 @@ mod tests {
         let k = Karte::laden(&p);
         assert_eq!(k.gebunden(), 0);
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn alle_ziele_liegen_im_gueltigen_bereich() {
+        // Acht Streifen, acht Busse: kein Ziel darf darueber hinaus zeigen.
+        for seite in 0..SEITEN {
+            for z in seiten_ziele(seite) {
+                let teile: Vec<&str> = z.ziel.split('/').filter(|t| !t.is_empty()).collect();
+                if let [ziel @ ("strip" | "bus"), n, _] = teile.as_slice() {
+                    let n: usize = n.parse().unwrap();
+                    let grenze = if *ziel == "strip" {
+                        crosspoint::STRIPS
+                    } else {
+                        crosspoint::BUSES
+                    };
+                    assert!(n < grenze, "{} zeigt ins Leere", z.ziel);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn erzeugte_datei_ist_fuer_midimonster_vollstaendig() {
+        let mut k = Karte::leer();
+        k.alle();
+        k.eingang = "Arturia BeatStep".into();
+        k.binden("/strip/0/gain", 7);
+        let text = k.als_text();
+        // Instanzname ohne Leerzeichen, Geraetename in read/write.
+        assert!(text.contains("[midi controller]"), "{text}");
+        assert!(text.contains("read = Arturia BeatStep"), "{text}");
+        // Kein Ausgang gewaehlt: keine write-Zeile.
+        assert!(!text.contains("write ="), "{text}");
+        // Ohne Wertebereich stuende der Fader zwischen 0 und 1 dB.
+        assert!(text.contains("/strip/[0-7]/gain = f -60.0 12.0"), "{text}");
+        // Keine mehrstelligen Zeichenklassen: `[0-127]` hiesse "0, 1, 2 oder 7".
+        assert!(!text.contains("[0-127]"), "{text}");
+        assert!(text.contains("/midi/cc/* = f 0.0 127.0"), "{text}");
+        // Lernmodus braucht die Weiterleitung jeder CC.
+        assert!(
+            text.contains("controller.ch0.cc{0..127} > crosspoint./midi/cc/{0..127}"),
+            "{text}"
+        );
+        assert!(
+            text.contains("controller.ch0.cc7 <> crosspoint./strip/0/gain"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn mitgelieferte_datei_wird_gelesen() {
+        let text = include_str!("../../../data/midimonster.cfg");
+        let p = temp("mitgeliefert");
+        std::fs::write(&p, text).unwrap();
+        let k = Karte::laden(&p);
+        assert_eq!(k.eingang, "nanoKONTROL2");
+        assert_eq!(k.ausgang, "nanoKONTROL2");
+        // Einzelzuordnung cc16 -> /bus/0/gain steht auf Seite 2.
+        let cc = k
+            .zeilen
+            .iter()
+            .find(|z| z.ziel == "/bus/0/gain")
+            .unwrap()
+            .cc;
+        assert_eq!(cc, Some(16));
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn midi_geraete_ohne_systemclients() {
+        let text = "Client info\n  cur  clients : 4\n\
+Client   0 : \"System\" [Kernel Legacy]\n  Port   0 : \"Timer\" (Rwe-) [In/Out]\n\
+Client  14 : \"Midi Through\" [Kernel Legacy]\n\
+Client  24 : \"nanoKONTROL2\" [Kernel Legacy]\n  Port   0 : \"nanoKONTROL2 _ CTRL\" (RWeX) [In/Out]\n\
+Client 128 : \"Arturia BeatStep\" [User Legacy]\n\
+Client 144 : \"PipeWire-System\" [User Legacy]\n";
+        assert_eq!(
+            midi_geraete_aus(text),
+            vec!["nanoKONTROL2".to_string(), "Arturia BeatStep".to_string()]
+        );
+        assert!(midi_geraete_aus("").is_empty());
     }
 }

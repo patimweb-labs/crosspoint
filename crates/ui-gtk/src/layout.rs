@@ -869,6 +869,22 @@ impl LayoutSet {
     }
 }
 
+/// Schriftgroesse der Fader-Skala: so gross wie `fs`, aber hoechstens so,
+/// dass die breiteste Beschriftung (`breite_bei_fs`, gemessen bei `fs`) in
+/// `platz` passt. Unter `minimum` lohnt keine Schrift mehr - dann `None`,
+/// und die Skala zeigt nur Striche statt abgeschnittener "-…".
+pub fn skala_schrift(fs: f32, breite_bei_fs: f32, platz: f32, minimum: f32) -> Option<f32> {
+    if fs <= 0.0 || platz <= 0.0 {
+        return None;
+    }
+    let g = if breite_bei_fs > platz && breite_bei_fs > 0.0 {
+        fs * platz / breite_bei_fs
+    } else {
+        fs
+    };
+    (g >= minimum).then_some(g)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1279,5 +1295,17 @@ mod tests {
             );
         }
         assert!(breiten(1600.0).benoetigt <= 1600.0);
+    }
+
+    #[test]
+    fn skala_schrift_passt_sich_an() {
+        // genug Platz: Originalgroesse
+        assert_eq!(skala_schrift(13.0, 20.0, 30.0, 8.0), Some(13.0));
+        // zu eng: verkleinert, damit "+12" ganz passt
+        let g = skala_schrift(13.0, 24.0, 18.0, 8.0).unwrap();
+        assert!((g - 9.75).abs() < 1e-4, "{g}");
+        // viel zu eng: keine Schrift statt "-…"
+        assert_eq!(skala_schrift(13.0, 24.0, 10.0, 8.0), None);
+        assert_eq!(skala_schrift(13.0, 24.0, 0.0, 8.0), None);
     }
 }

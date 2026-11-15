@@ -168,9 +168,7 @@ pub struct Master {
 impl Master {
     /// Gewaehlter Bus, immer im gueltigen Bereich.
     pub fn bus(&self) -> usize {
-        self.bus
-            .load(Ordering::Relaxed)
-            .min(crosspoint::BUSES - 1)
+        self.bus.load(Ordering::Relaxed).min(crosspoint::BUSES - 1)
     }
 
     pub fn bus_setzen(&self, i: usize) {
@@ -185,7 +183,6 @@ impl Master {
         neu
     }
 }
-
 
 /// Taktgeber: Sekunden seit Start und ob der Audio-Thread laeuft.
 #[derive(Default)]
@@ -734,6 +731,19 @@ mod imp {
             let skala_rechts = x_bahn - 5.0;
             let skala_breite = skala_rechts - block.x - 2.0;
             if skala_breite > 12.0 {
+                // Schrift so klein, dass "+12" ganz passt - nie "-…".
+                let platz = skala_breite - 5.0;
+                let fs_skala = crate::layout::skala_schrift(
+                    fs,
+                    draw::text_breite(&*self.obj(), "-60", fs, fam).max(draw::text_breite(
+                        &*self.obj(),
+                        "+12",
+                        fs,
+                        fam,
+                    )),
+                    platz,
+                    fs * 0.6,
+                );
                 for (db_wert, beschriftung) in [
                     (12.0, "+12"),
                     (6.0, "+6"),
@@ -758,15 +768,15 @@ mod imp {
                         ),
                         &draw::alpha(&farbe, if haupt { 0.9 } else { 0.55 }),
                     );
-                    if skala_breite > 22.0 {
+                    if let Some(fs_skala) = fs_skala {
                         draw::text_rechts(
                             snap,
                             &*self.obj(),
                             beschriftung,
                             block.x,
-                            y - fs * 0.62,
-                            skala_breite - 5.0,
-                            fs,
+                            y - fs_skala * 0.62,
+                            platz,
+                            fs_skala,
                             false,
                             fam,
                             &draw::alpha(&farbe, if haupt { 0.95 } else { 0.6 }),
@@ -1723,6 +1733,22 @@ pub fn zug(
         None
     };
 
+    // Trim und Delay des gewaehlten Busses (Web: mTrim/mDelay am Master).
+    let trim_knopf = if rolle == Rolle::Master {
+        // Ein normaler Knopf mit Popover: gleiche Optik wie die anderen
+        // Knoepfe, kein Aufklapp-Pfeil, der Platz kostet.
+        let b = gtk::Button::with_label("T/D");
+        b.add_css_class("knopf");
+        b.set_hexpand(true);
+        b.set_tooltip_text(Some("Trim und Delay des gewaehlten Busses"));
+        let pop = trim_delay_menue(&params, &master);
+        pop.set_parent(&b);
+        b.connect_clicked(move |_| pop.popup());
+        Some(b)
+    } else {
+        None
+    };
+
     // Die vier Stufen der Sprache gibt es nur an Kanaelen: Lowcut (Rumpeln),
     // TK (Klackser/Poltern), NR (Rauschen unter dem Signal), GATE (Pausen).
     // Busse haben sie nicht.
@@ -1743,6 +1769,12 @@ pub fn zug(
     };
     let gate_knopf = if rolle.ist_kanal() {
         Some(knopf("GATE", "gate"))
+    } else {
+        None
+    };
+    // Kompressor (Web: COMP-Regler, Kern: `comp`, `comp_threshold`, ...).
+    let comp_knopf = if rolle.ist_kanal() {
+        Some(knopf("COMP", "comp"))
     } else {
         None
     };
@@ -1871,6 +1903,23 @@ pub fn zug(
         let menue = gate_menue(&p, index);
         stufenmenue(b, &menue);
     }
+    if let Some(b) = &comp_knopf {
+        let p = params.clone();
+        {
+            let p = p.clone();
+            b.connect_toggled(move |btn| {
+                let an = btn.is_active();
+                // Ein Verhaeltnis von 1:1 regelt nichts; wer einschaltet,
+                // will hoeren, dass etwas passiert.
+                if an && f32_von(&p.strips[index].comp.ratio) <= 1.0 {
+                    p.set("strip", index, "comp_ratio", COMP_RATIO_START);
+                }
+                p.set("strip", index, "comp", if an { 1.0 } else { 0.0 });
+            });
+        }
+        let menue = comp_menue(&p, index);
+        stufenmenue(b, &menue);
+    }
     if let Some(b) = &tk {
         let p = params.clone();
         {
@@ -1917,13 +1966,26 @@ pub fn zug(
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
     }
-    if let Some(b) = &mono {
+    // Am Bus stehen M | LIM in einer Reihe und MONO darunter ueber die volle
+    // Breite: das Raster hat gleich breite Spalten, und "MONO" neben "M"
+    // forderte zweimal die MONO-Breite - mehr, als ein Buszug bei 1600 px
+    // bekommt (das Fenster scrollte dann waagerecht).
+    let mono_breit = matches!(rolle, Rolle::Bus(_));
+    if let (Some(b), false) = (&mono, mono_breit) {
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
     }
     if let Some(b) = &lim {
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
+    }
+    if let (Some(b), true) = (&mono, mono_breit) {
+        let (x, y) = naechster_platz();
+        knopf_zeile.attach(b, x, y, 2 - x, 1);
+    }
+    if let Some(b) = &trim_knopf {
+        let (x, y) = naechster_platz();
+        knopf_zeile.attach(b, x, y, 2 - x, 1);
     }
     if let Some(b) = &lc {
         let (x, y) = naechster_platz();
@@ -1941,6 +2003,11 @@ pub fn zug(
         // GATE in der letzten Zelle neben NR.
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 1, 1);
+    }
+    if let Some(b) = &comp_knopf {
+        // COMP bekommt eine eigene Reihe ueber die volle Breite.
+        let (x, y) = naechster_platz();
+        knopf_zeile.attach(b, x, y, 2 - x, 1);
     }
     box_.append(&knopf_zeile);
 
@@ -2014,6 +2081,7 @@ pub fn zug(
         let tk = tk.clone();
         let nr = nr.clone();
         let gate_knopf = gate_knopf.clone();
+        let comp_knopf = comp_knopf.clone();
         let lc_zelle = lc_zelle.clone();
         let nr_zelle = nr_zelle.clone();
         let m = master.clone();
@@ -2118,6 +2186,13 @@ pub fn zug(
                     }
                     b.set_tooltip_text(Some(&gate_hinweis(&p, i)));
                 }
+                if let Some(b) = &comp_knopf {
+                    let an = p.strips[i].comp.on.load(Ordering::Relaxed);
+                    if b.is_active() != an {
+                        b.set_active(an);
+                    }
+                    b.set_tooltip_text(Some(&comp_hinweis(&p, i)));
+                }
             }
             if let Rolle::Kanal(i) = r {
                 for (bus, b) in zuordnung_knoepfe.iter().enumerate() {
@@ -2204,6 +2279,21 @@ fn gate_hinweis(p: &Arc<Params>, i: usize) -> String {
         f32_von(&g.threshold),
         f32_von(&g.hold),
         f32_von(&g.tiefe)
+    )
+}
+
+/// Verhaeltnis, mit dem COMP beim ersten Einschalten startet (1:1 regelt nicht).
+const COMP_RATIO_START: f32 = 3.0;
+
+fn comp_hinweis(p: &Arc<Params>, i: usize) -> String {
+    let c = &p.strips[i].comp;
+    format!(
+        "COMP {:.0} dBFS, {:.1}:1, Attack {:.0} ms, Release {:.0} ms, Ausgang {:+.1} dB – Rechtsklick: einstellen",
+        f32_von(&c.threshold),
+        f32_von(&c.ratio),
+        f32_von(&c.attack),
+        f32_von(&c.release),
+        f32_von(&c.gain_out)
     )
 }
 
@@ -2482,4 +2572,157 @@ fn gate_menue(p: &Arc<Params>, index: usize) -> gtk::Box {
     }
     kasten.append(&k3);
     kasten
+}
+
+/// Ein Regler im COMP-Menue.
+struct CompRegler {
+    titel: &'static str,
+    param: &'static str,
+    min: f64,
+    max: f64,
+    schritt: f64,
+    einheit: &'static str,
+    stellen: usize,
+}
+
+const COMP_REGLER: [CompRegler; 5] = [
+    CompRegler {
+        titel: "Schwelle",
+        param: "comp_threshold",
+        min: -60.0,
+        max: 0.0,
+        schritt: 1.0,
+        einheit: " dBFS",
+        stellen: 0,
+    },
+    CompRegler {
+        titel: "Verhaeltnis",
+        param: "comp_ratio",
+        min: 1.0,
+        max: 20.0,
+        schritt: 0.5,
+        einheit: ":1",
+        stellen: 1,
+    },
+    CompRegler {
+        titel: "Attack",
+        param: "comp_attack",
+        min: 0.1,
+        max: 200.0,
+        schritt: 1.0,
+        einheit: " ms",
+        stellen: 0,
+    },
+    CompRegler {
+        titel: "Release",
+        param: "comp_release",
+        min: 10.0,
+        max: 2000.0,
+        schritt: 10.0,
+        einheit: " ms",
+        stellen: 0,
+    },
+    CompRegler {
+        titel: "Ausgang",
+        param: "comp_gain_out",
+        min: -24.0,
+        max: 24.0,
+        schritt: 0.5,
+        einheit: " dB",
+        stellen: 1,
+    },
+];
+
+/// Aktueller Wert eines COMP-Parameters.
+fn comp_wert(p: &Params, index: usize, param: &str) -> f32 {
+    let c = &p.strips[index].comp;
+    f32_von(match param {
+        "comp_threshold" => &c.threshold,
+        "comp_ratio" => &c.ratio,
+        "comp_attack" => &c.attack,
+        "comp_release" => &c.release,
+        _ => &c.gain_out,
+    })
+}
+
+/// Kompressor: Schwelle, Verhaeltnis, Attack, Release, Ausgangspegel.
+fn comp_menue(p: &Arc<Params>, index: usize) -> gtk::Box {
+    let kasten = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    kasten.add_css_class("stufenmenue");
+    kasten.append(&kopfzeile("COMP · KOMPRESSOR"));
+    for r in &COMP_REGLER {
+        let wert = comp_wert(p, index, r.param);
+        let (k, s, w) = schieber(r.titel, r.min, r.max, r.schritt, wert as f64, r.einheit);
+        let (einheit, stellen, param) = (r.einheit, r.stellen, r.param);
+        w.set_text(&format!("{:.*}{einheit}", stellen, wert));
+        let p = p.clone();
+        s.connect_value_changed(move |s| {
+            w.set_text(&format!("{:.*}{einheit}", stellen, s.value()));
+            p.set("strip", index, param, s.value() as f32);
+        });
+        kasten.append(&k);
+    }
+    kasten
+}
+
+/// Trim (dB) und Delay (ms) des am Master gewaehlten Busses.
+///
+/// Die Regler werden beim Oeffnen aus dem Bus gefuellt; der Bus kann seit
+/// dem letzten Oeffnen gewechselt haben (SEL).
+fn trim_delay_menue(p: &Arc<Params>, master: &Arc<Master>) -> gtk::Popover {
+    let kasten = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    kasten.add_css_class("stufenmenue");
+    let kopf = kopfzeile("TRIM · DELAY");
+    kasten.append(&kopf);
+
+    let (k1, trim, w1) = schieber("Trim", -24.0, 24.0, 0.5, 0.0, " dB");
+    let (k2, delay, w2) = schieber("Delay", 0.0, 500.0, 1.0, 0.0, " ms");
+    kasten.append(&k1);
+    kasten.append(&k2);
+
+    // Beim Fuellen nicht zurueckschreiben.
+    let fuellt = std::rc::Rc::new(Cell::new(false));
+    {
+        let p = p.clone();
+        let m = master.clone();
+        let w1 = w1.clone();
+        let fuellt = fuellt.clone();
+        trim.connect_value_changed(move |s| {
+            w1.set_text(&format!("{:+.1} dB", s.value()));
+            if !fuellt.get() {
+                p.set("bus", m.bus(), "trim", s.value() as f32);
+            }
+        });
+    }
+    {
+        let p = p.clone();
+        let m = master.clone();
+        let w2 = w2.clone();
+        let fuellt = fuellt.clone();
+        delay.connect_value_changed(move |s| {
+            w2.set_text(&format!("{:.0} ms", s.value()));
+            if !fuellt.get() {
+                p.set("bus", m.bus(), "delay", s.value() as f32);
+            }
+        });
+    }
+
+    let pop = gtk::Popover::new();
+    pop.set_child(Some(&kasten));
+    pop.add_css_class("stufenmenue");
+    {
+        let p = p.clone();
+        let m = master.clone();
+        pop.connect_show(move |_| {
+            let bus = m.bus();
+            fuellt.set(true);
+            kopf.set_text(&format!("TRIM · DELAY · BUS {}", busname(bus)));
+            trim.set_value(f32_von(&p.buses[bus].trim[0]) as f64);
+            delay.set_value(f32_von(&p.buses[bus].delay_ms[0]) as f64);
+            w1.set_text(&format!("{:+.1} dB", trim.value()));
+            w2.set_text(&format!("{:.0} ms", delay.value()));
+            fuellt.set(false);
+        });
+    }
+    pop
 }

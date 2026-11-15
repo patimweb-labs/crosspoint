@@ -12,7 +12,8 @@ pub const DB_MAX: f32 = 12.0;
 
 /// Amplitudenfaktor -> Dezibel. 0 und winzige Werte ergeben [`DB_MIN`].
 pub fn lin_to_db(v: f32) -> f32 {
-    if !(v > 0.0) {
+    // NaN zaehlt wie 0: kein Pegel.
+    if v.is_nan() || v <= 0.0 {
         return DB_MIN;
     }
     let db = 20.0 * v.log10();
