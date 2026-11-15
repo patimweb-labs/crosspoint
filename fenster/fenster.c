@@ -3,9 +3,9 @@
  *
  * Die Seite selbst ist unveraendert die, die die Engine unter
  * http://127.0.0.1:8770/ ausliefert (web/index.html); dieses Programm zeigt sie
- * mit WebKitGTK in einem GTK3-Fenster. Im Flatpak ersetzt es damit den
- * Host-Browser (flatpak-spawn), auf dem Host bleibt scripts/crosspoint-launch.sh
- * mit dem Browser der Wahl zustaendig.
+ * mit WebKitGTK in einem GTK3-Fenster. Gebraucht wird es noch fuer den
+ * Tray-Betrieb (--minimized); das normale Fenster ist das native `crosspoint`
+ * (GTK4).
  *
  * Das Fenster laedt erst, wenn die Engine antwortet: bis dahin wird der
  * TCP-Port abgeklopft (g_usleep, dabei laufen die GTK-Ereignisse weiter).
