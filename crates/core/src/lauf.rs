@@ -171,6 +171,8 @@ impl Lauf {
         }
         ABBAU.store(true, Ordering::SeqCst);
         self.ende.store(true, Ordering::SeqCst);
+        // Zuerst den Zustand sichern: alles danach kann haengen bleiben.
+        crate::restore::sichern_beim_ende(&self.params, &self.preset);
         self.tape
             .recording
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -548,16 +550,10 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
             Some(jack.port_in(&format!("strip{}_R", s + 1)).expect("Port")),
         ];
     }
-    for b in 0..BUSES {
-        rt.outs[b] = [
-            Some(
-                jack.port_out(&format!("bus{}_L", BUS_NAMES[b]))
-                    .expect("Port"),
-            ),
-            Some(
-                jack.port_out(&format!("bus{}_R", BUS_NAMES[b]))
-                    .expect("Port"),
-            ),
+    for (aus, name) in rt.outs.iter_mut().zip(BUS_NAMES) {
+        *aus = [
+            Some(jack.port_out(&format!("bus{name}_L")).expect("Port")),
+            Some(jack.port_out(&format!("bus{name}_R")).expect("Port")),
         ];
     }
     // Zusatz-Ausgaenge fuer empfangenes VBAN-Audio. Sie werden wie ein
@@ -575,16 +571,14 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         rt.run(ps);
         Control::Continue
     });
-    let client: Aktiv = jack
-        .activate(ClosureProcessHandler::new(callback))
-        .map_err(|e| e)?;
+    let client: Aktiv = jack.activate(ClosureProcessHandler::new(callback))?;
 
     println!("\nPorts ({server_name}:<name>):");
     for s in 0..STRIPS {
         println!("  strip{}_L / strip{}_R", s + 1, s + 1);
     }
-    for b in 0..BUSES {
-        println!("  bus{}_L / bus{}_R", BUS_NAMES[b], BUS_NAMES[b]);
+    for name in BUS_NAMES {
+        println!("  bus{name}_L / bus{name}_R");
     }
     println!("  vban_L / vban_R (VBAN-Eingang, /api/vban/recv)");
     println!("\nVerdrahtung: scripts/crosspoint-wire.sh up\n");
@@ -593,6 +587,13 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
     let _ = std::fs::create_dir_all(&tape_ordner);
     crate::tape_io::spawn_writer(tape.clone(), tape_ordner.clone(), sample_rate);
 
+    // Gesicherte VBAN-Konfiguration ("Save Config") gilt auch nach dem
+    // Neustart. Fehlt die Datei, bleibt es bei den Standardwerten.
+    if crate::vban_io::konfig_pfad().exists() {
+        if let Err(e) = crate::vban_io::lade_konfig(&vban, &vban_recv) {
+            eprintln!("VBAN: Konfiguration nicht geladen: {e}");
+        }
+    }
     crate::vban_io::spawn_sender(vban.clone(), vban_ring.clone(), sample_rate);
     crate::vban_io::spawn_empfaenger(vban_recv.clone(), vban_recv_ring.clone());
 

@@ -409,6 +409,36 @@ impl Params {
                                 ("gate_schwelle", Value::num(fget(&s.gate.threshold) as f64)),
                                 ("gate_hold", Value::num(fget(&s.gate.hold) as f64)),
                                 ("gate_tiefe", Value::num(fget(&s.gate.tiefe) as f64)),
+                                ("gate_attack", Value::num(fget(&s.gate.attack) as f64)),
+                                ("gate_release", Value::num(fget(&s.gate.release) as f64)),
+                                ("comp_threshold", Value::num(fget(&s.comp.threshold) as f64)),
+                                ("comp_ratio", Value::num(fget(&s.comp.ratio) as f64)),
+                                ("comp_attack", Value::num(fget(&s.comp.attack) as f64)),
+                                ("comp_release", Value::num(fget(&s.comp.release) as f64)),
+                                ("comp_knee", Value::num(fget(&s.comp.knee) as f64)),
+                                ("comp_gain_in", Value::num(fget(&s.comp.gain_in) as f64)),
+                                ("comp_gain_out", Value::num(fget(&s.comp.gain_out) as f64)),
+                                // EQ-Baender (Kanal 0; beide Kanaele sind gleich belegt).
+                                (
+                                    "eq_cells",
+                                    Value::Arr(
+                                        s.eq[0]
+                                            .iter()
+                                            .map(|c| {
+                                                Value::obj(vec![
+                                                    ("on", Value::Bool(c.on.load(Relaxed))),
+                                                    (
+                                                        "type",
+                                                        Value::num(c.kind.load(Relaxed) as f64),
+                                                    ),
+                                                    ("freq", Value::num(fget(&c.freq) as f64)),
+                                                    ("q", Value::num(fget(&c.q) as f64)),
+                                                    ("gain", Value::num(fget(&c.gain) as f64)),
+                                                ])
+                                            })
+                                            .collect(),
+                                    ),
+                                ),
                             ])
                         })
                         .collect(),
@@ -877,6 +907,10 @@ impl EngineDsp {
 
     /// Ein Block. Die Kanäle werden als rohe Zeiger übergeben, damit der
     /// Callback ohne Kopieren direkt in die JACK-Puffer schreiben kann.
+    // Der Audio-Pfad liest je Index mehrere parallele Felder (Parameter,
+    // Filterzustand, Pegel, Ein-/Ausgangszeiger); Iteratoren ueber eines
+    // davon machen ihn nicht lesbarer.
+    #[allow(clippy::needless_range_loop)]
     pub fn process(&mut self, p: &Params, io: &Io, frames: usize) {
         if frames == 0 {
             return;
@@ -1001,12 +1035,14 @@ impl EngineDsp {
                     }
                     x = self.bus_lim[bi][ch].process(x, fget(&bp.limit));
                     if bp.c5_on.load(Relaxed) {
-                        let mut cfg = C5Config::default();
-                        cfg.enabled = true;
                         let th = fget(&bp.c5_threshold);
                         let ce = fget(&bp.c5_ceiling);
-                        cfg.threshold_db = [th; 3];
-                        cfg.ceiling_db = [ce; 3];
+                        let cfg = C5Config {
+                            enabled: true,
+                            threshold_db: [th; 3],
+                            ceiling_db: [ce; 3],
+                            ..C5Config::default()
+                        };
                         x = self.bus_c5[bi].process(x, &cfg, sr);
                     }
                     x = self.bus_delay[bi][ch].process(x);
@@ -1114,10 +1150,23 @@ mod tests {
         Params::new(48000.0, 64)
     }
 
+    /// `EngineDsp` ist gut 500 KiB gross; im Debug-Build entstehen beim
+    /// Bauen mehrere Kopien auf dem Stack, und der 2-MiB-Stack eines
+    /// Testthreads laeuft ueber. Wie in den Integrationstests: auf einem
+    /// Thread mit grossem Stack bauen und als Box weiterreichen.
+    fn dsp_neu() -> Box<EngineDsp> {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| Box::new(EngineDsp::new(64)))
+            .expect("Thread")
+            .join()
+            .expect("DSP")
+    }
+
     #[test]
     fn durchgang_und_mute() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         let mut buf = Buf::new(0.5, 64);
         let io = buf.io();
         dsp.process(&p, &io, 64);
@@ -1131,7 +1180,7 @@ mod tests {
     #[test]
     fn routing_auf_zweiten_bus() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         p.set("strip", 0, "send0", 0.0);
         p.set("strip", 0, "send1", 1.0);
         let mut buf = Buf::new(0.25, 64);
@@ -1144,7 +1193,7 @@ mod tests {
     #[test]
     fn solo_schaltet_andere_streifen_ab() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         p.set("strip", 1, "solo", 1.0);
         let mut buf = Buf::new(0.1, 64);
         buf.set_strip(1, 0.4);
@@ -1160,7 +1209,7 @@ mod tests {
     #[test]
     fn frame_zaehler_steigt_je_block() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         let mut buf = Buf::new(0.5, 64);
         assert_eq!(p.frame_counter(), 0);
         for erwartet in 1..=3u64 {
@@ -1177,7 +1226,7 @@ mod tests {
     #[test]
     fn pegel_json_ist_ein_text_mit_frame_stand() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         let mut buf = Buf::new(0.5, 64);
         let io = buf.io();
         dsp.process(&p, &io, 64);
@@ -1211,7 +1260,7 @@ mod tests {
     #[test]
     fn gain_und_meter() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         p.set("strip", 0, "gain", -6.0);
         let mut buf = Buf::new(0.5, 64);
         let io = buf.io();
@@ -1223,7 +1272,7 @@ mod tests {
     #[test]
     fn c5_limiter_haelt_bus_decke() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         p.set("bus", 0, "c5", 1.0);
         p.set("bus", 0, "c5_ceiling", -6.0);
         p.set("bus", 0, "c5_threshold", 0.0);
@@ -1245,7 +1294,7 @@ mod tests {
     #[test]
     fn eq_und_eq_parameter() {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         p.set("strip", 0, "eq", 1.0);
         assert!(p.set("strip", 0, "eq0_gain", 12.0));
         assert!(p.set("strip", 0, "eq0_freq", 1000.0));
@@ -1263,7 +1312,7 @@ mod tests {
     /// den Ausgang (L, R) von A1 nach einem Block.
     fn mix_block(mode: f32, cross: f32, l: f32, r: f32) -> (f32, f32) {
         let p = params();
-        let mut dsp = EngineDsp::new(64);
+        let mut dsp = dsp_neu();
         assert!(p.set("bus", 0, "mode", mode), "mode {mode} nicht gesetzt");
         assert!(p.set("bus", 0, "cross", cross), "cross nicht gesetzt");
         let mut buf = Buf::new(0.0, 64);
