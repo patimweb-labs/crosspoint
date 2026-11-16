@@ -1280,6 +1280,13 @@ const NR_BINS: usize = NR_FFT / 2;
 const NR_BLOCK_FRAMES: usize = 24;
 /// Bloecke im Ring – 8 x 128 ms ≈ 1,02 s Rauschschaetzung.
 const NR_BLOCK_RING: usize = 8;
+/// Zeitglaettung der Leistung vor der Minimumsuche (je Frame, ~35 ms).
+const NR_PSD_GLATT: f32 = 0.85;
+/// Glaettung, wenn die Leistung faellt (schnell: Pausen sichtbar machen).
+const NR_PSD_FALL: f32 = 0.3;
+/// Ausgleich: das Minimum der geglaetteten Leistung ueber ~1 s liegt im
+/// Mittel um diesen Faktor unter dem echten Rauschpegel.
+const NR_MIN_BIAS: f32 = 16.67;
 /// Halbe Breite des Medianfensters fuer die Deckelung der Rauschschaetzung.
 ///
 /// Das Fenster muss deutlich breiter sein als die Hauptkeule des Fensters
@@ -1314,13 +1321,14 @@ fn median(v: &[f32]) -> f32 {
 /// **Stufe b – spektrale Subtraktion:** 512-Punkt-FFT, halbe Ueberlappung,
 /// Wurzel-Hann-Fenster (Analyse und Synthese), damit sich das Signal bei
 /// Verstaerkung 1 exakt rekonstruiert. Rauschschaetzung ist das gleitende
-/// Betragsminimum ueber ~1 s je Band (Blockminimum, Ring aus acht Bloecken),
-/// anschliessend ein Nachbarminimum ueber ±4 Baender: ein schmaler Dauerton
+/// Minimum der geglaetteten Leistung ueber ~1 s je Band (Ring aus acht
+/// Bloecken), anschliessend ein Median-Deckel ueber ±12 Baender: ein schmaler Dauerton
 /// zieht den Rauschboden damit nicht nach oben. Die Subtraktion passiert im
 /// Leistungsbereich (`g = 1 - alpha*n²/p`, unten durch einen Boden begrenzt),
 /// was hohe Pegel fast unberuehrt laesst. Gegen „musikalisches Rauschen“
 /// wirken drei Dinge: die Glaettung der Verstaerkung ueber die Zeit
-/// (schnell zu, langsam auf), eine Glaettung ueber die Frequenz, die **nur
+/// (zu etwas schneller als auf, damit Wortanfaenge nicht verschluckt
+/// werden), eine Glaettung ueber die Frequenz, die **nur
 /// Kerben anhebt** (keine Spitzen absenkt), und der Spektralboden.
 ///
 /// Alles liegt in festen Arrays: `process` allokiert nichts. Die Latenz der
@@ -1344,6 +1352,8 @@ pub struct NoiseReduction {
     re: [f32; NR_FFT],
     im: [f32; NR_FFT],
     mag: [f32; NR_BINS],
+    /// Zeitlich geglaettete Leistung je Band (Grundlage der Minimumsuche).
+    psd: [f32; NR_BINS],
     block_min: [f32; NR_BINS],
     min_ring: [[f32; NR_BINS]; NR_BLOCK_RING],
     ring_pos: usize,
@@ -1404,6 +1414,7 @@ impl NoiseReduction {
             re: [0.0; NR_FFT],
             im: [0.0; NR_FFT],
             mag: [0.0; NR_BINS],
+            psd: [0.0; NR_BINS],
             block_min: [f32::INFINITY; NR_BINS],
             min_ring: [[f32::INFINITY; NR_BINS]; NR_BLOCK_RING],
             ring_pos: 0,
@@ -1427,7 +1438,7 @@ impl NoiseReduction {
             gate_tiefe: 0.0,
             gate_boden: 1.0,
             g_att: 0.5,
-            g_rel: 0.12,
+            g_rel: 0.3,
             sr: 0.0,
             frisch: true,
         };
@@ -1489,6 +1500,7 @@ impl NoiseReduction {
         self.re = [0.0; NR_FFT];
         self.im = [0.0; NR_FFT];
         self.mag = [0.0; NR_BINS];
+        self.psd = [0.0; NR_BINS];
         self.block_min = [f32::INFINITY; NR_BINS];
         self.min_ring = [[f32::INFINITY; NR_BINS]; NR_BLOCK_RING];
         self.ring_pos = 0;
@@ -1508,8 +1520,12 @@ impl NoiseReduction {
     #[inline]
     fn expander(&mut self, x: f32, schnelle: f32) -> f32 {
         let lvl = x.abs();
-        let coef = if lvl > self.env { schnelle } else { self.rel1 };
-        self.env = coef * self.env + (1.0 - coef) * lvl;
+        // `schnelle` und `rel1` sind Schrittweiten (1 - exp(-1/(t*sr))).
+        // Frueher wurden sie hier als Rueckhaltefaktor benutzt; die
+        // Huellkurve war dadurch der rohe Betrag und fiel in jedem
+        // Nulldurchgang unter die Schwelle.
+        let schritt = if lvl > self.env { schnelle } else { self.rel1 };
+        self.env += (lvl - self.env) * schritt;
         let k = (self.env * self.inv_thr).min(1.0);
         let mut ziel = 1.0 - self.gate_tiefe * (1.0 - k);
         if k >= 1.0 {
@@ -1547,18 +1563,33 @@ impl NoiseReduction {
             self.mag[i] = (r * r + im * im).sqrt();
         }
 
-        // Rauschschaetzung: gleitendes Minimum ueber ~1 s je Band.
+        // Rauschschaetzung: gleitendes Minimum ueber ~1 s je Band
+        // (Minimum-Statistik nach Martin).
         //
-        // Der Block nimmt das Minimum der **Leistung** ueber 24 Frames
-        // (~128 ms). Ein Minimum von 24 exponentialverteilten Werten liegt im
-        // Mittel bei 1/24 des Mittelwerts; der Faktor macht daraus wieder eine
-        // Erwartungstreue Schaetzung des Rauschpegels. Der Ring aus acht
-        // Bloecken mittelt acht solche Minima – deren Streuung ist damit
-        // bereits klein (relativ ~1,5 %).
+        // Gesucht wird das Minimum der **zeitlich geglaetteten** Leistung,
+        // und zwar ueber den ganzen Ring (acht Bloecke a ~128 ms), nicht der
+        // Mittelwert der Blockminima: spricht jemand ohne Pause, liegen die
+        // Minima einzelner Bloecke im Sprachpegel; erst das Minimum ueber
+        // ~1 s erreicht sicher eine Pause. Das Minimum geglaetteter Werte
+        // liegt systematisch unter dem Mittel; [`NR_MIN_BIAS`] gleicht das
+        // aus (geprueft in `nr_schaetzung_ist_erwartungstreu`).
+        let frisch = self.bloecke == 0 && self.frames_in_block == 0;
         for i in 0..NR_BINS {
             let p = self.mag[i] * self.mag[i];
-            if p < self.block_min[i] {
-                self.block_min[i] = p;
+            // Steigt langsam (glaettet die Streuung des Rauschens), faellt
+            // schnell: eine Sprechpause von 50..100 ms soll den Boden zeigen.
+            let a = if p > self.psd[i] {
+                NR_PSD_GLATT
+            } else {
+                NR_PSD_FALL
+            };
+            self.psd[i] = if frisch {
+                p
+            } else {
+                a * self.psd[i] + (1.0 - a) * p
+            };
+            if self.psd[i] < self.block_min[i] {
+                self.block_min[i] = self.psd[i];
             }
         }
         self.frames_in_block += 1;
@@ -1573,13 +1604,12 @@ impl NoiseReduction {
             if self.bloecke < NR_BLOCK_RING {
                 self.bloecke += 1;
             }
-            let durch = self.bloecke as f32;
             for i in 0..NR_BINS {
-                let mut summe = 0.0f32;
-                for b in 0..self.bloecke {
-                    summe += self.min_ring[b][i];
+                let mut m = f32::INFINITY;
+                for b in 0..NR_BLOCK_RING {
+                    m = m.min(self.min_ring[b][i]);
                 }
-                self.noise[i] = summe / durch * NR_BLOCK_FRAMES as f32;
+                self.noise[i] = m * NR_MIN_BIAS;
             }
             // Gegen schmale Dauertoene: der Rauschboden ist spektral glatt.
             // Wo ein einzelnes Band weit ueber dem Median seiner Nachbarn
@@ -1644,7 +1674,9 @@ impl NoiseReduction {
         }
         self.glatt_tmp[NR_BINS - 1] = self.gain[NR_BINS - 1];
 
-        // Zeitglaettung: schnell zu, langsam auf.
+        // Zeitglaettung je Frame (5,3 ms): zu mit 0,5, auf mit 0,3. Frueher
+        // oeffnete sie mit 0,12 - nach jeder Pause fehlten dem Wortanfang
+        // rund 2 dB (gemessen in tests/nr_sprache.rs).
         for i in 0..NR_BINS {
             let ziel = self.glatt_tmp[i];
             let k = if ziel < self.gain_glatt[i] {
@@ -2160,5 +2192,29 @@ mod nr_tests {
         let db = lin_to_db((sum / n as f32).sqrt());
         println!("EXPANDER: -70 dBFS Rauschen bei Schwelle -40 dBFS -> {db:.2} dBFS");
         assert!(db < -75.0, "Expander hat nicht zugemacht: {db} dBFS");
+    }
+
+    #[test]
+    fn nr_schaetzung_ist_erwartungstreu() {
+        // Weisses Rauschen: die Schaetzung je Band soll im Mittel dem echten
+        // Pegel entsprechen (Fensterenergie: Summe der w² = N/2).
+        for seed in [7u32, 99, 4242] {
+            let mut nr = NoiseReduction::new(48000.0);
+            nr.enabled = true;
+            let mut r = Rausch::neu(seed);
+            let mut summe2 = 0.0f64;
+            let n = 48000 * 3;
+            for _ in 0..n {
+                let x = 0.01 * r.next();
+                summe2 += (x * x) as f64;
+                nr.process(x, 0.5, -45.0, 48000.0);
+            }
+            let var = (summe2 / n as f64) as f32;
+            let soll = var * (NR_FFT as f32 / 2.0);
+            let mittel: f32 = nr.noise[4..NR_BINS - 4].iter().sum::<f32>() / (NR_BINS - 8) as f32;
+            let q = mittel / soll;
+            eprintln!("Schaetzung/Soll = {q:.3}");
+            assert!((0.75..1.33).contains(&q), "Schaetzung/Soll = {q}");
+        }
     }
 }
