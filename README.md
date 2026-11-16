@@ -24,6 +24,8 @@ bauen: siehe „Bauen und starten".
 
 ![Pult in der GTK-Oberfläche](docs/ui-gtk-2560x1440.png)
 
+![Pult im hellen Theme](docs/ui-gtk-hell.png)
+
 ## Daten und Datenschutz
 
 Crosspoint arbeitet ausschließlich lokal. Die Steuer-API hört auf
@@ -71,7 +73,8 @@ Voraussetzungen: `pipewire` (mit `pipewire-jack`), `pactl`, `cargo`. Keine
 cargo build --release
 ./target/release/crosspoint-engine                 # UI auf http://127.0.0.1:8770/
 CROSSPOINT_A1=<pipewire-sink> ./scripts/crosspoint-wire.sh up
-./scripts/crosspoint-launch.sh                     # Engine + Fenster, Ende bei Fensterschluss
+cargo build --release --features ui                # natives Fenster (GTK4)
+./scripts/crosspoint-launch.sh                     # Fenster mit Engine, Ende bei Fensterschluss
 ```
 
 `crosspoint-wire.sh up` legt `crosspoint_in_1..3` (Anwendungen spielen hinein →
@@ -131,10 +134,14 @@ steht danach im Engine-Protokoll:
 Geräte, die gerade nicht da sind, werden gezählt und gemeldet, aber nicht als
 Fehler behandelt.
 
-**Autosave:** jede Änderung über `POST /api/set` setzt nur einen Zeitstempel;
-2 s nach der letzten Änderung schreibt ein eigener Thread das komplette
-Parameterbild nach `preset.json` (kein Lock, keine Datei-Arbeit im
-Audio-Callback). Eine Faderfahrt erzeugt so genau einen Schreibvorgang.
+**Autosave:** der Autosave-Thread vergleicht im Takt das Parameterbild und
+bemerkt so jede Änderung – aus dem Fenster, über `POST /api/set`, OSC/MIDI oder
+ein Makro. 2 s nach der letzten Änderung schreibt er das komplette Bild nach
+`preset.json` (kein Lock, keine Datei-Arbeit im Audio-Callback); eine
+Faderfahrt erzeugt so genau einen Schreibvorgang. Beim Beenden wird eine noch
+offene Änderung sofort geschrieben. Gespeichert werden auch Namen, EQ-Bänder
+und die Kompressorwerte. Die VBAN-Einstellungen („SAVE CONFIG", `vban.json`)
+gelten ebenfalls nach dem Neustart.
 
 `CROSSPOINT_NO_RESTORE=1` schaltet Wiederherstellen **und** Autosave ab.
 
@@ -145,15 +152,15 @@ wieder. Der Startbefehl ist im Flatpak
 `<repo>/scripts/crosspoint-launch.sh --minimized`. Beide starten ohne Fenster,
 nur mit Tray-Icon.
 
-**Tray:** `crosspoint-fenster` meldet ein StatusNotifierItem über GDBus an
+**Tray:** `crosspoint --minimized` (bzw. als Rückfall `crosspoint-fenster`) meldet ein StatusNotifierItem über GDBus an
 (keine Zusatzbibliothek, `gio` kommt mit GTK) samt `com.canonical.dbusmenu`:
 
 | Menüpunkt | Wirkung |
 |---|---|
 | Fenster zeigen | Fenster einblenden |
-| Alles stumm | alle Streifen-Mutes umschalten (`POST /api/set`) |
-| Letztes Preset laden | `POST /api/preset {"action":"load"}` |
-| Autostart ein/aus | `POST /api/autostart`, Haken zeigt den Zustand |
+| Alles stumm | alle Streifen-Mutes umschalten |
+| Letztes Preset laden | gespeichertes `preset.json` anwenden |
+| Autostart ein/aus | Autostart-Datei schreiben/entfernen, Haken zeigt den Zustand |
 | Beenden | Programm und Engine beenden |
 
 Wird das Fenster bei laufendem Tray geschlossen, verschwindet es nur ins Icon
@@ -241,13 +248,15 @@ Finish-Args und warum sie da sind:
 | `--filesystem=~/.config/crosspoint:create` | Konfiguration/Presets |
 | `--filesystem=xdg-config/autostart:create` | Autostart-Datei in `~/.config/autostart` schreiben/entfernen |
 
-Die Oberfläche ist im Flatpak ein eigenes Fenster (`crosspoint-fenster`, GTK3 +
-WebKitGTK, 1760×980, Titel `Crosspoint`), das dieselbe Seite von
-`http://127.0.0.1:8770/` lädt. Ein Browser – im Sandbox oder auf dem Host – ist
-dafür nicht mehr nötig; `flatpak-spawn` und `--talk-name=org.freedesktop.Flatpak`
-sind entfallen. Auf dem Host startet `scripts/crosspoint-launch.sh` weiterhin den
-Browser der Wahl; im Flatpak übernimmt `scripts/crosspoint-start.sh` (Engine →
-auf HTTP 200 warten → Fenster → nach Fensterschluss Engine und Geräte aufräumen).
+Die Oberfläche ist im Flatpak wie auf dem Host das native Fenster `crosspoint`
+(GTK4, Engine im selben Prozess; Fenster zu heißt Engine und Geräte weg). Ein
+Browser ist dafür nicht nötig; `flatpak-spawn` und
+`--talk-name=org.freedesktop.Flatpak` sind entfallen. Auf dem Host startet
+`scripts/crosspoint-launch.sh` dieses Fenster. Mit `--minimized` startet es
+ohne Fenster, nur mit Tray-Icon (Autostart); Schließen verbirgt das Fenster
+dann in den Tray, „Beenden" im Tray-Menü beendet Engine und Programm.
+`crosspoint-fenster` (GTK3 + WebKitGTK) bleibt nur als Rückfall, wenn das
+native Fenster nicht gebaut ist.
 
 Die Engine linkt im Sandbox gegen das `libjack.so.0` des GNOME-Runtime
 (`/usr/lib/x86_64-linux-gnu/libjack.so.0`, pipewire-jack) – es ist dort

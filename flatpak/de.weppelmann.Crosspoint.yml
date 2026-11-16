@@ -92,7 +92,7 @@ modules:
       - install -Dm755 crosspoint /app/bin/crosspoint
       - install -Dm755 scripts/crosspoint-start.sh /app/bin/crosspoint-start
       - install -Dm755 scripts/crosspoint-wire.sh /app/bin/crosspoint-wire.sh
-      # Der Desktop-Eintrag des Repos startet auf dem Host den Browser
+      # Der Desktop-Eintrag des Repos startet auf dem Host den Launcher
       # (Exec=crosspoint-launch). Im Flatpak zeigt er auf das eigene Fenster.
       - |
         # Zielverzeichnis muss existieren, sonst scheitert die Umleitung

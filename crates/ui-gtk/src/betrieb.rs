@@ -42,6 +42,9 @@ pub struct Args {
     /// `Lauf::abschalten`), damit sich das Aufraeumen ohne Fenstermanager
     /// belegen laesst (ein gesendetes WM_DELETE_WINDOW verwirft GDK).
     pub schliessen_nach: Option<f64>,
+    /// Ohne Fenster starten, nur Tray-Icon (Autostart). Das Fenster
+    /// verschwindet dann beim Schliessen in den Tray, statt zu beenden.
+    pub minimiert: bool,
 }
 
 impl Default for Args {
@@ -55,13 +58,14 @@ impl Default for Args {
             client: "crosspoint".to_string(),
             listen: "127.0.0.1:8770".to_string(),
             schliessen_nach: None,
+            minimiert: false,
         }
     }
 }
 
 pub const HILFE: &str = "crosspoint [--theme NAME] [--layout NAME] \
 [--dialog vban|midi|darstellung] [--size 1600x920] [--client NAME] [--listen ADDR] \
-[--schliessen-nach SEKUNDEN (Selbsttest)]";
+[--minimized (nur Tray-Icon)] [--schliessen-nach SEKUNDEN (Selbsttest)]";
 
 pub fn args_lesen() -> Args {
     let mut a = Args::default();
@@ -92,6 +96,7 @@ pub fn args_lesen() -> Args {
             "--schliessen-nach" => {
                 a.schliessen_nach = it.next().and_then(|v| v.parse::<f64>().ok());
             }
+            "--minimized" | "-m" => a.minimiert = true,
             "--help" | "-h" => {
                 println!("{HILFE}");
                 std::process::exit(0);
@@ -116,6 +121,13 @@ pub fn starten(app_id: &str, args: Args) {
         let gestartet = Rc::clone(&gestartet);
         app.connect_activate(move |app| {
             if gestartet.replace(true) {
+                // Zweiter Start (Menue, Launcher) waehrend das Programm im
+                // Tray laeuft: GApplication reicht ihn hierher weiter - dann
+                // das vorhandene Fenster zeigen statt einer zweiten Engine.
+                if let Some(f) = app.windows().first() {
+                    f.set_visible(true);
+                    f.present();
+                }
                 return;
             }
             let a = args.borrow().clone();
@@ -159,7 +171,18 @@ pub fn starten(app_id: &str, args: Args) {
             // Oberflaeche, statt Zuege abzuschneiden. Eine hohe Untergrenze
             // hier wuerde genau das verhindern.
             s.fenster.set_size_request(720, 480);
-            s.fenster.present();
+            // Minimiert: erst das Tray-Icon, das Fenster bleibt verborgen.
+            // Nimmt kein Watcher das Icon an, kommt das Fenster doch - ein
+            // verborgenes Fenster ohne Tray waere unerreichbar.
+            let im_tray = Rc::new(Cell::new(false));
+            let tray = if a.minimiert {
+                tray_starten(app, &s, &lauf, Rc::clone(&im_tray))
+            } else {
+                None
+            };
+            if tray.is_none() {
+                s.fenster.present();
+            }
 
             // Selbsttest (Belege): Fenster nach N Sekunden schliessen - derselbe
             // Weg wie der Schliessen-Knopf, inklusive Aufraeumen.
@@ -174,12 +197,23 @@ pub fn starten(app_id: &str, args: Args) {
                 );
             }
 
-            // Fenster zu -> Engine und Geraete weg.
+            // Fenster zu -> Engine und Geraete weg. Mit Tray: nur verbergen.
             {
                 let lauf = Arc::clone(&lauf);
-                s.fenster.connect_close_request(move |_| {
+                let im_tray = Rc::clone(&im_tray);
+                s.fenster.connect_close_request(move |f| {
+                    if im_tray.get() {
+                        f.set_visible(false);
+                        return gtk::glib::Propagation::Stop;
+                    }
                     lauf.abschalten();
                     gtk::glib::Propagation::Proceed
+                });
+            }
+            // Das Tray lebt so lange wie die Anwendung: der Rueckruf haelt es.
+            if let Some(t) = tray {
+                app.connect_shutdown(move |_| {
+                    let _ = &t;
                 });
             }
             // Sicherheitsnetz: endet die Anwendung anders (z. B. per Signal),
@@ -209,10 +243,10 @@ pub fn starten(app_id: &str, args: Args) {
                 gtk::glib::timeout_add_local_once(Duration::from_millis(600), move || {
                     match was.as_str() {
                         "vban" => {
-                            dialogs::vban_fenster(&s2.fenster, &dialogs::BeispielVban);
+                            dialogs::vban_fenster(&s2.fenster, &s2.vban);
                         }
                         "midi" => {
-                            dialogs::midi_fenster(&s2.fenster, &[]);
+                            dialogs::midi_fenster(&s2.fenster);
                         }
                         "darstellung" => {
                             dialogs::darstellung_fenster(&s2);
@@ -225,5 +259,89 @@ pub fn starten(app_id: &str, args: Args) {
     }
 
     // GTK soll die eigenen Argumente nicht pruefen: sie sind oben gelesen.
+    // (`--minimized` steht in `args`.)
     let _ = app.run_with_args::<&str>(&[]);
+}
+
+/// Tray-Icon fuer den minimierten Start. Menuepunkte wirken direkt auf die
+/// Engine; `im_tray` meldet, ob ein Watcher das Icon angenommen hat.
+fn tray_starten(
+    app: &gtk::Application,
+    s: &Rc<shell::Shell>,
+    lauf: &Arc<crosspoint::lauf::Lauf>,
+    im_tray: Rc<Cell<bool>>,
+) -> Option<Rc<crate::tray::Tray>> {
+    use crate::tray::{Eintrag, MenueZustand, Rueckrufe};
+    let params = lauf.params.clone();
+    let zustand = {
+        let params = params.clone();
+        move || {
+            let mutes: Vec<bool> = params
+                .strips
+                .iter()
+                .map(|x| x.mute.load(std::sync::atomic::Ordering::Relaxed))
+                .collect();
+            MenueZustand {
+                alle_stumm: !crate::tray::stumm_ziel(&mutes),
+                autostart: crosspoint::autostart::enabled(),
+            }
+        }
+    };
+    let aktion = {
+        let fenster = s.fenster.clone();
+        let app = app.clone();
+        let lauf = Arc::clone(lauf);
+        move |e: Eintrag| match e {
+            Eintrag::Fenster => {
+                fenster.set_visible(true);
+                fenster.present();
+            }
+            Eintrag::Stumm => {
+                let mutes: Vec<bool> = params
+                    .strips
+                    .iter()
+                    .map(|x| x.mute.load(std::sync::atomic::Ordering::Relaxed))
+                    .collect();
+                let ziel = crate::tray::stumm_ziel(&mutes);
+                for i in 0..mutes.len() {
+                    params.set("strip", i, "mute", if ziel { 1.0 } else { 0.0 });
+                }
+            }
+            Eintrag::Preset => {
+                if !crosspoint::restore::preset_laden(&params, &lauf.preset) {
+                    eprintln!("crosspoint: kein Preset unter {}", lauf.preset.display());
+                }
+            }
+            Eintrag::Autostart => {
+                let an = !crosspoint::autostart::enabled();
+                if let Err(e) = crosspoint::autostart::set(an) {
+                    eprintln!("crosspoint: Autostart: {e}");
+                }
+            }
+            Eintrag::Beenden => {
+                lauf.abschalten();
+                app.quit();
+            }
+        }
+    };
+    let fenster = s.fenster.clone();
+    let angenommen = move |ok: bool| {
+        im_tray.set(ok);
+        if !ok && !fenster.is_visible() {
+            fenster.present();
+        }
+    };
+    match crate::tray::starten(
+        Rueckrufe {
+            zustand: Box::new(zustand),
+            aktion: Box::new(aktion),
+        },
+        angenommen,
+    ) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            eprintln!("crosspoint: kein Tray ({e}) - Fenster wird gezeigt");
+            None
+        }
+    }
 }

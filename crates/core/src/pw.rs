@@ -276,7 +276,7 @@ impl Graph {
 
     fn nach_anzeige(&self, passt: impl Fn(&Node) -> bool) -> Vec<&Node> {
         let mut liste: Vec<&Node> = self.nodes.iter().filter(|n| passt(n)).collect();
-        liste.sort_by(|a, b| a.anzeige().to_lowercase().cmp(&b.anzeige().to_lowercase()));
+        liste.sort_by_key(|a| a.anzeige().to_lowercase());
         liste
     }
 
@@ -639,7 +639,7 @@ impl Bestand {
             if rest.is_empty() {
                 continue;
             }
-            if beste.map_or(true, |(laenge, _)| name.len() > laenge) {
+            if beste.is_none_or(|(laenge, _)| name.len() > laenge) {
                 beste = Some((name.len(), *id));
             }
         }
@@ -1116,15 +1116,19 @@ async fn schleife(
             start,
         )
         .await;
+        // Grund zuerst, dann „erster Versuch durch" melden: `PwClient::neu`
+        // wartet auf dieses Signal und liest unmittelbar danach `grund`. In
+        // umgekehrter Reihenfolge sah der Aufrufer je nach Zeitplan `None`
+        // und die Diagnose fehlte (in der CI sporadisch).
+        if let Some(meldung) = &ende {
+            grund_setzen(&grund, Some(meldung.clone()));
+        }
         // Erster Verbindungsversuch ist durch – auch wenn er scheiterte.
         if let Some(start) = start.take() {
             let _ = start.send(());
         }
         if stopp.load(Ordering::SeqCst) {
             break;
-        }
-        if let Some(meldung) = ende {
-            grund_setzen(&grund, Some(meldung));
         }
         // Ohne Verbindung: Aufträge sofort abweisen, statt sie hängen zu lassen.
         warte(&befehle, &stopp, NEUVERSUCH).await;
@@ -1175,7 +1179,7 @@ async fn lauf(
         Ok(loop_) => loop_,
         Err(e) => return Some(format!("PipeWire-MainLoop nicht anlegbar: {e:?}")),
     };
-    let context = match pw::context::ContextBox::new(&main_loop.loop_(), None) {
+    let context = match pw::context::ContextBox::new(main_loop.loop_(), None) {
         Ok(context) => context,
         Err(e) => return Some(format!("PipeWire-Context nicht anlegbar: {e:?}")),
     };
@@ -1538,6 +1542,7 @@ fn verbinden(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn trennen(
     registry: &pw::registry::Registry,
     core: &pw::core::Core,

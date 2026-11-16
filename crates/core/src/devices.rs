@@ -287,7 +287,7 @@ impl DeviceMap {
                 let praefix = format!("{n}:");
                 [bus_port(bus, "L"), bus_port(bus, "R")].iter().any(|p| {
                     graph
-                        .offene_links(&[p.clone()])
+                        .offene_links(std::slice::from_ref(p))
                         .iter()
                         .any(|v| v.nach.starts_with(&praefix))
                 })

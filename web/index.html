@@ -1403,15 +1403,30 @@
 
     /* Comp + Gate */
     const knobs2 = el("div", "knobs2");
+    /* Der Regler ist zugleich Schalter: am Anschlag "aus", sonst an. Nur die
+       Schwelle zu setzen genügte nicht – der Kern ließ Comp/Gate aus, und
+       der Kompressor stand auf 1:1. */
     const compK = makeKnob({
-      label: "COMP", min: -60, max: 0, step: 1, value: -18, def: -18,
-      color: "#7fa8d9", fmt: (v) => v.toFixed(0) + " dB",
-      onChange: (v) => send("strip", i, "comp_threshold", v)
+      label: "COMP", min: -60, max: 0, step: 1, value: 0, def: 0,
+      color: "#7fa8d9", fmt: (v) => (v >= 0 ? "aus" : v.toFixed(0) + " dB"),
+      onChange: (v) => {
+        const an = v < 0;
+        if (an) {
+          send("strip", i, "comp_threshold", v);
+          const alt = state && state.strips[i];
+          if (!alt || !(alt.comp_ratio > 1)) send("strip", i, "comp_ratio", 3);
+        }
+        send("strip", i, "comp", an ? 1 : 0);
+      }
     });
     const gateK = makeKnob({
-      label: "GATE", min: -80, max: 0, step: 1, value: -60, def: -60,
-      color: "#b79cff", fmt: (v) => v.toFixed(0) + " dB",
-      onChange: (v) => send("strip", i, "gate_threshold", v)
+      label: "GATE", min: -61, max: -20, step: 1, value: -61, def: -61,
+      color: "#b79cff", fmt: (v) => (v <= -61 ? "aus" : v.toFixed(0) + " dB"),
+      onChange: (v) => {
+        const an = v > -61;
+        if (an) send("strip", i, "gate_schwelle", v);
+        send("strip", i, "gate", an ? 1 : 0);
+      }
     });
     knobs2.append(compK.el, gateK.el);
     body.appendChild(knobs2);
@@ -1788,6 +1803,8 @@
         u.fader.value = s.gain;
         fillFader(u.fader);
       }
+      if (!u.compK.dragging()) u.compK.set(s.comp ? Math.min(-1, s.comp_threshold) : 0, true);
+      if (!u.gateK.dragging()) u.gateK.set(s.gate ? Math.max(-60, s.gate_schwelle) : -61, true);
       if (document.activeElement !== u.pan) {
         u.pan.value = s.pan;
         u.panVal.textContent = fmtPan(s.pan);

@@ -350,7 +350,7 @@ pub fn rahmen_aus_block(
     zaehler: u32,
     block: &[f32],
 ) -> Result<AudioFrame, String> {
-    if block.len() % 2 != 0 {
+    if !block.len().is_multiple_of(2) {
         return Err(format!(
             "block mit {} Samples ist nicht stereo (gerade Anzahl nötig)",
             block.len()
@@ -436,15 +436,14 @@ pub fn spawn_sender(
                         continue;
                     }
                 };
-                match sender.as_ref() {
-                    Some(s) => match s.send_frame(&frame) {
+                if let Some(s) = sender.as_ref() {
+                    match s.send_frame(&frame) {
                         Ok(_) => {
                             ctl.setze_frames(nr);
                             gesendet += 1;
                         }
                         Err(e) => ctl.set_fehler(format!("vban senden: {e}")),
-                    },
-                    None => {}
+                    }
                 }
             }
 
@@ -613,14 +612,16 @@ pub fn parse_empfang(bytes: &[u8]) -> Result<Empfangsframe, RecvFehler> {
 
     let rest = &bytes[vban::HEADER_LEN..];
     let block = 4 * kanaele as usize;
-    if rest.len() % block != 0 {
+    if !rest.len().is_multiple_of(block) {
         return Err(RecvFehler::FalscheNutzdaten {
             len: rest.len(),
             block,
         });
     }
     let einzel: Vec<f32> = rest
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let samples = if kanaele == 1 {
@@ -917,7 +918,7 @@ impl VbanRecvControl {
     /// Pegel aus einem Paket fortschreiben (Spitze, Abfall Faktor 0,85).
     fn melde_pegel(&self, samples: &[f32]) {
         let mut peak = [0.0f32; 2];
-        for f in samples.chunks_exact(2) {
+        for f in samples.as_chunks::<2>().0 {
             let l = f[0].abs();
             let r = f[1].abs();
             if l > peak[0] {
@@ -927,10 +928,10 @@ impl VbanRecvControl {
                 peak[1] = r;
             }
         }
-        for c in 0..2 {
-            let old = f32::from_bits(self.level[c].load(Relaxed));
-            let neu = peak[c].max(old * 0.85);
-            self.level[c].store(neu.to_bits(), Relaxed);
+        for (level, spitze) in self.level.iter().zip(peak) {
+            let old = f32::from_bits(level.load(Relaxed));
+            let neu = spitze.max(old * 0.85);
+            level.store(neu.to_bits(), Relaxed);
         }
     }
 

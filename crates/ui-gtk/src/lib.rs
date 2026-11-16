@@ -32,6 +32,8 @@ pub mod shell;
 pub mod state;
 pub mod strip;
 pub mod theme;
+pub mod tray;
+pub mod vban;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -41,6 +43,7 @@ use crosspoint::engine::Params;
 use crosspoint::macros_io::MacroControl;
 use crosspoint::pegel::Pegelbank;
 use crosspoint::tape_io::TapeControl;
+use crosspoint::vban_io::{VbanControl, VbanRecvControl};
 
 pub use config::Konfiguration;
 pub use theme::konfig_pfad;
@@ -57,6 +60,9 @@ pub struct Anbindung {
     pub pegel: Arc<Pegelbank>,
     pub tape: Arc<TapeControl>,
     pub makros: Arc<MacroControl>,
+    /// VBAN-Sende- und Empfangsweg (Dialog VBAN).
+    pub vban: Arc<VbanControl>,
+    pub vban_recv: Arc<VbanRecvControl>,
     /// Ordner, in den der Tape-Schreiber schreibt (fuer die Anzeige).
     pub tape_ordner: PathBuf,
     pub sample_rate: u32,
@@ -70,6 +76,8 @@ impl Anbindung {
             pegel: lauf.pegel.clone(),
             tape: lauf.tape.clone(),
             makros: lauf.makros.clone(),
+            vban: lauf.vban.clone(),
+            vban_recv: lauf.vban_recv.clone(),
             tape_ordner: lauf.tape_ordner.clone(),
             sample_rate: lauf.sample_rate,
         }

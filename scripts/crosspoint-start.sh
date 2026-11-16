@@ -15,8 +15,8 @@
 #   crosspoint-start -> crosspoint-engine (Hintergrund) + crosspoint-fenster
 #   Fenster zu       -> Engine beendet, Geraete weg
 #
-# Auf dem Host (ohne Flatpak) bleibt scripts/crosspoint-launch.sh zustaendig;
-# es startet die Oberflaeche im Browser der Wahl.
+# Auf dem Host (ohne Flatpak) ist scripts/crosspoint-launch.sh zustaendig;
+# es startet das native Fenster `crosspoint`.
 set -uo pipefail
 
 # --minimized: ohne Fenster starten, nur Tray-Icon (Autostart).

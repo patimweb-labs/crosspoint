@@ -95,6 +95,8 @@ pub struct Shell {
     pub makro_knoepfe: RefCell<Vec<gtk::Button>>,
     pub makro_seite: Cell<usize>,
     pub makro_seiten: RefCell<Vec<Option<macros::Bank>>>,
+    /// VBAN-Steuerung des Kerns (Dialog VBAN).
+    pub vban: crate::dialogs::VbanAnbindung,
 }
 
 impl Shell {
@@ -164,6 +166,11 @@ impl Shell {
             makro_knoepfe: RefCell::new(Vec::new()),
             makro_seite: Cell::new(0),
             makro_seiten: RefCell::new(vec![None; 6]),
+            vban: crate::dialogs::VbanAnbindung {
+                send: an.vban,
+                recv: an.vban_recv,
+                sample_rate: an.sample_rate,
+            },
         });
 
         // CSS aus dem Token-Satz anwenden (ein Provider, austauschbar).
@@ -299,7 +306,7 @@ impl Shell {
             .hinweis_label
             .borrow()
             .as_ref()
-            .map(|l| l.text().to_string() == text)
+            .map(|l| l.text() == text)
             .unwrap_or(false);
         if !gleich {
             self.hinweis(text, fehler);
@@ -590,23 +597,14 @@ impl Shell {
         {
             let this2 = Rc::clone(this);
             vban.connect_clicked(move |_| {
-                let quelle = crate::dialogs::BeispielVban;
-                crate::dialogs::vban_fenster(&this2.fenster, &quelle);
+                crate::dialogs::vban_fenster(&this2.fenster, &this2.vban);
             });
         }
         let midi = bauen("MIDI");
         {
             let this2 = Rc::clone(this);
             midi.connect_clicked(move |_| {
-                let namen: Vec<String> = this2
-                    .geraete
-                    .quellen_namen
-                    .borrow()
-                    .iter()
-                    .flatten()
-                    .cloned()
-                    .collect();
-                crate::dialogs::midi_fenster(&this2.fenster, &namen);
+                crate::dialogs::midi_fenster(&this2.fenster);
             });
         }
         let darstellung = bauen("DARSTELLUNG");
@@ -1295,7 +1293,7 @@ impl Shell {
                     } else {
                         zeile.remove_css_class("fehlt");
                     }
-                    zeile.set_tooltip_text(Some(tipp).filter(|_| fehlt || bus.is_some()));
+                    zeile.set_tooltip_text((fehlt || bus.is_some()).then_some(tipp));
                 }
             }
         }

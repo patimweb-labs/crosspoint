@@ -231,7 +231,7 @@ fn align4(n: usize) -> usize {
 fn schreibe_string(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(s.as_bytes());
     out.push(0);
-    while out.len() % 4 != 0 {
+    while !out.len().is_multiple_of(4) {
         out.push(0);
     }
 }
@@ -452,13 +452,21 @@ pub fn anwende(params: &Arc<Params>, nachricht: &Nachricht) -> Option<Auftrag> {
         }
         Auftrag::MidiCc { cc: pfad_cc, .. } => {
             // Drei Zahlen: Kanal, CC, Wert. Kurzform `/midi/cc/<nr> <wert>`.
+            // Ob die Nummer im Pfad steht, entscheidet die Adresse, nicht der
+            // Wert: `/midi/cc/0` ist CC 0 (Fader 1 am nanoKONTROL2).
+            let mit_nummer = nachricht
+                .adresse
+                .split('/')
+                .filter(|t| !t.is_empty())
+                .count()
+                == 3;
             let (kanal, cc, wert) = match nachricht.args.as_slice() {
                 [k, c, w, ..] => (
                     zahl_byte(Some(k), 15)?,
                     zahl_byte(Some(c), 127)?,
                     zahl_byte(Some(w), 127)?,
                 ),
-                [w] if *pfad_cc > 0 => (0, *pfad_cc, zahl_byte(Some(w), 127)?),
+                [w] if mit_nummer => (0, *pfad_cc, zahl_byte(Some(w), 127)?),
                 _ => return None,
             };
             cc_senden(Cc { kanal, cc, wert });
@@ -952,7 +960,7 @@ mod tests {
     fn streifen_gain_wird_gesetzt() {
         let p = params();
         let paket = kodiere("/strip/0/gain", &[Arg::Float(-6.0)]);
-        assert_eq!(p.set("strip", 0, "gain", 0.0), true, "Vorbedingung");
+        assert!(p.set("strip", 0, "gain", 0.0), "Vorbedingung");
         assert!(verarbeite_paket(&p, &paket, false).is_none());
         assert!((gain(&p, 0) - (-6.0)).abs() < 1e-6, "{}", gain(&p, 0));
         // Nur der angesprochene Streifen ändert sich.
@@ -1182,12 +1190,22 @@ mod tests {
             &kodiere("/midi/cc", &[Arg::Int(3), Arg::Int(200), Arg::Int(-5)]),
             false,
         );
+        // CC 0 ist eine gueltige Nummer im Pfad (Fader 1 am nanoKONTROL2).
+        verarbeite_paket(&p, &kodiere("/midi/cc/0", &[Arg::Int(33)]), false);
         let ereignisse = cc_kanal().abholen();
         assert!(ereignisse.contains(&Cc {
             kanal: 0,
             cc: 19,
             wert: 90
         }));
+        assert!(
+            ereignisse.contains(&Cc {
+                kanal: 0,
+                cc: 0,
+                wert: 33
+            }),
+            "/midi/cc/0 muss als CC 0 ankommen: {ereignisse:?}"
+        );
         assert!(ereignisse.contains(&Cc {
             kanal: 3,
             cc: 127,

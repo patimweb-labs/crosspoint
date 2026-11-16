@@ -102,6 +102,16 @@ pub fn text(
     snap.restore();
 }
 
+/// Breite eines Textes in Pixeln, wie [`text`] ihn zeichnet.
+pub fn text_breite(widget: &impl IsA<gtk::Widget>, s: &str, groesse: f32, familie: &str) -> f32 {
+    let layout = widget.create_pango_layout(Some(s));
+    let mut fd = pango::FontDescription::new();
+    fd.set_family(familie);
+    fd.set_absolute_size(groesse as f64 * pango::SCALE as f64);
+    layout.set_font_description(Some(&fd));
+    layout.pixel_size().0 as f32
+}
+
 /// Wie [`text`], aber rechtsbuendig innerhalb `[x, x+breite]`.
 #[allow(clippy::too_many_arguments)]
 pub fn text_rechts(

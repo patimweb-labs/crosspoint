@@ -253,6 +253,10 @@ pub struct Gate {
     /// Signal schnell folgen, sonst bleibt das Gate nach einer Pause noch
     /// Sekunden offen. Die hoerbare Regelzeit ist `rel` (Parameter).
     env_rel: f32,
+    /// Anstieg des **Detektors** (fest 0,5 ms). Frueher lief er mit der
+    /// Attack-Zeit: bei 100 ms Attack merkte das Gate erst nach rund 100 ms,
+    /// dass gesprochen wird, und oeffnete dann noch einmal 100 ms lang.
+    env_att: f32,
     /// Linearer Boden bei geschlossenem Gate (aus `tiefe_db`).
     boden: f32,
 }
@@ -268,6 +272,7 @@ impl Default for Gate {
             rel: 0.0,
             hold_s: 0.0,
             env_rel: 0.0,
+            env_att: 0.0,
             boden: db_to_lin(-60.0),
         }
     }
@@ -279,6 +284,7 @@ impl Gate {
         self.rel = (-1.0 / (clamp(release_ms, 1.0, 5000.0) * 0.001 * sr)).exp();
         self.hold_s = clamp(hold_ms, 0.0, 2000.0) * 0.001 * sr;
         self.env_rel = (-1.0 / (0.020 * sr)).exp();
+        self.env_att = (-1.0 / (0.0005 * sr)).exp();
     }
 
     /// Tiefe in dB (0..80): Daempfung, wenn das Gate zu ist.
@@ -287,16 +293,24 @@ impl Gate {
     }
 
     pub fn process(&mut self, x: f32, threshold_db: f32) -> f32 {
+        self.process_key(x, x.abs(), threshold_db)
+    }
+
+    /// Wie [`Gate::process`], aber der Detektor sieht `key` statt `|x|`.
+    /// Fuer Stereo bekommen beide Kanaele denselben Schluessel
+    /// (`max(|L|, |R|)`): beide Gates laufen dann im Gleichschritt, und das
+    /// Stereobild wandert nicht, wenn nur eine Seite leise wird.
+    pub fn process_key(&mut self, x: f32, key: f32, threshold_db: f32) -> f32 {
         if !self.enabled {
             return x;
         }
-        let lvl = x.abs();
+        let lvl = key;
         // Einpolige Huellkurve: oeffnet mit Attack, schliesst mit Release.
         // (Frueher stand hier `0.999.max(att)` bei `1.0 - att`, wodurch die
         // Huellkurve den Pegel um Faktor 1/(1-0,999) zu hoch zeigte und die
         // Schwelle nie erreichte.)
         let coef = if lvl > self.env {
-            self.att
+            self.env_att
         } else {
             self.env_rel
         };
@@ -314,19 +328,41 @@ impl Gate {
 }
 
 /// Denoiser als weicher Downward-Expander (Original-Modul "Audibility" nicht rekonstruiert).
+///
+/// Die Huellkurve steigt in 1 ms und faellt in 100 ms. Frueher lief sie mit
+/// einem festen Faktor (0,9995, ~42 ms bei 48 kHz) in beide Richtungen: jeder
+/// Wortanfang nach einer Pause blieb dann rund 40 ms abgesenkt.
 #[derive(Clone, Copy, Default)]
 pub struct Denoiser {
     pub enabled: bool,
     env: f32,
+    att: f32,
+    rel: f32,
+    sr: f32,
 }
 
 impl Denoiser {
+    /// Regelzeiten aus der Abtastrate (einmal je Block, nicht je Sample).
+    pub fn set_sample_rate(&mut self, sr: f32) {
+        let sr = sr.max(8000.0);
+        if (sr - self.sr).abs() < 0.5 {
+            return;
+        }
+        self.sr = sr;
+        self.att = (-1.0 / (0.001 * sr)).exp();
+        self.rel = (-1.0 / (0.100 * sr)).exp();
+    }
+
     pub fn process(&mut self, x: f32, floor_db: f32, threshold_db: f32) -> f32 {
         if !self.enabled {
             return x;
         }
+        if self.sr == 0.0 {
+            self.set_sample_rate(48000.0);
+        }
         let lvl = x.abs();
-        self.env = 0.9995 * self.env + 0.0005 * lvl;
+        let c = if lvl > self.env { self.att } else { self.rel };
+        self.env = c * self.env + (1.0 - c) * lvl;
         let env_db = lin_to_db(self.env);
         if env_db >= threshold_db {
             x
@@ -412,6 +448,51 @@ impl DelayLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_oeffnet_trotz_langer_attack_sofort_zu_erkennen() {
+        // Attack 200 ms: das Gate soll *weich* oeffnen, aber sofort damit
+        // anfangen. Nach 20 ms ist die Verstaerkung deutlich ueber dem Boden.
+        let sr = 48000.0;
+        let mut g = Gate {
+            enabled: true,
+            ..Default::default()
+        };
+        g.set_times(200.0, 80.0, 200.0, sr);
+        g.set_tiefe(60.0);
+        for i in 0..(0.020 * sr) as usize {
+            let x = 0.1 * (2.0 * std::f32::consts::PI * 300.0 * i as f32 / sr).sin();
+            g.process(x, -45.0);
+        }
+        assert!(g.gain > 0.08, "nach 20 ms erst {}", g.gain);
+    }
+
+    #[test]
+    fn denoiser_laesst_den_wortanfang_durch() {
+        // Nach einer Pause: ein Ton weit ueber der Schwelle ist nach 3 ms
+        // praktisch unabgesenkt (frueher ~40 ms Einschwingen).
+        let sr = 48000.0;
+        let mut d = Denoiser {
+            enabled: true,
+            ..Default::default()
+        };
+        d.set_sample_rate(sr);
+        for _ in 0..4800 {
+            d.process(0.0001, -30.0, -50.0);
+        }
+        let mut letzte = 0.0f32;
+        let mut ein = 0.0f32;
+        for i in 0..(0.004 * sr) as usize {
+            let x = 0.1 * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).sin();
+            let y = d.process(x, -30.0, -50.0);
+            if i > (0.003 * sr) as usize && x.abs() > ein {
+                ein = x.abs();
+                letzte = y.abs();
+            }
+        }
+        let db = 20.0 * (letzte / ein).log10();
+        assert!(db > -1.0, "Wortanfang nach 3 ms noch {db:.2} dB abgesenkt");
+    }
 
     #[test]
     fn biquad_peak_boost_hebt_mitte() {
@@ -579,6 +660,8 @@ impl C5Limiter {
     }
 
     /// Ein Sample durch die Drei-Band-Kette.
+    // Je Band werden fuenf parallele Felder gelesen (Band, Gain, Comp, Limiter).
+    #[allow(clippy::needless_range_loop)]
     pub fn process(&mut self, x: f32, cfg: &C5Config, sr: f32) -> f32 {
         if !cfg.enabled {
             return x;
@@ -616,10 +699,12 @@ mod c5_tests {
 
     #[test]
     fn begrenzt_auf_decke() {
-        let mut cfg = C5Config::default();
-        cfg.enabled = true;
-        cfg.ceiling_db = [-6.0; 3];
-        cfg.comp_on = [false; 3];
+        let cfg = C5Config {
+            enabled: true,
+            ceiling_db: [-6.0; 3],
+            comp_on: [false; 3],
+            ..C5Config::default()
+        };
         let mut c5 = C5Limiter::default();
         let mut peak = 0f32;
         for i in 0..9600 {
@@ -635,10 +720,12 @@ mod c5_tests {
 
     #[test]
     fn leises_signal_bleibt_erhalten() {
-        let mut cfg = C5Config::default();
-        cfg.enabled = true;
-        cfg.ceiling_db = [0.0; 3];
-        cfg.comp_on = [false; 3];
+        let cfg = C5Config {
+            enabled: true,
+            ceiling_db: [0.0; 3],
+            comp_on: [false; 3],
+            ..C5Config::default()
+        };
         let mut c5 = C5Limiter::default();
         let mut peak = 0f32;
         for i in 0..9600 {
@@ -761,7 +848,7 @@ Der TK erkennt sie an zwei Huellkurven und einer Flanke:
 Das Verhaeltnis schnell/langsam gegen `tk_schwelle` (dB) ist der
 Detektor; der Detektorboden haelt ihn aus dem Grundrauschen heraus.
 Zusaetzlich muss eine **Flanke** da sein: der Spitzenwert des laufenden
-Milliseconds gegen den geglaetteten Bezug der letzten ~12 ms. Damit
+Milliseconds gegen den Spitzenwert der letzten ~12 ms. Damit
 gilt der Aufbau einer Silbe (rund 1 dB/ms, der Bezug zieht mit) nicht
 als Transient – ohne diese Sperre schluckte jeder Wortanfang 30 ms
 lang 15 dB.
@@ -787,7 +874,7 @@ pub const TK_LOOKAHEAD_MS: f32 = 5.0;
 pub const TK_MAX_SR: f32 = 192_000.0;
 /// Flankenfenster (Millisekunden), in dem der Spitzenwert steht.
 pub const TK_FLANKE_MS: f32 = 1.0;
-/// Mindestanstieg des Spitzenwerts ueber den geglaetteten Bezug (dB).
+/// Mindestanstieg des Spitzenwerts ueber den Bezug (dB).
 pub const TK_FLANKE_DB: f32 = 6.0;
 /// Detektorboden in dBFS: darunter gibt es nichts zu schuetzen (Grundrauschen
 /// des Mikrofons, digitale Stille). Der Boden ist **kein Gate** – er
@@ -795,8 +882,17 @@ pub const TK_FLANKE_DB: f32 = 6.0;
 /// ueberhaupt hinsieht; ohne ihn senkte das Rauschen im Stillen die
 /// Verstaerkung staendig um 15 dB.
 pub const TK_BODEN_DB: f32 = -45.0;
-/// Glaettung des Flankenbezugs je Flankenfenster (0,08 ~ 12 ms).
-const TK_BEZUG_K: f32 = 0.08;
+/// Flankenbezug: Spitzenwert der letzten so vielen Flankenfenster (~12 ms).
+/// Ein Spitzenwert statt eines Mittels: bei tiefen Stimmen (80 Hz, 12,5 ms
+/// Periode) schwankt der Millisekunden-Spitzenwert sonst um Faktor vier, und
+/// ein Silbenaufbau zieht den Bezug sofort mit, statt ihm 12 ms hinterherzulaufen.
+const TK_BEZUG_BLOECKE: usize = 12;
+/// Untergrenze des Flankenbezugs in dBFS. Ein Wortanfang aus der Stille
+/// steigt in seiner ersten Millisekunde um mehr als 6 dB ueber das Rauschen;
+/// erst gegen diesen Boden gemessen bleibt ein Aufbau ueber 5..10 ms unter
+/// der Flankenschwelle. Ein Klackser aus der Stille (gemessen -12,6 dBFS)
+/// liegt weit darueber.
+pub const TK_BEZUG_BODEN_DB: f32 = -33.0;
 
 /// Transienten-Unterdruecker je Kanal (siehe Modulkopf).
 pub struct TransientenUnterdruecker {
@@ -809,6 +905,11 @@ pub struct TransientenUnterdruecker {
     slow_alt: f32,
     /// Spitzenwert des laufenden Flankenfensters und der geglaettete Bezug.
     block_max: f32,
+    /// Spitzenwerte der letzten [`TK_BEZUG_BLOECKE`] Flankenfenster (Ring).
+    bezug: [f32; TK_BEZUG_BLOECKE],
+    bezug_pos: usize,
+    /// [`TK_BEZUG_BODEN_DB`] linear.
+    bezug_boden: f32,
     block_ref: f32,
     // Koeffizienten (einpolig, aus der Abtastrate)
     f_att: f32,
@@ -859,6 +960,9 @@ impl TransientenUnterdruecker {
             slow: 0.0,
             slow_alt: 0.0,
             block_max: 0.0,
+            bezug: [0.0; TK_BEZUG_BLOECKE],
+            bezug_pos: 0,
+            bezug_boden: db_to_lin(TK_BEZUG_BODEN_DB),
             block_ref: 0.0,
             f_att: 0.0,
             f_rel: 0.0,
@@ -931,7 +1035,9 @@ impl TransientenUnterdruecker {
         self.slow = 0.0;
         self.slow_alt = 0.0;
         self.block_max = 0.0;
-        self.block_ref = 0.0;
+        self.block_ref = self.bezug_boden;
+        self.bezug = [0.0; TK_BEZUG_BLOECKE];
+        self.bezug_pos = 0;
         self.cnt_rise = 0;
         self.cnt_flanke = 0;
         self.sperre = false;
@@ -1015,7 +1121,7 @@ impl TransientenUnterdruecker {
         let ueber = self.fast > self.slow * self.schwelle_lin && self.fast > self.boden_lin;
 
         // 3) Flanke: Spitzenwert des laufenden Milliseconds gegen den
-        //    geglaetteten Bezug der letzten ~12 ms. Ein Klackser reisst den
+        //    Spitzenwert der letzten ~12 ms. Ein Klackser reisst den
         //    Blockwert sofort hoch, ein Silbenaufbau zieht den Bezug mit, und
         //    Rauschen schwankt von Block zu Block nur um wenige dB.
         if lvl > self.block_max {
@@ -1024,7 +1130,12 @@ impl TransientenUnterdruecker {
         self.cnt_flanke += 1;
         if self.cnt_flanke >= self.n_flanke {
             self.cnt_flanke = 0;
-            self.block_ref += (self.block_max - self.block_ref) * TK_BEZUG_K;
+            self.bezug[self.bezug_pos] = self.block_max;
+            self.bezug_pos = (self.bezug_pos + 1) % TK_BEZUG_BLOECKE;
+            // Der Boden gilt auch fuer den Bezug: ein Wortanfang aus der
+            // Stille hebt sich sonst um Zehnerpotenzen vom Rauschen ab und
+            // saehe aus wie ein Klackser.
+            self.block_ref = self.bezug.iter().fold(self.bezug_boden, |m, &v| m.max(v));
             self.block_max = 0.0;
         }
         let flanke = self.block_max > self.block_ref * self.flanke_lin;
@@ -1054,7 +1165,10 @@ impl TransientenUnterdruecker {
         } else {
             self.g_rel
         };
-        self.gain += (ziel - self.gain) * c;
+        // `c` ist der Rueckhaltefaktor exp(-1/(t*sr)): der Schritt ist
+        // (1 - c). Frueher stand hier `* c` - damit sprang die Verstaerkung
+        // in einem Sample auf das Ziel (hoerbarer Knack statt 80 ms Freigabe).
+        self.gain += (ziel - self.gain) * (1.0 - c);
 
         // 6) Lookahead: das Signal laeuft 5 ms hinter dem Detektor her.
         let out = self.ring[self.pos] * self.gain;
@@ -1166,6 +1280,13 @@ const NR_BINS: usize = NR_FFT / 2;
 const NR_BLOCK_FRAMES: usize = 24;
 /// Bloecke im Ring – 8 x 128 ms ≈ 1,02 s Rauschschaetzung.
 const NR_BLOCK_RING: usize = 8;
+/// Zeitglaettung der Leistung vor der Minimumsuche (je Frame, ~35 ms).
+const NR_PSD_GLATT: f32 = 0.85;
+/// Glaettung, wenn die Leistung faellt (schnell: Pausen sichtbar machen).
+const NR_PSD_FALL: f32 = 0.3;
+/// Ausgleich: das Minimum der geglaetteten Leistung ueber ~1 s liegt im
+/// Mittel um diesen Faktor unter dem echten Rauschpegel.
+const NR_MIN_BIAS: f32 = 16.67;
 /// Halbe Breite des Medianfensters fuer die Deckelung der Rauschschaetzung.
 ///
 /// Das Fenster muss deutlich breiter sein als die Hauptkeule des Fensters
@@ -1200,13 +1321,14 @@ fn median(v: &[f32]) -> f32 {
 /// **Stufe b – spektrale Subtraktion:** 512-Punkt-FFT, halbe Ueberlappung,
 /// Wurzel-Hann-Fenster (Analyse und Synthese), damit sich das Signal bei
 /// Verstaerkung 1 exakt rekonstruiert. Rauschschaetzung ist das gleitende
-/// Betragsminimum ueber ~1 s je Band (Blockminimum, Ring aus acht Bloecken),
-/// anschliessend ein Nachbarminimum ueber ±4 Baender: ein schmaler Dauerton
+/// Minimum der geglaetteten Leistung ueber ~1 s je Band (Ring aus acht
+/// Bloecken), anschliessend ein Median-Deckel ueber ±12 Baender: ein schmaler Dauerton
 /// zieht den Rauschboden damit nicht nach oben. Die Subtraktion passiert im
 /// Leistungsbereich (`g = 1 - alpha*n²/p`, unten durch einen Boden begrenzt),
 /// was hohe Pegel fast unberuehrt laesst. Gegen „musikalisches Rauschen“
 /// wirken drei Dinge: die Glaettung der Verstaerkung ueber die Zeit
-/// (schnell zu, langsam auf), eine Glaettung ueber die Frequenz, die **nur
+/// (zu etwas schneller als auf, damit Wortanfaenge nicht verschluckt
+/// werden), eine Glaettung ueber die Frequenz, die **nur
 /// Kerben anhebt** (keine Spitzen absenkt), und der Spektralboden.
 ///
 /// Alles liegt in festen Arrays: `process` allokiert nichts. Die Latenz der
@@ -1230,6 +1352,8 @@ pub struct NoiseReduction {
     re: [f32; NR_FFT],
     im: [f32; NR_FFT],
     mag: [f32; NR_BINS],
+    /// Zeitlich geglaettete Leistung je Band (Grundlage der Minimumsuche).
+    psd: [f32; NR_BINS],
     block_min: [f32; NR_BINS],
     min_ring: [[f32; NR_BINS]; NR_BLOCK_RING],
     ring_pos: usize,
@@ -1290,6 +1414,7 @@ impl NoiseReduction {
             re: [0.0; NR_FFT],
             im: [0.0; NR_FFT],
             mag: [0.0; NR_BINS],
+            psd: [0.0; NR_BINS],
             block_min: [f32::INFINITY; NR_BINS],
             min_ring: [[f32::INFINITY; NR_BINS]; NR_BLOCK_RING],
             ring_pos: 0,
@@ -1313,7 +1438,7 @@ impl NoiseReduction {
             gate_tiefe: 0.0,
             gate_boden: 1.0,
             g_att: 0.5,
-            g_rel: 0.12,
+            g_rel: 0.3,
             sr: 0.0,
             frisch: true,
         };
@@ -1375,6 +1500,7 @@ impl NoiseReduction {
         self.re = [0.0; NR_FFT];
         self.im = [0.0; NR_FFT];
         self.mag = [0.0; NR_BINS];
+        self.psd = [0.0; NR_BINS];
         self.block_min = [f32::INFINITY; NR_BINS];
         self.min_ring = [[f32::INFINITY; NR_BINS]; NR_BLOCK_RING];
         self.ring_pos = 0;
@@ -1394,8 +1520,12 @@ impl NoiseReduction {
     #[inline]
     fn expander(&mut self, x: f32, schnelle: f32) -> f32 {
         let lvl = x.abs();
-        let coef = if lvl > self.env { schnelle } else { self.rel1 };
-        self.env = coef * self.env + (1.0 - coef) * lvl;
+        // `schnelle` und `rel1` sind Schrittweiten (1 - exp(-1/(t*sr))).
+        // Frueher wurden sie hier als Rueckhaltefaktor benutzt; die
+        // Huellkurve war dadurch der rohe Betrag und fiel in jedem
+        // Nulldurchgang unter die Schwelle.
+        let schritt = if lvl > self.env { schnelle } else { self.rel1 };
+        self.env += (lvl - self.env) * schritt;
         let k = (self.env * self.inv_thr).min(1.0);
         let mut ziel = 1.0 - self.gate_tiefe * (1.0 - k);
         if k >= 1.0 {
@@ -1433,18 +1563,33 @@ impl NoiseReduction {
             self.mag[i] = (r * r + im * im).sqrt();
         }
 
-        // Rauschschaetzung: gleitendes Minimum ueber ~1 s je Band.
+        // Rauschschaetzung: gleitendes Minimum ueber ~1 s je Band
+        // (Minimum-Statistik nach Martin).
         //
-        // Der Block nimmt das Minimum der **Leistung** ueber 24 Frames
-        // (~128 ms). Ein Minimum von 24 exponentialverteilten Werten liegt im
-        // Mittel bei 1/24 des Mittelwerts; der Faktor macht daraus wieder eine
-        // Erwartungstreue Schaetzung des Rauschpegels. Der Ring aus acht
-        // Bloecken mittelt acht solche Minima – deren Streuung ist damit
-        // bereits klein (relativ ~1,5 %).
+        // Gesucht wird das Minimum der **zeitlich geglaetteten** Leistung,
+        // und zwar ueber den ganzen Ring (acht Bloecke a ~128 ms), nicht der
+        // Mittelwert der Blockminima: spricht jemand ohne Pause, liegen die
+        // Minima einzelner Bloecke im Sprachpegel; erst das Minimum ueber
+        // ~1 s erreicht sicher eine Pause. Das Minimum geglaetteter Werte
+        // liegt systematisch unter dem Mittel; [`NR_MIN_BIAS`] gleicht das
+        // aus (geprueft in `nr_schaetzung_ist_erwartungstreu`).
+        let frisch = self.bloecke == 0 && self.frames_in_block == 0;
         for i in 0..NR_BINS {
             let p = self.mag[i] * self.mag[i];
-            if p < self.block_min[i] {
-                self.block_min[i] = p;
+            // Steigt langsam (glaettet die Streuung des Rauschens), faellt
+            // schnell: eine Sprechpause von 50..100 ms soll den Boden zeigen.
+            let a = if p > self.psd[i] {
+                NR_PSD_GLATT
+            } else {
+                NR_PSD_FALL
+            };
+            self.psd[i] = if frisch {
+                p
+            } else {
+                a * self.psd[i] + (1.0 - a) * p
+            };
+            if self.psd[i] < self.block_min[i] {
+                self.block_min[i] = self.psd[i];
             }
         }
         self.frames_in_block += 1;
@@ -1459,13 +1604,12 @@ impl NoiseReduction {
             if self.bloecke < NR_BLOCK_RING {
                 self.bloecke += 1;
             }
-            let durch = self.bloecke as f32;
             for i in 0..NR_BINS {
-                let mut summe = 0.0f32;
-                for b in 0..self.bloecke {
-                    summe += self.min_ring[b][i];
+                let mut m = f32::INFINITY;
+                for b in 0..NR_BLOCK_RING {
+                    m = m.min(self.min_ring[b][i]);
                 }
-                self.noise[i] = summe / durch * NR_BLOCK_FRAMES as f32;
+                self.noise[i] = m * NR_MIN_BIAS;
             }
             // Gegen schmale Dauertoene: der Rauschboden ist spektral glatt.
             // Wo ein einzelnes Band weit ueber dem Median seiner Nachbarn
@@ -1530,7 +1674,9 @@ impl NoiseReduction {
         }
         self.glatt_tmp[NR_BINS - 1] = self.gain[NR_BINS - 1];
 
-        // Zeitglaettung: schnell zu, langsam auf.
+        // Zeitglaettung je Frame (5,3 ms): zu mit 0,5, auf mit 0,3. Frueher
+        // oeffnete sie mit 0,12 - nach jeder Pause fehlten dem Wortanfang
+        // rund 2 dB (gemessen in tests/nr_sprache.rs).
         for i in 0..NR_BINS {
             let ziel = self.glatt_tmp[i];
             let k = if ziel < self.gain_glatt[i] {
@@ -1716,6 +1862,62 @@ mod tk_tests {
             "Knacks nur um {:.2} dB abgesenkt",
             aus - ein
         );
+    }
+
+    fn tk_an() -> TransientenUnterdruecker {
+        let mut tk = TransientenUnterdruecker::new(48000.0);
+        tk.setup(true, 48000.0);
+        tk
+    }
+
+    #[test]
+    fn tk_gibt_ueber_die_freigabezeit_frei() {
+        // Klick aus der Stille, danach ein leiser Dauerton: die Absenkung
+        // darf nicht in einem Sample verschwinden (frueher: Knack), sondern
+        // laeuft nach 30 ms Halten ueber ~80 ms zurueck.
+        let mut tk = tk_an();
+        let mut aus = Vec::new();
+        for i in 0..48000 / 2 {
+            let ton = 0.02 * (2.0 * PI * 500.0 * i as f32 / 48000.0).sin();
+            let klick = if (4800..4848).contains(&i) { 0.5 } else { 0.0 };
+            aus.push(tk.process(ton + klick, 6.0, 15.0));
+        }
+        let g = |ms: f32| {
+            // Verstaerkung aus dem Pegel des Tons um `ms` nach dem Klick
+            // (5 ms Lookahead eingerechnet), relativ zum Ende.
+            let mitte = 4800 + 240 + (ms * 48.0) as usize;
+            let rms = |a: usize| (aus[a..a + 96].iter().map(|x| x * x).sum::<f32>() / 96.0).sqrt();
+            rms(mitte) / rms(aus.len() - 200)
+        };
+        let nach_halten = g(40.0);
+        let mitten = g(80.0);
+        let spaet = g(300.0);
+        assert!(nach_halten < 0.5, "nach 40 ms schon {nach_halten}");
+        assert!(mitten > nach_halten && mitten < 0.9, "nach 80 ms {mitten}");
+        assert!(spaet > 0.97, "nach 300 ms erst {spaet}");
+    }
+
+    #[test]
+    fn tk_laesst_tiefe_stimme_und_wortanfang_stehen() {
+        // 80 Hz mit Obertoenen, aus der Stille in 10 ms auf -20 dBFS:
+        // kein Klackser, also keine Absenkung.
+        let mut tk = tk_an();
+        let n = 48000 / 2;
+        let mut ein = Vec::new();
+        let mut aus = Vec::new();
+        for i in 0..n {
+            let t = i as f32 / 48000.0;
+            let h = (i as f32 / 480.0).min(1.0);
+            let x = 0.06 * h * ((2.0 * PI * 80.0 * t).sin() + 0.4 * (2.0 * PI * 160.0 * t).sin());
+            ein.push(x);
+            aus.push(tk.process(x, 6.0, 15.0));
+        }
+        let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+        let versatz = 240;
+        let e = rms(&ein[0..n - versatz]);
+        let a = rms(&aus[versatz..n]);
+        let db = 20.0 * (a / e).log10();
+        assert!(db > -0.3, "tiefe Stimme verlor {db:.2} dB");
     }
 }
 
@@ -1990,5 +2192,29 @@ mod nr_tests {
         let db = lin_to_db((sum / n as f32).sqrt());
         println!("EXPANDER: -70 dBFS Rauschen bei Schwelle -40 dBFS -> {db:.2} dBFS");
         assert!(db < -75.0, "Expander hat nicht zugemacht: {db} dBFS");
+    }
+
+    #[test]
+    fn nr_schaetzung_ist_erwartungstreu() {
+        // Weisses Rauschen: die Schaetzung je Band soll im Mittel dem echten
+        // Pegel entsprechen (Fensterenergie: Summe der w² = N/2).
+        for seed in [7u32, 99, 4242] {
+            let mut nr = NoiseReduction::new(48000.0);
+            nr.enabled = true;
+            let mut r = Rausch::neu(seed);
+            let mut summe2 = 0.0f64;
+            let n = 48000 * 3;
+            for _ in 0..n {
+                let x = 0.01 * r.next();
+                summe2 += (x * x) as f64;
+                nr.process(x, 0.5, -45.0, 48000.0);
+            }
+            let var = (summe2 / n as f64) as f32;
+            let soll = var * (NR_FFT as f32 / 2.0);
+            let mittel: f32 = nr.noise[4..NR_BINS - 4].iter().sum::<f32>() / (NR_BINS - 8) as f32;
+            let q = mittel / soll;
+            eprintln!("Schaetzung/Soll = {q:.3}");
+            assert!((0.75..1.33).contains(&q), "Schaetzung/Soll = {q}");
+        }
     }
 }

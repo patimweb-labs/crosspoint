@@ -14,162 +14,6 @@ use crate::layout::{Bereich, Dichte, MasterPlatz, Seite};
 use crate::shell::Shell;
 use crosspoint::engine::Params;
 
-// ---------------------------------------------------------------- VBAN ----
-
-/// Eine Zeile der VBAN-Tabelle.
-#[derive(Clone, Debug)]
-pub struct VbanZeile {
-    pub name: String,
-    pub ip: String,
-    pub sr: u32,
-    pub kanaele: u32,
-    pub format: String,
-    pub quality: String,
-    pub ziel: String,
-    pub fehler: String,
-}
-
-/// Datenquelle der VBAN-Tabelle. Austauschbar: Beispiel, Datei, Netzwerk.
-pub trait VbanQuelle {
-    fn zeilen(&self) -> Vec<VbanZeile>;
-    fn kopf(&self) -> String {
-        "VBAN-KONFIGURATION".to_string()
-    }
-}
-
-/// Beispieldaten, bis der VBAN-Adapter seine Streams liefert.
-pub struct BeispielVban;
-
-impl VbanQuelle for BeispielVban {
-    fn zeilen(&self) -> Vec<VbanZeile> {
-        let roh = [
-            (
-                "Studio-Mix",
-                "192.168.1.20",
-                48000,
-                2,
-                "PCM 16",
-                "High",
-                "A1 (lokal)",
-                "",
-            ),
-            (
-                "Gitarre",
-                "192.168.1.31",
-                48000,
-                1,
-                "PCM 16",
-                "Normal",
-                "Streifen 1",
-                "",
-            ),
-            (
-                "Gesang",
-                "192.168.1.31",
-                48000,
-                1,
-                "PCM 24",
-                "High",
-                "Streifen 2",
-                "",
-            ),
-            (
-                "Raum",
-                "192.168.1.44",
-                44100,
-                2,
-                "PCM 16",
-                "Normal",
-                "Streifen 5",
-                "",
-            ),
-            (
-                "Monitor",
-                "192.168.1.44",
-                44100,
-                2,
-                "PCM 16",
-                "Low",
-                "B2 (VAIO)",
-                "SR weicht ab",
-            ),
-            (
-                "Handy",
-                "192.168.1.77",
-                48000,
-                1,
-                "PCM 16",
-                "Normal",
-                "Streifen 8",
-                "Pakete verloren",
-            ),
-            (
-                "Podcast",
-                "10.0.0.12",
-                48000,
-                2,
-                "PCM 24",
-                "High",
-                "B1 (VAIO)",
-                "",
-            ),
-        ];
-        roh.iter()
-            .map(|(name, ip, sr, ch, fmt, q, ziel, fehler)| VbanZeile {
-                name: name.to_string(),
-                ip: ip.to_string(),
-                sr: *sr,
-                kanaele: *ch,
-                format: fmt.to_string(),
-                quality: q.to_string(),
-                ziel: ziel.to_string(),
-                fehler: fehler.to_string(),
-            })
-            .collect()
-    }
-}
-
-fn spalte(
-    titel: &str,
-    breite: i32,
-    dehnbar: bool,
-    daten: Rc<Vec<VbanZeile>>,
-    holen: Rc<dyn Fn(&VbanZeile) -> String>,
-    klasse: Option<&'static str>,
-) -> gtk::ColumnViewColumn {
-    let f = gtk::SignalListItemFactory::new();
-    f.connect_setup(move |_, obj| {
-        let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let l = gtk::Label::new(None);
-        l.set_xalign(0.0);
-        l.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        l.add_css_class("zeile");
-        if let Some(k) = klasse {
-            l.add_css_class(k);
-        }
-        item.set_child(Some(&l));
-    });
-    f.connect_bind(move |_, obj| {
-        let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(l) = item.child().and_then(|c| c.downcast::<gtk::Label>().ok()) else {
-            return;
-        };
-        let pos = item.position() as usize;
-        if let Some(z) = daten.get(pos) {
-            l.set_text(&holen(z));
-        }
-    });
-    let col = gtk::ColumnViewColumn::new(Some(titel), Some(f));
-    col.set_fixed_width(breite);
-    col.set_expand(dehnbar);
-    col.set_resizable(true);
-    col
-}
-
 fn fenster_kopf(fenster: &gtk::Window, titel: &str, unter: &str) -> gtk::Widget {
     let kopf = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     kopf.add_css_class("dialogkopf");
@@ -194,131 +38,439 @@ fn fenster_kopf(fenster: &gtk::Window, titel: &str, unter: &str) -> gtk::Widget 
     kopf.upcast()
 }
 
-/// VBAN-Fenster: Tabelle mit Name, IP, SR, Ch, Format, Quality, Ziel, Fehler.
-pub fn vban_fenster(parent: &impl IsA<gtk::Window>, quelle: &dyn VbanQuelle) -> gtk::Window {
-    let zeilen = Rc::new(quelle.zeilen());
+// ---------------------------------------------------------------- VBAN ----
+
+/// Eine Tabelle (Incoming oder Outgoing) als Raster; wird bei jedem Takt
+/// neu gefuellt (hoechstens acht Zeilen).
+/// Mindestbreiten der Tabellenspalten in Zeichen: beide Tabellen stehen so
+/// buendig untereinander, auch wenn eine leer ist.
+const VBAN_SPALTEN: [i32; 8] = [18, 15, 6, 3, 8, 8, 12, 6];
+
+fn vban_tabelle(raster: &gtk::Grid, kopf: &[&str], zeilen: &[crate::vban::VbanZeile]) {
+    while let Some(k) = raster.first_child() {
+        raster.remove(&k);
+    }
+    for (x, t) in kopf.iter().enumerate() {
+        let l = gtk::Label::new(Some(t));
+        l.add_css_class("feld");
+        l.set_xalign(0.0);
+        l.set_width_chars(VBAN_SPALTEN.get(x).copied().unwrap_or(6));
+        l.set_hexpand(x == 0);
+        raster.attach(&l, x as i32, 0, 1, 1);
+    }
+    if zeilen.is_empty() {
+        let l = gtk::Label::new(Some("—"));
+        l.add_css_class("zeile");
+        l.add_css_class("dim");
+        l.set_xalign(0.0);
+        raster.attach(&l, 0, 1, kopf.len() as i32, 1);
+        return;
+    }
+    for (y, z) in zeilen.iter().enumerate() {
+        let felder = [
+            (z.stream.clone(), ""),
+            (z.ip.clone(), "dim"),
+            (z.sr.to_string(), "dim"),
+            (z.kanaele.to_string(), "dim"),
+            (z.format.clone(), "dim"),
+            (z.quality.clone(), "dim"),
+            (z.weg.clone(), ""),
+            (
+                z.fehler.to_string(),
+                if z.fehler > 0 { "fehler" } else { "dim" },
+            ),
+        ];
+        for (x, (text, klasse)) in felder.iter().enumerate() {
+            let l = gtk::Label::new(Some(text));
+            l.add_css_class("zeile");
+            if !klasse.is_empty() {
+                l.add_css_class(klasse);
+            }
+            l.set_xalign(0.0);
+            l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            l.set_hexpand(x == 0);
+            raster.attach(&l, x as i32, y as i32 + 1, 1, 1);
+        }
+    }
+}
+
+/// Die Steuerungen des VBAN-Wegs, die der Dialog bedient.
+#[derive(Clone)]
+pub struct VbanAnbindung {
+    pub send: std::sync::Arc<crosspoint::vban_io::VbanControl>,
+    pub recv: std::sync::Arc<crosspoint::vban_io::VbanRecvControl>,
+    pub sample_rate: u32,
+}
+
+/// VBAN-Fenster (`IP Audio Network Configuration`): Senden und Empfangen
+/// einstellen, Incoming- und Outgoing-Tabelle, Reset/Load/Save Config.
+///
+/// Alles geht ueber dieselben Funktionen wie `/api/vban/config`.
+pub fn vban_fenster(parent: &impl IsA<gtk::Window>, an: &VbanAnbindung) -> gtk::Window {
     let fenster = gtk::Window::builder()
         .title("Crosspoint — VBAN")
         .transient_for(parent)
         .modal(false)
         .default_width(1020)
-        .default_height(430)
+        .default_height(520)
         .build();
     fenster.add_css_class("dialog");
 
+    let stand = crate::vban::stand(&an.send, &an.recv, an.sample_rate);
     let aussen = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    aussen.append(&fenster_kopf(
+    let kopf = fenster_kopf(
         &fenster,
-        &quelle.kopf(),
-        &format!("{} STREAMS · UDP 6980 · EMPFANG UND SENDUNG", zeilen.len()),
-    ));
+        "IP AUDIO NETWORK · VBAN",
+        &crate::vban::unterzeile(&stand),
+    );
+    aussen.append(&kopf);
 
-    let mitte = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let mitte = gtk::Box::new(gtk::Orientation::Vertical, 10);
     mitte.set_margin_top(10);
     mitte.set_margin_bottom(10);
     mitte.set_margin_start(10);
     mitte.set_margin_end(10);
 
-    let modell = gtk::StringList::new(&zeilen.iter().map(|z| z.name.as_str()).collect::<Vec<_>>());
-    let auswahl = gtk::NoSelection::new(Some(modell));
-    let view = gtk::ColumnView::new(Some(auswahl));
-    view.add_css_class("tabelle");
+    let feld = |text: &str| {
+        let l = gtk::Label::new(Some(text));
+        l.add_css_class("feld");
+        l.set_xalign(0.0);
+        l
+    };
+    let spalte = |titel: &str, w: &gtk::Widget| {
+        let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        b.append(&feld(titel));
+        b.append(w);
+        b
+    };
+    let port_feld = |wert: u16| {
+        let s = gtk::SpinButton::with_range(1.0, 65535.0, 1.0);
+        s.set_value(f64::from(wert));
+        s.set_numeric(true);
+        s
+    };
 
-    let d = Rc::clone(&zeilen);
-    view.append_column(&spalte(
-        "Stream",
-        150,
-        true,
-        Rc::clone(&d),
-        Rc::new(|z| z.name.clone()),
-        None,
-    ));
-    view.append_column(&spalte(
+    // ----- Senden -----
+    let senden_zeile = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let senden_an = gtk::Switch::new();
+    senden_an.set_halign(gtk::Align::Start);
+    let host = gtk::Entry::new();
+    host.set_width_chars(16);
+    let senden_port = port_feld(stand.senden.port);
+    let senden_stream = gtk::Entry::new();
+    senden_stream.set_width_chars(16);
+    senden_stream.set_max_length(16);
+    let senden_status = feld("");
+    senden_status.set_hexpand(true);
+    senden_status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    senden_zeile.append(&spalte("SENDEN (BUS A1)", senden_an.upcast_ref()));
+    senden_zeile.append(&spalte("IP-ADRESSE", host.upcast_ref()));
+    senden_zeile.append(&spalte("UDP-PORT", senden_port.upcast_ref()));
+    senden_zeile.append(&spalte("STREAMNAME", senden_stream.upcast_ref()));
+    senden_zeile.append(&spalte("STATUS", senden_status.upcast_ref()));
+    mitte.append(&senden_zeile);
+
+    // ----- Empfangen -----
+    let empfangen_zeile = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let empfangen_an = gtk::Switch::new();
+    empfangen_an.set_halign(gtk::Align::Start);
+    let empfangen_port = port_feld(stand.empfangen.port);
+    let empfangen_stream = gtk::Entry::new();
+    empfangen_stream.set_width_chars(16);
+    empfangen_stream.set_max_length(16);
+    empfangen_stream.set_placeholder_text(Some("alle Streams"));
+    let empfangen_status = feld("");
+    empfangen_status.set_hexpand(true);
+    empfangen_status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    empfangen_zeile.append(&spalte("EMPFANGEN (VBAN_L/R)", empfangen_an.upcast_ref()));
+    empfangen_zeile.append(&spalte("UDP-PORT", empfangen_port.upcast_ref()));
+    empfangen_zeile.append(&spalte("STREAMFILTER", empfangen_stream.upcast_ref()));
+    empfangen_zeile.append(&spalte("STATUS", empfangen_status.upcast_ref()));
+    mitte.append(&empfangen_zeile);
+
+    // ----- Tabellen -----
+    let tabellen_kopf_in = [
+        "INCOMING STREAM",
         "IP",
-        120,
-        false,
-        Rc::clone(&d),
-        Rc::new(|z| z.ip.clone()),
-        Some("dim"),
-    ));
-    view.append_column(&spalte(
         "SR",
-        70,
-        false,
-        Rc::clone(&d),
-        Rc::new(|z| format!("{}", z.sr)),
-        Some("dim"),
-    ));
-    view.append_column(&spalte(
-        "Ch",
-        40,
-        false,
-        Rc::clone(&d),
-        Rc::new(|z| format!("{}", z.kanaele)),
-        Some("dim"),
-    ));
-    view.append_column(&spalte(
-        "Format",
-        80,
-        false,
-        Rc::clone(&d),
-        Rc::new(|z| z.format.clone()),
-        Some("dim"),
-    ));
-    view.append_column(&spalte(
-        "Quality",
-        80,
-        false,
-        Rc::clone(&d),
-        Rc::new(|z| z.quality.clone()),
-        Some("dim"),
-    ));
-    view.append_column(&spalte(
-        "Destination",
-        130,
-        false,
-        Rc::clone(&d),
-        Rc::new(|z| z.ziel.clone()),
-        None,
-    ));
-    view.append_column(&spalte(
-        "Errors",
-        150,
-        true,
-        Rc::clone(&d),
-        Rc::new(|z| {
-            if z.fehler.is_empty() {
-                "—".to_string()
-            } else {
-                z.fehler.clone()
-            }
-        }),
-        Some("fehler"),
-    ));
-
+        "CH",
+        "FORMAT",
+        "QUALITY",
+        "DESTINATION",
+        "ERRORS",
+    ];
+    let tabellen_kopf_out = [
+        "OUTGOING STREAM",
+        "IP",
+        "SR",
+        "CH",
+        "FORMAT",
+        "QUALITY",
+        "SOURCE",
+        "ERRORS",
+    ];
+    let raster = || {
+        let g = gtk::Grid::new();
+        g.set_column_spacing(12);
+        g.set_row_spacing(2);
+        g.add_css_class("tabelle");
+        g
+    };
+    let incoming = raster();
+    let outgoing = raster();
+    let tabellen = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    tabellen.append(&incoming);
+    tabellen.append(&outgoing);
     let scroll = gtk::ScrolledWindow::new();
-    scroll.set_child(Some(&view));
+    scroll.set_child(Some(&tabellen));
     scroll.set_vexpand(true);
     scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     mitte.append(&scroll);
     aussen.append(&mitte);
 
+    // ----- Fuss -----
     let fuss = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     fuss.add_css_class("dialogfuss");
-    let feld = gtk::Label::new(Some("Datenquelle: austauschbares Trait (Beispieldaten)"));
-    feld.add_css_class("feld");
-    fuss.append(&feld);
-    let platz = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    platz.set_hexpand(true);
-    fuss.append(&platz);
-    let hinzu = gtk::Button::with_label("STREAM HINZUFUEGEN");
-    hinzu.add_css_class("tbtn");
-    let f = fenster.clone();
-    hinzu.connect_clicked(move |_| {
-        let _ = &f;
-    });
-    fuss.append(&hinzu);
+    let meldung = feld("");
+    meldung.set_hexpand(true);
+    meldung.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    fuss.append(&meldung);
+    let knopf = |t: &str| {
+        let b = gtk::Button::with_label(t);
+        b.add_css_class("tbtn");
+        b
+    };
+    let uebernehmen = knopf("UEBERNEHMEN");
+    let reset = knopf("RESET");
+    let laden = knopf("LOAD CONFIG");
+    let speichern = knopf("SAVE CONFIG");
+    fuss.append(&uebernehmen);
+    fuss.append(&reset);
+    fuss.append(&laden);
+    fuss.append(&speichern);
     aussen.append(&fuss);
+
+    // Formular aus dem Kern fuellen (beim Oeffnen und nach Reset/Load) -
+    // nicht im Takt, sonst ueberschriebe der Takt das gerade Getippte.
+    // `fuellt` haelt die Schalter still, solange das Programm sie setzt.
+    let fuellt = Rc::new(Cell::new(false));
+    let formular_fuellen: Rc<dyn Fn()> = {
+        let an = an.clone();
+        let fuellt = Rc::clone(&fuellt);
+        let (senden_an, host, senden_port, senden_stream) = (
+            senden_an.clone(),
+            host.clone(),
+            senden_port.clone(),
+            senden_stream.clone(),
+        );
+        let (empfangen_an, empfangen_port, empfangen_stream) = (
+            empfangen_an.clone(),
+            empfangen_port.clone(),
+            empfangen_stream.clone(),
+        );
+        Rc::new(move || {
+            fuellt.set(true);
+            let s = crate::vban::stand(&an.send, &an.recv, an.sample_rate);
+            senden_an.set_active(s.senden.an);
+            host.set_text(&s.senden.host);
+            senden_port.set_value(f64::from(s.senden.port));
+            senden_stream.set_text(&s.senden.stream);
+            empfangen_an.set_active(s.empfangen.an);
+            empfangen_port.set_value(f64::from(s.empfangen.port));
+            empfangen_stream.set_text(&s.empfangen.stream);
+            fuellt.set(false);
+        })
+    };
+    formular_fuellen();
+
+    let formular = {
+        let (senden_an, host, senden_port, senden_stream) = (
+            senden_an.clone(),
+            host.clone(),
+            senden_port.clone(),
+            senden_stream.clone(),
+        );
+        let (empfangen_an, empfangen_port, empfangen_stream) = (
+            empfangen_an.clone(),
+            empfangen_port.clone(),
+            empfangen_stream.clone(),
+        );
+        move || crate::vban::Formular {
+            senden_an: senden_an.is_active(),
+            host: host.text().to_string(),
+            senden_port: senden_port.value(),
+            senden_stream: senden_stream.text().to_string(),
+            empfangen_an: empfangen_an.is_active(),
+            empfangen_port: empfangen_port.value(),
+            empfangen_stream: empfangen_stream.text().to_string(),
+        }
+    };
+    let formular = Rc::new(formular);
+
+    // Anzeige im Takt: Status, Tabellen, Unterzeile.
+    let anzeigen: Rc<dyn Fn()> = {
+        let an = an.clone();
+        let kopf = kopf.clone();
+        Rc::new(move || {
+            let s = crate::vban::stand(&an.send, &an.recv, an.sample_rate);
+            let mit_fehler = |t: String, f: &str| {
+                if f.is_empty() {
+                    t
+                } else {
+                    format!("{t} · {f}")
+                }
+            };
+            senden_status.set_text(&mit_fehler(
+                format!("{} Frames · {} Fehler", s.senden.zaehler, s.senden.fehler),
+                &s.senden.letzter_fehler,
+            ));
+            empfangen_status.set_text(&mit_fehler(
+                format!(
+                    "{} Pakete · {} verworfen",
+                    s.empfangen.zaehler, s.empfangen.fehler
+                ),
+                &s.empfangen.letzter_fehler,
+            ));
+            vban_tabelle(&incoming, &tabellen_kopf_in, &s.incoming);
+            vban_tabelle(&outgoing, &tabellen_kopf_out, &s.outgoing);
+            // Unterzeile im Kopf: zweites Label im ersten Block.
+            if let Some(unter) = kopf
+                .first_child()
+                .and_then(|b| b.last_child())
+                .and_then(|l| l.downcast::<gtk::Label>().ok())
+            {
+                unter.set_text(&crate::vban::unterzeile(&s));
+            }
+        })
+    };
+    anzeigen();
+
+    // Schalter wirken sofort (wie im Original), Felder mit UEBERNEHMEN/Enter.
+    let anwenden: Rc<dyn Fn()> = {
+        let an = an.clone();
+        let formular = Rc::clone(&formular);
+        let meldung = meldung.clone();
+        let anzeigen = Rc::clone(&anzeigen);
+        Rc::new(move || {
+            match formular().anwenden(&an.send, &an.recv) {
+                Ok(()) => {
+                    meldung.remove_css_class("fehler");
+                    meldung.set_text("uebernommen");
+                }
+                Err(e) => {
+                    meldung.add_css_class("fehler");
+                    meldung.set_text(&format!("nicht uebernommen: {e}"));
+                }
+            }
+            anzeigen();
+        })
+    };
+    for sw in [&senden_an, &empfangen_an] {
+        let anwenden = Rc::clone(&anwenden);
+        let fuellt = Rc::clone(&fuellt);
+        sw.connect_state_set(move |_, _| {
+            if fuellt.get() {
+                return gtk::glib::Propagation::Proceed;
+            }
+            // Erst nach dem Umschalten lesen: der Zustand kommt im naechsten
+            // Durchlauf der Hauptschleife.
+            let anwenden = Rc::clone(&anwenden);
+            gtk::glib::idle_add_local_once(move || anwenden());
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    for e in [&host, &senden_stream, &empfangen_stream] {
+        let anwenden = Rc::clone(&anwenden);
+        e.connect_activate(move |_| anwenden());
+    }
+    // Ein Port gilt, sobald er feststeht (Enter, Pfeile, Mausrad).
+    for sp in [&senden_port, &empfangen_port] {
+        let anwenden = Rc::clone(&anwenden);
+        let fuellt = Rc::clone(&fuellt);
+        sp.connect_value_changed(move |_| {
+            if !fuellt.get() {
+                anwenden();
+            }
+        });
+    }
+    {
+        let anwenden = Rc::clone(&anwenden);
+        uebernehmen.connect_clicked(move |_| anwenden());
+    }
+    {
+        let an = an.clone();
+        let fuellen = Rc::clone(&formular_fuellen);
+        let anzeigen = Rc::clone(&anzeigen);
+        let meldung = meldung.clone();
+        reset.connect_clicked(move |_| {
+            crosspoint::vban_io::setze_standard(&an.send, &an.recv);
+            fuellen();
+            anzeigen();
+            meldung.remove_css_class("fehler");
+            meldung.set_text("Standardwerte gesetzt (Datei bleibt, LOAD CONFIG holt sie zurueck)");
+        });
+    }
+    {
+        let an = an.clone();
+        let fuellen = Rc::clone(&formular_fuellen);
+        let anzeigen = Rc::clone(&anzeigen);
+        let meldung = meldung.clone();
+        laden.connect_clicked(move |_| {
+            match crosspoint::vban_io::lade_konfig(&an.send, &an.recv) {
+                Ok(()) => {
+                    meldung.remove_css_class("fehler");
+                    meldung.set_text(&format!(
+                        "geladen: {}",
+                        crosspoint::vban_io::konfig_pfad().display()
+                    ));
+                }
+                Err(e) => {
+                    meldung.add_css_class("fehler");
+                    meldung.set_text(&e);
+                }
+            }
+            fuellen();
+            anzeigen();
+        });
+    }
+    {
+        let an = an.clone();
+        let anwenden = Rc::clone(&anwenden);
+        let meldung = meldung.clone();
+        speichern.connect_clicked(move |_| {
+            // Erst das Formular uebernehmen, dann sichern - gespeichert wird,
+            // was zu sehen ist.
+            anwenden();
+            if meldung.has_css_class("fehler") {
+                return;
+            }
+            match crosspoint::vban_io::speichere_konfig(&an.send, &an.recv) {
+                Ok(()) => meldung.set_text(&format!(
+                    "gespeichert: {}",
+                    crosspoint::vban_io::konfig_pfad().display()
+                )),
+                Err(e) => {
+                    meldung.add_css_class("fehler");
+                    meldung.set_text(&e);
+                }
+            }
+        });
+    }
+
+    // Takt nur, solange das Fenster offen ist.
+    {
+        let schwach = fenster.downgrade();
+        let anzeigen = Rc::clone(&anzeigen);
+        gtk::glib::timeout_add_local(Duration::from_millis(500), move || {
+            match schwach.upgrade() {
+                Some(f) if f.is_visible() => {
+                    anzeigen();
+                    gtk::glib::ControlFlow::Continue
+                }
+                _ => gtk::glib::ControlFlow::Break,
+            }
+        });
+    }
 
     fenster.set_child(Some(&aussen));
     fenster.present();
@@ -329,7 +481,7 @@ pub fn vban_fenster(parent: &impl IsA<gtk::Window>, quelle: &dyn VbanQuelle) -> 
 
 /// MIDI-Fenster in der Optik des Originals: Geraetewahl, Map-Name, drei
 /// Kartenbefehle, Rueckmeldung - und zwei Spalten mit Ziel/CC/Learn je Seite.
-pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::Window {
+pub fn midi_fenster(parent: &impl IsA<gtk::Window>) -> gtk::Window {
     let fenster = gtk::Window::builder()
         .title("Crosspoint — MIDI-Mapping")
         .transient_for(parent)
@@ -344,7 +496,6 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
     )));
     karte.borrow_mut().alle();
     let seite = Rc::new(std::cell::Cell::new(0usize));
-    let meldung = Rc::new(std::cell::Cell::new(String::new()));
 
     let aussen = gtk::Box::new(gtk::Orientation::Vertical, 0);
     aussen.append(&fenster_kopf(
@@ -369,8 +520,19 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
 
     let eingang_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
     eingang_box.append(&feld("MIDI INPUT DEVICE"));
-    let mut geraeteliste: Vec<&str> = vec!["kein Geraet"];
-    geraeteliste.extend(geraete.iter().map(|s| s.as_str()));
+    // MIDI-Anschluesse (ALSA-Sequencer), nicht die Audio-Eingaenge. Was in
+    // der Karte steht, aber gerade nicht steckt, bleibt waehlbar.
+    let mut geraete: Vec<String> = vec![crate::midimonster::KEIN_GERAET.to_string()];
+    geraete.extend(crate::midimonster::midi_geraete());
+    for n in [
+        karte.borrow().eingang.clone(),
+        karte.borrow().ausgang.clone(),
+    ] {
+        if !geraete.contains(&n) {
+            geraete.push(n);
+        }
+    }
+    let geraeteliste: Vec<&str> = geraete.iter().map(|s| s.as_str()).collect();
     let eingang = gtk::DropDown::from_strings(&geraeteliste);
     {
         let k = Rc::clone(&karte);
@@ -380,7 +542,7 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
             karte.eingang = namen
                 .get(d.selected() as usize)
                 .cloned()
-                .unwrap_or_else(|| "kein Geraet".into());
+                .unwrap_or_else(|| crate::midimonster::KEIN_GERAET.into());
         });
     }
     eingang_box.append(&eingang);
@@ -425,15 +587,11 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
             k.borrow_mut().ausgang = namen
                 .get(d.selected() as usize)
                 .cloned()
-                .unwrap_or_else(|| "kein Geraet".into());
+                .unwrap_or_else(|| crate::midimonster::KEIN_GERAET.into());
         });
     }
     ausgang_box.append(&ausgang);
     kopf.append(&ausgang_box);
-    let feedback_learn = gtk::Button::with_label("LEARN");
-    feedback_learn.add_css_class("tbtn");
-    feedback_learn.set_valign(gtk::Align::End);
-    kopf.append(&feedback_learn);
     aussen.append(&kopf);
 
     // ----- Zwei Spalten mit Zeilen -----
@@ -483,7 +641,6 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
         let seite = Rc::clone(&seite);
         let seitenzeige = seitenzeige.clone();
         let status = status.clone();
-        let meldung = Rc::clone(&meldung);
         Rc::new(move || {
             while let Some(k) = links.first_child() {
                 links.remove(&k);
@@ -495,7 +652,7 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
             seitenzeige.set_text(&format!("Page {}/{}", s + 1, crate::midimonster::SEITEN));
             let karte_ref = karte.borrow();
             let zeilen = karte_ref.seite(s);
-            let pro_spalte = (zeilen.len() + 1) / 2;
+            let pro_spalte = zeilen.len().div_ceil(2);
             for (i, z) in zeilen.iter().enumerate() {
                 let zeile = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                 zeile.add_css_class("midi-zeile");
@@ -520,8 +677,6 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
                     let ziel = z.ziel.clone();
                     let titel = z.titel.clone();
                     let cc_label = cc.clone();
-                    let _ = Rc::clone(&meldung);
-                    let seite = Rc::clone(&seite);
                     let wartet = Rc::new(Cell::new(false));
                     lernen.connect_clicked(move |b| {
                         // Laeuft fuer diese Zeile schon ein Lernvorgang? Abbrechen.
@@ -548,13 +703,15 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
                         // Sonst: auf die naechste CC-Meldung warten. Die kommt
                         // als OSC /midi/cc <kanal> <cc> <wert> aus dem Kern
                         // (MIDIMonster-Rueckweg) und liegt im CC-Kanal.
+                        // Was vor dem Klick kam, gilt nicht: sonst bindet
+                        // ein laengst bewegter Fader sofort.
+                        let _ = crosspoint::osc::cc_kanal().abholen();
                         wartet.set(true);
                         b.add_css_class("an");
                         b.set_label("WARTET …");
                         status.set_text(&format!(
                             "{titel}: warte auf MIDI-CC (OSC /midi/cc <kanal> <cc> <wert>) …"
                         ));
-                        let _ = seite;
                         let wartet2 = Rc::clone(&wartet);
                         let karte2 = Rc::clone(&karte);
                         let b2 = b.clone();
@@ -592,7 +749,6 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
                     rechts.append(&zeile);
                 }
             }
-            let _ = &meldung;
         })
     };
 
@@ -657,13 +813,11 @@ pub fn midi_fenster(parent: &impl IsA<gtk::Window>, geraete: &[String]) -> gtk::
             zeichnen();
         });
     }
-    feedback_learn.connect_clicked(move |_| {});
-    // Geraetewahl vorbelegen
-    if let Some(i) = geraeteliste
-        .iter()
-        .position(|n| *n == karte.borrow().eingang)
-    {
+    // Geraetewahl vorbelegen (Ein- und Ausgang getrennt).
+    if let Some(i) = geraete.iter().position(|n| *n == karte.borrow().eingang) {
         eingang.set_selected(i as u32);
+    }
+    if let Some(i) = geraete.iter().position(|n| *n == karte.borrow().ausgang) {
         ausgang.set_selected(i as u32);
     }
 
@@ -682,7 +836,7 @@ pub fn eq_fenster(
     strip: usize,
 ) -> gtk::Window {
     let fenster = gtk::Window::builder()
-        .title(&format!("Crosspoint — EQ Streifen {}", strip + 1))
+        .title(format!("Crosspoint — EQ Streifen {}", strip + 1))
         .transient_for(parent)
         .modal(false)
         .default_width(520)
@@ -779,7 +933,6 @@ pub fn eq_fenster(
             {
                 let p = params.clone();
                 let anzeige = anzeige.clone();
-                let feld = feld;
                 skala.connect_value_changed(move |s| {
                     let v = s.value() as f32;
                     let name = match feld {

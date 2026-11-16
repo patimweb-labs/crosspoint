@@ -486,10 +486,61 @@ pub fn spawn_autosave(params: Arc<Params>, pfad: PathBuf) {
         return;
     }
     println!("Autosave: {}", pfad.display());
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(AUTOSAVE_TAKT_MS));
-        autosave_schritt(&params, &pfad, Duration::from_millis(AUTOSAVE_RUHE_MS));
+    thread::spawn(move || {
+        let mut gesehen = Beobachter::neu(&params);
+        loop {
+            thread::sleep(Duration::from_millis(AUTOSAVE_TAKT_MS));
+            gesehen.pruefe(&params);
+            autosave_schritt(&params, &pfad, Duration::from_millis(AUTOSAVE_RUHE_MS));
+        }
     });
+}
+
+/// Erkennt Aenderungen am Parameterbild, egal wer sie macht.
+///
+/// Die Oberflaeche schreibt direkt in `Params` (kein HTTP), Makros und
+/// Wiederherstellung ebenso. Statt jeden dieser Wege an `markiere_schmutzig`
+/// zu binden, vergleicht der Autosave-Thread das Bild selbst - ein JSON von
+/// gut 10 kB im Takt des Autosave, ausserhalb des Audio-Threads.
+pub struct Beobachter {
+    zuletzt: String,
+}
+
+impl Beobachter {
+    /// Merkt sich den aktuellen Stand als „gesichert".
+    pub fn neu(params: &Params) -> Beobachter {
+        Beobachter {
+            zuletzt: params.to_json().to_json(),
+        }
+    }
+
+    /// Hat sich das Bild seit dem letzten Aufruf geaendert, wird der
+    /// Autosave markiert. Liefert, ob markiert wurde.
+    pub fn pruefe(&mut self, params: &Params) -> bool {
+        let jetzt = params.to_json().to_json();
+        if jetzt == self.zuletzt {
+            return false;
+        }
+        self.zuletzt = jetzt;
+        markiere_schmutzig();
+        true
+    }
+}
+
+/// Beim Beenden: steht noch eine Aenderung aus (Ruhezeit nicht abgelaufen),
+/// wird sie sofort geschrieben - sonst ginge der letzte Faderzug verloren.
+pub fn sichern_beim_ende(params: &Arc<Params>, pfad: &Path) {
+    if deaktiviert() {
+        return;
+    }
+    // Was seit dem letzten Takt passiert ist, hat der Thread noch nicht gesehen.
+    let gespeichert = std::fs::read_to_string(pfad).unwrap_or_default();
+    let jetzt = params.to_json().to_json();
+    if ist_schmutzig() || gespeichert != jetzt {
+        if let Err(e) = preset_speichern(params, pfad) {
+            eprintln!("Sichern beim Beenden: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -711,6 +762,56 @@ mod tests {
                 .unwrap(),
             &Value::Bool(true)
         );
+        let _ = std::fs::remove_file(&pfad);
+    }
+
+    #[test]
+    fn beobachter_sieht_direkte_aenderungen() {
+        // Die Oberflaeche ruft `markiere_schmutzig` nicht auf; der Beobachter
+        // muss die Aenderung trotzdem bemerken.
+        let params = Arc::new(Params::new(48_000.0, 512));
+        let mut b = Beobachter::neu(&params);
+        assert!(!b.pruefe(&params), "ohne Aenderung nichts markieren");
+        params.set("strip", 3, "comp_ratio", 4.0);
+        assert!(b.pruefe(&params), "direkte Aenderung muss markiert werden");
+        assert!(!b.pruefe(&params), "dieselbe Aenderung nur einmal");
+        params.set_text("bus", 1, "label", "Kopfhoerer");
+        assert!(b.pruefe(&params), "Namen zaehlen auch");
+    }
+
+    #[test]
+    fn sichern_beim_ende_schreibt_offene_aenderung() {
+        let pfad = tmp("ende", "json");
+        let _ = std::fs::remove_file(&pfad);
+        let params = Arc::new(Params::new(48_000.0, 512));
+        params.set("strip", 0, "gain", -7.5);
+        sichern_beim_ende(&params, &pfad);
+        let text = std::fs::read_to_string(&pfad).expect("geschrieben");
+        assert!(text.contains("-7.5"), "{text}");
+        let _ = std::fs::remove_file(&pfad);
+    }
+
+    #[test]
+    fn preset_rundlauf_mit_namen_eq_und_comp() {
+        let pfad = tmp("voll", "json");
+        let params = Arc::new(Params::new(48_000.0, 512));
+        params.set_text("strip", 1, "label", "Gesang");
+        params.set_text("bus", 5, "label", "Stream");
+        params.set("strip", 1, "eq2_gain", 4.5);
+        params.set("strip", 1, "eq2_freq", 2500.0);
+        params.set("strip", 1, "eq2_on", 1.0);
+        params.set("strip", 1, "comp_threshold", -24.0);
+        params.set("strip", 1, "comp_ratio", 4.0);
+        params.set("strip", 1, "comp_gain_out", 3.0);
+        params.set("bus", 0, "trim", -2.0);
+        params.set("bus", 0, "delay", 40.0);
+        preset_speichern(&params, &pfad).unwrap();
+
+        let frisch = Arc::new(Params::new(48_000.0, 512));
+        assert!(preset_laden(&frisch, &pfad));
+        assert_eq!(frisch.to_json().to_json(), params.to_json().to_json());
+        assert_eq!(frisch.label("strip", 1).as_deref(), Some("Gesang"));
+        assert_eq!(frisch.label("bus", 5).as_deref(), Some("Stream"));
         let _ = std::fs::remove_file(&pfad);
     }
 

@@ -92,11 +92,7 @@ impl AudioFrame {
     pub fn sample_frames(&self) -> usize {
         let bps = self.header.format.bytes_per_sample().unwrap_or(1).max(1);
         let block = bps * self.header.channels as usize;
-        if block == 0 {
-            0
-        } else {
-            self.data.len() / block
-        }
+        self.data.len().checked_div(block).unwrap_or(0)
     }
 
     /// Gesamtzahl der Einzelwerte (Sample-Frames * Kanaele).
@@ -112,7 +108,7 @@ impl AudioFrame {
     /// Prueft, dass `len` Samples ganzzahlig auf die Kanaele verteilbar sind.
     fn check_channel_multiple(&self, len: usize) -> Result<(), VbanError> {
         let ch = self.header.channels;
-        if ch == 0 || len % ch as usize != 0 {
+        if ch == 0 || !len.is_multiple_of(ch as usize) {
             return Err(VbanError::OddSampleCount {
                 samples: len,
                 channels: ch,
@@ -163,7 +159,9 @@ impl AudioFrame {
         }
         Ok(self
             .data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect())
     }
@@ -178,7 +176,9 @@ impl AudioFrame {
         }
         Ok(self
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect())
     }

@@ -511,7 +511,7 @@ button.knopf.solo:checked {{ background-color: {schrift}; color: {grund}; border
 button.knopf.mono:checked {{ background-color: {akzent_d}; color: {schrift}; border-color: {akzent_d}; }}
 button.knopf.lim:checked {{ background-color: {akzent_d}; color: {schrift}; border-color: {akzent_d}; }}
 /* Lowcut, TK, NR und Gate: aktiver Zustand im Signalgruen (Akzent). */
-button.knopf.lc:checked, button.knopf.tk:checked, button.knopf.nr:checked, button.knopf.gate:checked {{
+button.knopf.lc:checked, button.knopf.tk:checked, button.knopf.nr:checked, button.knopf.gate:checked, button.knopf.comp:checked {{
     background-color: {akzent};
     color: {auf_akzent};
     border-color: {akzent};
@@ -720,6 +720,25 @@ popover listview > row:hover {{ background-color: {hell}; }}
 switch {{ background-color: {grund}; background-image: none; border: 1px solid {linie}; }}
 switch:checked {{ background-color: {akzent}; border-color: {akzent}; }}
 switch > slider {{ background-color: {schrift}; background-image: none; }}
+entry, spinbutton {{
+    background-color: {grund};
+    background-image: none;
+    color: {schrift};
+    border: 1px solid {linie};
+    border-radius: {r}px;
+    box-shadow: none;
+    caret-color: {akzent};
+}}
+entry:focus-within, spinbutton:focus-within {{ border-color: {akzent}; }}
+entry > text > placeholder {{ color: {dim}; }}
+spinbutton > button {{
+    background-color: {panel};
+    background-image: none;
+    color: {dim};
+    border: none;
+    box-shadow: none;
+}}
+spinbutton > button:hover {{ color: {schrift}; }}
 scale trough {{ background-color: {grund}; background-image: none; border: 1px solid {linie}; min-height: 6px; }}
 scale highlight {{ background-color: {akzent}; background-image: none; }}
 scale slider {{ background-color: {schrift}; background-image: none; min-width: 8px; min-height: 8px; }}
@@ -758,12 +777,12 @@ mod tests {
     #[test]
     fn standard_theme_hat_die_palette() {
         let t = Tokens::default();
-        assert_eq!(t.grund, "#060A12");
-        assert_eq!(t.panel, "#0E1624");
-        assert_eq!(t.panel_hell, "#18344E");
+        assert_eq!(t.grund, "#090C10");
+        assert_eq!(t.panel, "#0E1319");
+        assert_eq!(t.panel_hell, "#131A22");
         assert_eq!(t.akzent, "#F2A63B");
-        assert_eq!(t.schrift, "#D6E2F0");
-        assert_eq!(t.gedaempft, "#7C93A8");
+        assert_eq!(t.schrift, "#E9E5DC");
+        assert_eq!(t.gedaempft, "#98A3AF");
         assert!(t.font_family.contains("Mono"));
     }
 
@@ -774,7 +793,7 @@ mod tests {
         assert!(text.contains(".zug"));
         let mono = eingebaute_themes().remove("mono").unwrap();
         let mono_css = css(&mono);
-        assert!(mono_css.contains("#EDEDED"));
+        assert!(mono_css.contains("#E8E6E1"));
         assert!(!mono_css.contains("#F2A63B"));
     }
 

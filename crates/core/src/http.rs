@@ -58,6 +58,9 @@ struct Zustand {
     restore: Arc<Mutex<Ergebnis>>,
 }
 
+// Die Handles kommen einzeln aus dem `Lauf`; ein Sammeltyp dafuer gaebe es
+// nur fuer diese eine Funktion.
+#[allow(clippy::too_many_arguments)]
 pub fn serve(
     listen: String,
     params: Arc<Params>,
@@ -201,7 +204,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", json.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/set") => {
-            let out = match json::parse(&body) {
+            let out = match json::parse(body) {
                 Err(e) => format!("{{\"error\":{}}}", json::quote(&e)),
                 Ok(v) => {
                     let target = v.get("target").and_then(|x| match x {
@@ -255,11 +258,11 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
         // Muss vor dem allgemeinen /api/vban-Zweig stehen (Praefix-Match).
         ("GET", p) if p.starts_with("/api/vban/config") => {
             let sr = f32::from_bits(params.sample_rate.load(Ordering::Relaxed)) as u32;
-            let body = crate::vban_io::konfig_json(&vban, &vban_recv, sr);
+            let body = crate::vban_io::konfig_json(vban, vban_recv, sr);
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/vban/config") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             let action = v
                 .get("action")
                 .and_then(|x| match x {
@@ -272,17 +275,17 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
                 // Datei bleibt, damit "Load Config" sie danach zurueckholen
                 // kann. Save/Load arbeiten auf der Datei.
                 "reset" => {
-                    crate::vban_io::setze_standard(&vban, &vban_recv);
+                    crate::vban_io::setze_standard(vban, vban_recv);
                     Ok(())
                 }
-                "save" => crate::vban_io::speichere_konfig(&vban, &vban_recv),
-                "load" => crate::vban_io::lade_konfig(&vban, &vban_recv),
-                _ => crate::vban_io::wende_konfig_an(&vban, &vban_recv, &v),
+                "save" => crate::vban_io::speichere_konfig(vban, vban_recv),
+                "load" => crate::vban_io::lade_konfig(vban, vban_recv),
+                _ => crate::vban_io::wende_konfig_an(vban, vban_recv, &v),
             };
             let sr = f32::from_bits(params.sample_rate.load(Ordering::Relaxed)) as u32;
             match ergebnis {
                 Ok(()) => {
-                    let body = crate::vban_io::konfig_json(&vban, &vban_recv, sr);
+                    let body = crate::vban_io::konfig_json(vban, vban_recv, sr);
                     reply("200 OK", "application/json", body.as_bytes())
                 }
                 Err(e) => {
@@ -296,7 +299,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/vban/recv") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             let mut fehler: Option<String> = None;
             // Reihenfolge: erst Konfiguration, dann schalten – so startet ein
             // {enabled:true, port:6981} direkt auf dem neuen Port.
@@ -331,7 +334,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/vban") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             let s = |k: &str| {
                 v.get(k).and_then(|x| match x {
                     Value::Str(t) => Some(t.clone()),
@@ -363,7 +366,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/macros") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             let action = v
                 .get("action")
                 .and_then(|x| match x {
@@ -415,7 +418,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/inputs") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             let strip = v.get("strip").and_then(|x| x.as_f64()).unwrap_or(0.0) as usize;
             let quelle = v.get("source").and_then(|x| match x {
                 Value::Str(s) if !s.is_empty() => Some(s.clone()),
@@ -437,7 +440,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/devices") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             let bus = v
                 .get("bus")
                 .and_then(|x| match x {
@@ -480,7 +483,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/restore") => {
-            let v = json::parse(&body).unwrap_or(Value::Null);
+            let v = json::parse(body).unwrap_or(Value::Null);
             // Ohne Angabe wird alles wiederhergestellt; ein Feld auf false
             // laesst genau diesen Teil aus.
             let an = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(true);
@@ -507,7 +510,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/autostart") => {
-            let wunsch = json::parse(&body)
+            let wunsch = json::parse(body)
                 .ok()
                 .and_then(|v| v.get("enabled").and_then(|x| x.as_bool()));
             let out = match wunsch {
@@ -531,7 +534,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", body.as_bytes())
         }
         ("POST", p) if p.starts_with("/api/tape") => {
-            let action = json::parse(&body)
+            let action = json::parse(body)
                 .ok()
                 .and_then(|v| {
                     v.get("action").and_then(|a| match a {
@@ -560,7 +563,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             Err(e) => reply("404 Not Found", "text/plain", e.to_string().as_bytes()),
         },
         ("POST", p) if p.starts_with("/api/preset") => {
-            let action = json::parse(&body)
+            let action = json::parse(body)
                 .ok()
                 .and_then(|v| {
                     v.get("action").and_then(|a| match a {
@@ -630,9 +633,31 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
                 "gate_tiefe",
                 "gate_attack",
                 "gate_release",
+                "comp_threshold",
+                "comp_ratio",
+                "comp_attack",
+                "comp_release",
+                "comp_knee",
+                "comp_gain_in",
+                "comp_gain_out",
             ] {
                 if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
                     params.set("strip", i, key, x as f32);
+                }
+            }
+            if let Some(Value::Str(name)) = s.get("label") {
+                params.set_text("strip", i, "label", name);
+            }
+            if let Some(cells) = s.get("eq_cells").and_then(|x| x.as_arr()) {
+                for (c, cell) in cells.iter().enumerate() {
+                    if let Some(an) = cell.get("on").and_then(|x| x.as_bool()) {
+                        params.set("strip", i, &format!("eq{c}_on"), if an { 1.0 } else { 0.0 });
+                    }
+                    for feld in ["type", "freq", "q", "gain"] {
+                        if let Some(x) = cell.get(feld).and_then(|x| x.as_f64()) {
+                            params.set("strip", i, &format!("eq{c}_{feld}"), x as f32);
+                        }
+                    }
                 }
             }
             if let Some(sends) = s.get("sends").and_then(|x| x.as_arr()) {
@@ -659,6 +684,9 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
                 if let Some(x) = b.get(key).and_then(|x| x.as_bool()) {
                     params.set("bus", i, key, if x { 1.0 } else { 0.0 });
                 }
+            }
+            if let Some(Value::Str(name)) = b.get("label") {
+                params.set_text("bus", i, "label", name);
             }
         }
     }
@@ -801,6 +829,12 @@ impl WsHub {
                 return None;
             }
         }
+    }
+}
+
+impl Default for WsHub {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1199,22 +1233,28 @@ mod tests {
         hub.register(); // zaehlt fuer `publish` als Client
         hub.publish(Arc::from("{\"strips\":[],\"buses\":[],\"f\":1}"));
 
-        // Frame lesen (FIN+Text = 0x81, Laenge, Rumpf) - vom Server unmaskiert.
-        let mut kopf2 = [0u8; 2];
-        s.read_exact(&mut kopf2).expect("frame-kopf");
-        assert_eq!(kopf2[0], 0x81, "Text-Frame mit FIN erwartet");
-        let mut laenge = (kopf2[1] & 0x7F) as usize;
-        assert_eq!(kopf2[1] & 0x80, 0, "Server darf nicht maskieren");
-        if laenge == 126 {
-            let mut ext = [0u8; 2];
-            s.read_exact(&mut ext).expect("laenge");
-            laenge = u16::from_be_bytes(ext) as usize;
+        // Frames lesen (FIN+Text = 0x81, Laenge, Rumpf) - vom Server
+        // unmaskiert. Der Server schickt beim Verbinden sofort den aktuellen
+        // Stand; je nach Reihenfolge kommt also erst `f:0`, dann `f:1`.
+        let mut lies_frame = || -> String {
+            let mut kopf2 = [0u8; 2];
+            s.read_exact(&mut kopf2).expect("frame-kopf");
+            assert_eq!(kopf2[0], 0x81, "Text-Frame mit FIN erwartet");
+            let mut laenge = (kopf2[1] & 0x7F) as usize;
+            assert_eq!(kopf2[1] & 0x80, 0, "Server darf nicht maskieren");
+            if laenge == 126 {
+                let mut ext = [0u8; 2];
+                s.read_exact(&mut ext).expect("laenge");
+                laenge = u16::from_be_bytes(ext) as usize;
+            }
+            let mut rumpf = vec![0u8; laenge];
+            s.read_exact(&mut rumpf).expect("rumpf");
+            String::from_utf8_lossy(&rumpf).to_string()
+        };
+        let mut rumpf = lies_frame();
+        if rumpf == "{\"strips\":[],\"buses\":[],\"f\":0}" {
+            rumpf = lies_frame();
         }
-        let mut rumpf = vec![0u8; laenge];
-        s.read_exact(&mut rumpf).expect("rumpf");
-        assert_eq!(
-            String::from_utf8_lossy(&rumpf),
-            "{\"strips\":[],\"buses\":[],\"f\":1}"
-        );
+        assert_eq!(rumpf, "{\"strips\":[],\"buses\":[],\"f\":1}");
     }
 }
