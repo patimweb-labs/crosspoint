@@ -1116,15 +1116,19 @@ async fn schleife(
             start,
         )
         .await;
+        // Grund zuerst, dann „erster Versuch durch" melden: `PwClient::neu`
+        // wartet auf dieses Signal und liest unmittelbar danach `grund`. In
+        // umgekehrter Reihenfolge sah der Aufrufer je nach Zeitplan `None`
+        // und die Diagnose fehlte (in der CI sporadisch).
+        if let Some(meldung) = &ende {
+            grund_setzen(&grund, Some(meldung.clone()));
+        }
         // Erster Verbindungsversuch ist durch – auch wenn er scheiterte.
         if let Some(start) = start.take() {
             let _ = start.send(());
         }
         if stopp.load(Ordering::SeqCst) {
             break;
-        }
-        if let Some(meldung) = ende {
-            grund_setzen(&grund, Some(meldung));
         }
         // Ohne Verbindung: Aufträge sofort abweisen, statt sie hängen zu lassen.
         warte(&befehle, &stopp, NEUVERSUCH).await;
