@@ -1869,8 +1869,7 @@ pub fn zug(
                 p.set("strip", index, "lowcut", wert);
             });
         }
-        let menue = lowcut_menue(&p, index, hz);
-        stufenmenue(b, &menue);
+        stufenmenue(b, move || lowcut_menue(&p, index, hz.clone()));
     }
     if let Some(b) = &nr {
         let p = params.clone();
@@ -1884,8 +1883,7 @@ pub fn zug(
                 p.set("strip", index, "nr", wert);
             });
         }
-        let menue = nr_menue(&p, index, staerke);
-        stufenmenue(b, &menue);
+        stufenmenue(b, move || nr_menue(&p, index, staerke.clone()));
     }
     if let Some(b) = &gate_knopf {
         let p = params.clone();
@@ -1900,8 +1898,7 @@ pub fn zug(
                 );
             });
         }
-        let menue = gate_menue(&p, index);
-        stufenmenue(b, &menue);
+        stufenmenue(b, move || gate_menue(&p, index));
     }
     if let Some(b) = &comp_knopf {
         let p = params.clone();
@@ -1917,8 +1914,7 @@ pub fn zug(
                 p.set("strip", index, "comp", if an { 1.0 } else { 0.0 });
             });
         }
-        let menue = comp_menue(&p, index);
-        stufenmenue(b, &menue);
+        stufenmenue(b, move || comp_menue(&p, index));
     }
     if let Some(b) = &tk {
         let p = params.clone();
@@ -1933,8 +1929,7 @@ pub fn zug(
                 );
             });
         }
-        let menue = tk_menue(&p, index);
-        stufenmenue(b, &menue);
+        stufenmenue(b, move || tk_menue(&p, index));
     }
 
     // Reihe 0: M | EQ (bzw. ohne EQ: M | S), Reihe 1: S | MONO,
@@ -2298,15 +2293,19 @@ fn comp_hinweis(p: &Arc<Params>, i: usize) -> String {
 }
 
 /// Haengt ein Popover an einen Knopf; Rechtsklick oeffnet es.
-fn stufenmenue(knopf: &gtk::ToggleButton, inhalt: &gtk::Box) {
+///
+/// Der Inhalt entsteht bei jedem Oeffnen neu aus dem Modell: Werte, die
+/// inzwischen ein Preset, die Web-Oberflaeche oder OSC gesetzt hat, stehen
+/// dann richtig im Menue statt der Stand vom Programmstart.
+fn stufenmenue(knopf: &gtk::ToggleButton, bauen: impl Fn() -> gtk::Box + 'static) {
     let pop = gtk::Popover::new();
     pop.set_parent(knopf);
-    pop.set_child(Some(inhalt));
     pop.add_css_class("stufenmenue");
     let g = gtk::GestureClick::new();
     g.set_button(3);
     let pop2 = pop.clone();
     g.connect_pressed(move |_, _, x, y| {
+        pop2.set_child(Some(&bauen()));
         pop2.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
         pop2.popup();
     });
@@ -2571,6 +2570,28 @@ fn gate_menue(p: &Arc<Params>, index: usize) -> gtk::Box {
         });
     }
     kasten.append(&k3);
+
+    // Regelzeiten: wie schnell das Gate auf- und wieder zugeht.
+    for (titel, param, von, bis, schritt, wert) in [
+        ("Attack", "gate_attack", 0.5, 100.0, 0.5, f32_von(&g.attack)),
+        (
+            "Release",
+            "gate_release",
+            10.0,
+            2000.0,
+            10.0,
+            f32_von(&g.release),
+        ),
+    ] {
+        let (k, sk, w) = schieber(titel, von, bis, schritt, wert as f64, " ms");
+        let p = p.clone();
+        let w = w.clone();
+        sk.connect_value_changed(move |s| {
+            w.set_text(&format!("{:.0} ms", s.value()));
+            p.set("strip", index, param, s.value() as f32);
+        });
+        kasten.append(&k);
+    }
     kasten
 }
 
