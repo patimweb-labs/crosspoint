@@ -1831,6 +1831,62 @@ mod tk_tests {
             aus - ein
         );
     }
+
+    fn tk_an() -> TransientenUnterdruecker {
+        let mut tk = TransientenUnterdruecker::new(48000.0);
+        tk.setup(true, 48000.0);
+        tk
+    }
+
+    #[test]
+    fn tk_gibt_ueber_die_freigabezeit_frei() {
+        // Klick aus der Stille, danach ein leiser Dauerton: die Absenkung
+        // darf nicht in einem Sample verschwinden (frueher: Knack), sondern
+        // laeuft nach 30 ms Halten ueber ~80 ms zurueck.
+        let mut tk = tk_an();
+        let mut aus = Vec::new();
+        for i in 0..48000 / 2 {
+            let ton = 0.02 * (2.0 * PI * 500.0 * i as f32 / 48000.0).sin();
+            let klick = if (4800..4848).contains(&i) { 0.5 } else { 0.0 };
+            aus.push(tk.process(ton + klick, 6.0, 15.0));
+        }
+        let g = |ms: f32| {
+            // Verstaerkung aus dem Pegel des Tons um `ms` nach dem Klick
+            // (5 ms Lookahead eingerechnet), relativ zum Ende.
+            let mitte = 4800 + 240 + (ms * 48.0) as usize;
+            let rms = |a: usize| (aus[a..a + 96].iter().map(|x| x * x).sum::<f32>() / 96.0).sqrt();
+            rms(mitte) / rms(aus.len() - 200)
+        };
+        let nach_halten = g(40.0);
+        let mitten = g(80.0);
+        let spaet = g(300.0);
+        assert!(nach_halten < 0.5, "nach 40 ms schon {nach_halten}");
+        assert!(mitten > nach_halten && mitten < 0.9, "nach 80 ms {mitten}");
+        assert!(spaet > 0.97, "nach 300 ms erst {spaet}");
+    }
+
+    #[test]
+    fn tk_laesst_tiefe_stimme_und_wortanfang_stehen() {
+        // 80 Hz mit Obertoenen, aus der Stille in 10 ms auf -20 dBFS:
+        // kein Klackser, also keine Absenkung.
+        let mut tk = tk_an();
+        let n = 48000 / 2;
+        let mut ein = Vec::new();
+        let mut aus = Vec::new();
+        for i in 0..n {
+            let t = i as f32 / 48000.0;
+            let h = (i as f32 / 480.0).min(1.0);
+            let x = 0.06 * h * ((2.0 * PI * 80.0 * t).sin() + 0.4 * (2.0 * PI * 160.0 * t).sin());
+            ein.push(x);
+            aus.push(tk.process(x, 6.0, 15.0));
+        }
+        let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+        let versatz = 240;
+        let e = rms(&ein[0..n - versatz]);
+        let a = rms(&aus[versatz..n]);
+        let db = 20.0 * (a / e).log10();
+        assert!(db > -0.3, "tiefe Stimme verlor {db:.2} dB");
+    }
 }
 
 #[cfg(test)]
