@@ -32,6 +32,7 @@ pub mod shell;
 pub mod state;
 pub mod strip;
 pub mod theme;
+pub mod tray;
 pub mod vban;
 
 use std::path::PathBuf;

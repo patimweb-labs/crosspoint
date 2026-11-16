@@ -5,8 +5,8 @@
 #   1. Flatpak installiert   -> flatpak run de.weppelmann.Crosspoint
 #   2. sonst natives Fenster -> `crosspoint` (GTK4, Engine im selben Prozess;
 #      Fenster zu heisst Engine und virtuelle Geraete weg)
-#   --minimized: Engine im Hintergrund plus Tray-Icon (`crosspoint-fenster`),
-#      fuer den Autostart-Eintrag.
+#   --minimized: nur Tray-Icon (Autostart-Eintrag) - `crosspoint --minimized`;
+#      ist das native Fenster nicht gebaut, Engine plus `crosspoint-fenster`.
 #
 # Ein Browserfenster gibt es nicht mehr; die Seite auf http://127.0.0.1:8770/
 # bleibt fuer Fernbedienung und Web-Oberflaeche erreichbar.
@@ -58,6 +58,13 @@ beende_engine() {
   echo "Engine beendet, virtuelle Geraete entfernt" >&2
 }
 
+UI_BIN="$(binaer crosspoint "${CROSSPOINT_UI:-}")"
+
+if [ -n "$MINIMIERT" ] && [ -n "$UI_BIN" ] && ! alive; then
+  cd "$DIR" || exit 1
+  exec "$UI_BIN" --minimized
+fi
+
 if [ -n "$MINIMIERT" ]; then
   FENSTER_BIN="$(binaer crosspoint-fenster "${CROSSPOINT_FENSTER:-}")"
   ENGINE_BIN="$(binaer crosspoint-engine "${CROSSPOINT_ENGINE:-}")"
@@ -87,17 +94,12 @@ if [ -n "$MINIMIERT" ]; then
   exit "$STATUS"
 fi
 
-# Laeuft schon eine Engine (z. B. aus dem Autostart), wuerde ein zweites
-# natives Fenster mit eigener Engine um Port und Geraete streiten.
-if alive; then
-  echo "crosspoint-launch: Crosspoint laeuft bereits (Tray-Icon -> Fenster zeigen)" >&2
-  exit 0
-fi
-
-UI_BIN="$(binaer crosspoint "${CROSSPOINT_UI:-}")"
 if [ -z "$UI_BIN" ]; then
   echo "crosspoint-launch: natives Fenster nicht gebaut - bitte: cargo build --release --features ui" >&2
   exit 1
 fi
+# Laeuft `crosspoint` schon (z. B. minimiert aus dem Autostart), reicht
+# GApplication diesen Start an die laufende Instanz weiter: deren Fenster
+# erscheint, eine zweite Engine entsteht nicht.
 cd "$DIR" || exit 1
 exec "$UI_BIN"
