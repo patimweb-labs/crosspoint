@@ -624,7 +624,7 @@ fn set_strip(s: &StripParam, param: &str, v: f32) -> bool {
             true
         }
         "gate_attack" => {
-            fset(&s.gate.attack, v);
+            fset(&s.gate.attack, v.clamp(0.1, 500.0));
             true
         }
         "gate_hold" => {
@@ -632,7 +632,7 @@ fn set_strip(s: &StripParam, param: &str, v: f32) -> bool {
             true
         }
         "gate_release" => {
-            fset(&s.gate.release, v);
+            fset(&s.gate.release, v.clamp(1.0, 5000.0));
             true
         }
         _ => set_strip_ext(s, param, v),
@@ -876,6 +876,7 @@ impl EngineDsp {
                 self.rn_on[i][ch] = nr_st > 0.0 && rn_geht;
                 nr.enabled = nr_st > 0.0 && (modus == 0 || (modus == 2 && !rn_geht));
                 self.strip_dn[i][ch].enabled = s.dn_on.load(Relaxed) || (nr_st > 0.0 && modus == 1);
+                self.strip_dn[i][ch].set_sample_rate(sr);
             }
         }
         for i in 0..BUSES {
@@ -955,8 +956,14 @@ impl EngineDsp {
                     if tk.enabled {
                         x = tk.process(x, tk_schwelle, tk_tiefe);
                     }
-                    // (2) GATE: entscheidet am unveraenderten Pegel ueber Pausen.
-                    x = self.strip_gate[si][ch].process(x, fget(&sp.gate.threshold));
+                    s[ch] = x;
+                }
+                // (2) GATE: entscheidet am unveraenderten Pegel ueber Pausen,
+                //     fuer beide Kanaele gemeinsam (gekoppelter Detektor).
+                let gate_key = s[0].abs().max(s[1].abs());
+                let gate_schwelle = fget(&sp.gate.threshold);
+                for ch in 0..2 {
+                    let mut x = self.strip_gate[si][ch].process_key(s[ch], gate_key, gate_schwelle);
                     // (3) NR: Rauschen unter dem Signal.
                     if self.rn_on[si][ch] {
                         if let Some(k) = self.strip_rn[si][ch].as_mut() {
@@ -1425,6 +1432,26 @@ mod tests {
         // Zusatzkanäle (Center/LFE/Rear) gibt es im Stereo-Bus nicht.
         check(mix_block(8.0, 0.0, 0.5, 0.5), (0.5, 0.5), "Upmix61");
         check(mix_block(8.0, 0.0, 1.0, 0.0), (0.5, 0.5), "Upmix61 nur L");
+    }
+
+    #[test]
+    fn gate_regelt_links_und_rechts_gemeinsam() {
+        // Links laut, rechts leise (unter der Schwelle): mit gekoppeltem
+        // Detektor bleibt das Gate fuer beide offen - der leise Kanal faellt
+        // nicht um 60 dB weg, nur weil er allein leise ist.
+        let p = params();
+        assert!(p.set("strip", 0, "gate", 1.0));
+        assert!(p.set("strip", 0, "gate_schwelle", -45.0));
+        let mut dsp = dsp_neu();
+        let mut buf = Buf::new(0.0, 64);
+        buf.set_strip_ch(0, 0, 0.5);
+        buf.set_strip_ch(0, 1, 0.001);
+        for _ in 0..40 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        let r = buf.out(0, 1);
+        assert!((r - 0.001).abs() < 1e-4, "rechts war {r}, soll 0.001");
     }
 
     #[test]

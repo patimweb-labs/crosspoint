@@ -253,6 +253,10 @@ pub struct Gate {
     /// Signal schnell folgen, sonst bleibt das Gate nach einer Pause noch
     /// Sekunden offen. Die hoerbare Regelzeit ist `rel` (Parameter).
     env_rel: f32,
+    /// Anstieg des **Detektors** (fest 0,5 ms). Frueher lief er mit der
+    /// Attack-Zeit: bei 100 ms Attack merkte das Gate erst nach rund 100 ms,
+    /// dass gesprochen wird, und oeffnete dann noch einmal 100 ms lang.
+    env_att: f32,
     /// Linearer Boden bei geschlossenem Gate (aus `tiefe_db`).
     boden: f32,
 }
@@ -268,6 +272,7 @@ impl Default for Gate {
             rel: 0.0,
             hold_s: 0.0,
             env_rel: 0.0,
+            env_att: 0.0,
             boden: db_to_lin(-60.0),
         }
     }
@@ -279,6 +284,7 @@ impl Gate {
         self.rel = (-1.0 / (clamp(release_ms, 1.0, 5000.0) * 0.001 * sr)).exp();
         self.hold_s = clamp(hold_ms, 0.0, 2000.0) * 0.001 * sr;
         self.env_rel = (-1.0 / (0.020 * sr)).exp();
+        self.env_att = (-1.0 / (0.0005 * sr)).exp();
     }
 
     /// Tiefe in dB (0..80): Daempfung, wenn das Gate zu ist.
@@ -287,16 +293,24 @@ impl Gate {
     }
 
     pub fn process(&mut self, x: f32, threshold_db: f32) -> f32 {
+        self.process_key(x, x.abs(), threshold_db)
+    }
+
+    /// Wie [`Gate::process`], aber der Detektor sieht `key` statt `|x|`.
+    /// Fuer Stereo bekommen beide Kanaele denselben Schluessel
+    /// (`max(|L|, |R|)`): beide Gates laufen dann im Gleichschritt, und das
+    /// Stereobild wandert nicht, wenn nur eine Seite leise wird.
+    pub fn process_key(&mut self, x: f32, key: f32, threshold_db: f32) -> f32 {
         if !self.enabled {
             return x;
         }
-        let lvl = x.abs();
+        let lvl = key;
         // Einpolige Huellkurve: oeffnet mit Attack, schliesst mit Release.
         // (Frueher stand hier `0.999.max(att)` bei `1.0 - att`, wodurch die
         // Huellkurve den Pegel um Faktor 1/(1-0,999) zu hoch zeigte und die
         // Schwelle nie erreichte.)
         let coef = if lvl > self.env {
-            self.att
+            self.env_att
         } else {
             self.env_rel
         };
@@ -314,19 +328,41 @@ impl Gate {
 }
 
 /// Denoiser als weicher Downward-Expander (Original-Modul "Audibility" nicht rekonstruiert).
+///
+/// Die Huellkurve steigt in 1 ms und faellt in 100 ms. Frueher lief sie mit
+/// einem festen Faktor (0,9995, ~42 ms bei 48 kHz) in beide Richtungen: jeder
+/// Wortanfang nach einer Pause blieb dann rund 40 ms abgesenkt.
 #[derive(Clone, Copy, Default)]
 pub struct Denoiser {
     pub enabled: bool,
     env: f32,
+    att: f32,
+    rel: f32,
+    sr: f32,
 }
 
 impl Denoiser {
+    /// Regelzeiten aus der Abtastrate (einmal je Block, nicht je Sample).
+    pub fn set_sample_rate(&mut self, sr: f32) {
+        let sr = sr.max(8000.0);
+        if (sr - self.sr).abs() < 0.5 {
+            return;
+        }
+        self.sr = sr;
+        self.att = (-1.0 / (0.001 * sr)).exp();
+        self.rel = (-1.0 / (0.100 * sr)).exp();
+    }
+
     pub fn process(&mut self, x: f32, floor_db: f32, threshold_db: f32) -> f32 {
         if !self.enabled {
             return x;
         }
+        if self.sr == 0.0 {
+            self.set_sample_rate(48000.0);
+        }
         let lvl = x.abs();
-        self.env = 0.9995 * self.env + 0.0005 * lvl;
+        let c = if lvl > self.env { self.att } else { self.rel };
+        self.env = c * self.env + (1.0 - c) * lvl;
         let env_db = lin_to_db(self.env);
         if env_db >= threshold_db {
             x
@@ -412,6 +448,51 @@ impl DelayLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_oeffnet_trotz_langer_attack_sofort_zu_erkennen() {
+        // Attack 200 ms: das Gate soll *weich* oeffnen, aber sofort damit
+        // anfangen. Nach 20 ms ist die Verstaerkung deutlich ueber dem Boden.
+        let sr = 48000.0;
+        let mut g = Gate {
+            enabled: true,
+            ..Default::default()
+        };
+        g.set_times(200.0, 80.0, 200.0, sr);
+        g.set_tiefe(60.0);
+        for i in 0..(0.020 * sr) as usize {
+            let x = 0.1 * (2.0 * std::f32::consts::PI * 300.0 * i as f32 / sr).sin();
+            g.process(x, -45.0);
+        }
+        assert!(g.gain > 0.08, "nach 20 ms erst {}", g.gain);
+    }
+
+    #[test]
+    fn denoiser_laesst_den_wortanfang_durch() {
+        // Nach einer Pause: ein Ton weit ueber der Schwelle ist nach 3 ms
+        // praktisch unabgesenkt (frueher ~40 ms Einschwingen).
+        let sr = 48000.0;
+        let mut d = Denoiser {
+            enabled: true,
+            ..Default::default()
+        };
+        d.set_sample_rate(sr);
+        for _ in 0..4800 {
+            d.process(0.0001, -30.0, -50.0);
+        }
+        let mut letzte = 0.0f32;
+        let mut ein = 0.0f32;
+        for i in 0..(0.004 * sr) as usize {
+            let x = 0.1 * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).sin();
+            let y = d.process(x, -30.0, -50.0);
+            if i > (0.003 * sr) as usize && x.abs() > ein {
+                ein = x.abs();
+                letzte = y.abs();
+            }
+        }
+        let db = 20.0 * (letzte / ein).log10();
+        assert!(db > -1.0, "Wortanfang nach 3 ms noch {db:.2} dB abgesenkt");
+    }
 
     #[test]
     fn biquad_peak_boost_hebt_mitte() {
@@ -767,7 +848,7 @@ Der TK erkennt sie an zwei Huellkurven und einer Flanke:
 Das Verhaeltnis schnell/langsam gegen `tk_schwelle` (dB) ist der
 Detektor; der Detektorboden haelt ihn aus dem Grundrauschen heraus.
 Zusaetzlich muss eine **Flanke** da sein: der Spitzenwert des laufenden
-Milliseconds gegen den geglaetteten Bezug der letzten ~12 ms. Damit
+Milliseconds gegen den Spitzenwert der letzten ~12 ms. Damit
 gilt der Aufbau einer Silbe (rund 1 dB/ms, der Bezug zieht mit) nicht
 als Transient – ohne diese Sperre schluckte jeder Wortanfang 30 ms
 lang 15 dB.
@@ -793,7 +874,7 @@ pub const TK_LOOKAHEAD_MS: f32 = 5.0;
 pub const TK_MAX_SR: f32 = 192_000.0;
 /// Flankenfenster (Millisekunden), in dem der Spitzenwert steht.
 pub const TK_FLANKE_MS: f32 = 1.0;
-/// Mindestanstieg des Spitzenwerts ueber den geglaetteten Bezug (dB).
+/// Mindestanstieg des Spitzenwerts ueber den Bezug (dB).
 pub const TK_FLANKE_DB: f32 = 6.0;
 /// Detektorboden in dBFS: darunter gibt es nichts zu schuetzen (Grundrauschen
 /// des Mikrofons, digitale Stille). Der Boden ist **kein Gate** – er
@@ -801,8 +882,17 @@ pub const TK_FLANKE_DB: f32 = 6.0;
 /// ueberhaupt hinsieht; ohne ihn senkte das Rauschen im Stillen die
 /// Verstaerkung staendig um 15 dB.
 pub const TK_BODEN_DB: f32 = -45.0;
-/// Glaettung des Flankenbezugs je Flankenfenster (0,08 ~ 12 ms).
-const TK_BEZUG_K: f32 = 0.08;
+/// Flankenbezug: Spitzenwert der letzten so vielen Flankenfenster (~12 ms).
+/// Ein Spitzenwert statt eines Mittels: bei tiefen Stimmen (80 Hz, 12,5 ms
+/// Periode) schwankt der Millisekunden-Spitzenwert sonst um Faktor vier, und
+/// ein Silbenaufbau zieht den Bezug sofort mit, statt ihm 12 ms hinterherzulaufen.
+const TK_BEZUG_BLOECKE: usize = 12;
+/// Untergrenze des Flankenbezugs in dBFS. Ein Wortanfang aus der Stille
+/// steigt in seiner ersten Millisekunde um mehr als 6 dB ueber das Rauschen;
+/// erst gegen diesen Boden gemessen bleibt ein Aufbau ueber 5..10 ms unter
+/// der Flankenschwelle. Ein Klackser aus der Stille (gemessen -12,6 dBFS)
+/// liegt weit darueber.
+pub const TK_BEZUG_BODEN_DB: f32 = -33.0;
 
 /// Transienten-Unterdruecker je Kanal (siehe Modulkopf).
 pub struct TransientenUnterdruecker {
@@ -815,6 +905,11 @@ pub struct TransientenUnterdruecker {
     slow_alt: f32,
     /// Spitzenwert des laufenden Flankenfensters und der geglaettete Bezug.
     block_max: f32,
+    /// Spitzenwerte der letzten [`TK_BEZUG_BLOECKE`] Flankenfenster (Ring).
+    bezug: [f32; TK_BEZUG_BLOECKE],
+    bezug_pos: usize,
+    /// [`TK_BEZUG_BODEN_DB`] linear.
+    bezug_boden: f32,
     block_ref: f32,
     // Koeffizienten (einpolig, aus der Abtastrate)
     f_att: f32,
@@ -865,6 +960,9 @@ impl TransientenUnterdruecker {
             slow: 0.0,
             slow_alt: 0.0,
             block_max: 0.0,
+            bezug: [0.0; TK_BEZUG_BLOECKE],
+            bezug_pos: 0,
+            bezug_boden: db_to_lin(TK_BEZUG_BODEN_DB),
             block_ref: 0.0,
             f_att: 0.0,
             f_rel: 0.0,
@@ -937,7 +1035,9 @@ impl TransientenUnterdruecker {
         self.slow = 0.0;
         self.slow_alt = 0.0;
         self.block_max = 0.0;
-        self.block_ref = 0.0;
+        self.block_ref = self.bezug_boden;
+        self.bezug = [0.0; TK_BEZUG_BLOECKE];
+        self.bezug_pos = 0;
         self.cnt_rise = 0;
         self.cnt_flanke = 0;
         self.sperre = false;
@@ -1021,7 +1121,7 @@ impl TransientenUnterdruecker {
         let ueber = self.fast > self.slow * self.schwelle_lin && self.fast > self.boden_lin;
 
         // 3) Flanke: Spitzenwert des laufenden Milliseconds gegen den
-        //    geglaetteten Bezug der letzten ~12 ms. Ein Klackser reisst den
+        //    Spitzenwert der letzten ~12 ms. Ein Klackser reisst den
         //    Blockwert sofort hoch, ein Silbenaufbau zieht den Bezug mit, und
         //    Rauschen schwankt von Block zu Block nur um wenige dB.
         if lvl > self.block_max {
@@ -1030,7 +1130,12 @@ impl TransientenUnterdruecker {
         self.cnt_flanke += 1;
         if self.cnt_flanke >= self.n_flanke {
             self.cnt_flanke = 0;
-            self.block_ref += (self.block_max - self.block_ref) * TK_BEZUG_K;
+            self.bezug[self.bezug_pos] = self.block_max;
+            self.bezug_pos = (self.bezug_pos + 1) % TK_BEZUG_BLOECKE;
+            // Der Boden gilt auch fuer den Bezug: ein Wortanfang aus der
+            // Stille hebt sich sonst um Zehnerpotenzen vom Rauschen ab und
+            // saehe aus wie ein Klackser.
+            self.block_ref = self.bezug.iter().fold(self.bezug_boden, |m, &v| m.max(v));
             self.block_max = 0.0;
         }
         let flanke = self.block_max > self.block_ref * self.flanke_lin;
@@ -1060,7 +1165,10 @@ impl TransientenUnterdruecker {
         } else {
             self.g_rel
         };
-        self.gain += (ziel - self.gain) * c;
+        // `c` ist der Rueckhaltefaktor exp(-1/(t*sr)): der Schritt ist
+        // (1 - c). Frueher stand hier `* c` - damit sprang die Verstaerkung
+        // in einem Sample auf das Ziel (hoerbarer Knack statt 80 ms Freigabe).
+        self.gain += (ziel - self.gain) * (1.0 - c);
 
         // 6) Lookahead: das Signal laeuft 5 ms hinter dem Detektor her.
         let out = self.ring[self.pos] * self.gain;

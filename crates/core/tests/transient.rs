@@ -158,7 +158,12 @@ fn sinus_mit_knacksen(n: usize, mit_tk: bool) -> (f32, f32) {
     let mut ruhig: Vec<f32> = Vec::new();
     for (i, v) in h.iter().enumerate() {
         let t = (i * fl) as f32 / SR;
-        let nahe = knackse.iter().any(|&k| (t - k as f32 / SR).abs() < 0.030);
+        // Abseits heisst: nicht im Knacks, nicht in den 30 ms Halten und
+        // nicht in der Freigabe danach (80 ms Zeitkonstante, ~2 davon).
+        let nahe = knackse.iter().any(|&k| {
+            let d = t - k as f32 / SR;
+            (-0.010..0.200).contains(&d)
+        });
         if !nahe && t > 0.050 {
             ruhig.push(*v);
         }
