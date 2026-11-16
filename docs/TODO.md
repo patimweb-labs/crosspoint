@@ -106,8 +106,8 @@ Nachgezogen am 2026-11-15:
 - [x] Brave-Reste des alten Fensterpfads entfernt: `crosspoint-launch.sh`
       startet das native Fenster, `crosspoint-browser-prefs.sh` und
       `tools/fenster_screenshot.py` (CDP gegen Brave) sind weg (2026-11-15)
-- [ ] Tray im nativen Fenster (`crosspoint --minimized`); bis dahin übernimmt
-      `crosspoint-fenster` (WebKitGTK) den Tray-Betrieb
+- [x] Tray im nativen Fenster (`crosspoint --minimized`, `crates/ui-gtk/src/tray.rs`);
+      `crosspoint-fenster` bleibt nur Rückfall (2026-11-15)
 
 ## Nicht geplant (bewusste Entscheidung)
 

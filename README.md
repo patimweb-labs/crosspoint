@@ -152,15 +152,15 @@ wieder. Der Startbefehl ist im Flatpak
 `<repo>/scripts/crosspoint-launch.sh --minimized`. Beide starten ohne Fenster,
 nur mit Tray-Icon.
 
-**Tray:** `crosspoint-fenster` meldet ein StatusNotifierItem über GDBus an
+**Tray:** `crosspoint --minimized` (bzw. als Rückfall `crosspoint-fenster`) meldet ein StatusNotifierItem über GDBus an
 (keine Zusatzbibliothek, `gio` kommt mit GTK) samt `com.canonical.dbusmenu`:
 
 | Menüpunkt | Wirkung |
 |---|---|
 | Fenster zeigen | Fenster einblenden |
-| Alles stumm | alle Streifen-Mutes umschalten (`POST /api/set`) |
-| Letztes Preset laden | `POST /api/preset {"action":"load"}` |
-| Autostart ein/aus | `POST /api/autostart`, Haken zeigt den Zustand |
+| Alles stumm | alle Streifen-Mutes umschalten |
+| Letztes Preset laden | gespeichertes `preset.json` anwenden |
+| Autostart ein/aus | Autostart-Datei schreiben/entfernen, Haken zeigt den Zustand |
 | Beenden | Programm und Engine beenden |
 
 Wird das Fenster bei laufendem Tray geschlossen, verschwindet es nur ins Icon
@@ -252,9 +252,11 @@ Die Oberfläche ist im Flatpak wie auf dem Host das native Fenster `crosspoint`
 (GTK4, Engine im selben Prozess; Fenster zu heißt Engine und Geräte weg). Ein
 Browser ist dafür nicht nötig; `flatpak-spawn` und
 `--talk-name=org.freedesktop.Flatpak` sind entfallen. Auf dem Host startet
-`scripts/crosspoint-launch.sh` dieses Fenster. Für den Tray-Betrieb
-(`--minimized`) bleibt vorerst `crosspoint-fenster` (GTK3 + WebKitGTK) mit
-`scripts/crosspoint-start.sh` zuständig.
+`scripts/crosspoint-launch.sh` dieses Fenster. Mit `--minimized` startet es
+ohne Fenster, nur mit Tray-Icon (Autostart); Schließen verbirgt das Fenster
+dann in den Tray, „Beenden" im Tray-Menü beendet Engine und Programm.
+`crosspoint-fenster` (GTK3 + WebKitGTK) bleibt nur als Rückfall, wenn das
+native Fenster nicht gebaut ist.
 
 Die Engine linkt im Sandbox gegen das `libjack.so.0` des GNOME-Runtime
 (`/usr/lib/x86_64-linux-gnu/libjack.so.0`, pipewire-jack) – es ist dort
