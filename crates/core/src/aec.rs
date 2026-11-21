@@ -1,314 +1,224 @@
 //! Echounterdrückung (AEC): rechnet den Systemton aus dem Mikrofon heraus,
 //! der über die Boxen zurück ins Mikrofon kommt.
 //!
-//! # Verfahren
+//! # Verfahren: AEC3
 //!
-//! Partitionierter adaptiver Filter im Frequenzbereich (PBFDAF, „MDF“):
-//! Das Echo ist der Boxen-Ton (Referenz), gefaltet mit dem Raum. Der Filter
-//! lernt diese Faltung und zieht seine Schätzung vom Mikrofon ab. Die Länge
-//! ist [`PARTITIONEN`] × [`BLOCK`] Samples (12 288 = 256 ms bei 48 kHz) – das
-//! deckt die Latenz von PipeWire (Ausgabe- plus Aufnahmepuffer) und den
-//! Nachhall eines Zimmers.
+//! Gerechnet wird mit [`sonora`], der Übersetzung von WebRTCs
+//! `AudioProcessing` nach Rust (BSD-3, reines Rust, keine C-Bibliothek) – also
+//! dasselbe Verfahren, das auch PipeWires `module-echo-cancel` benutzt. Der
+//! frühere eigene Filter (partitionierter adaptiver Filter im Frequenzbereich)
+//! steht in der Historie; er hat im Raum 1,5 dB und auf einem Pfad mit
+//! getrennten Uhren 2,4 dB geschafft, AEC3 auf demselben Pfad 21 dB. Die
+//! Messung steht in `crates/core/examples/echo_verfahren.rs`, die Begründung in
+//! `docs/adr/0005-echounterdrueckung-mit-aec3.md`.
 //!
-//! * Block [`BLOCK`] = 128 Samples, FFT [`FFT_N`] = 256 (Overlap-Save).
-//!   Das Ergebnis kommt einen Block später: 2,7 ms bei 48 kHz.
-//! * Schrittweite je Frequenz normiert auf die geglättete Leistung der
-//!   Referenz (NLMS im Frequenzbereich).
-//! * **Doppelsprechen:** zwei Filter. Der Hintergrund lernt immer mit fester
-//!   Schrittweite; ausgegeben wird mit dem Vordergrund. Er übernimmt die
-//!   Gewichte des Hintergrunds nur, wenn dessen Fehler kleiner ist. Spricht
-//!   jemand, während Systemton läuft, läuft der Hintergrund weg – dann wird
-//!   er auf den Vordergrund zurückgesetzt, und die Stimme bleibt heil.
-//! * Die Zeitbegrenzung der Gradienten (Constraint) kostet zwei FFTs je
-//!   Partition; sie läuft reihum, je Block für eine Partition (wie in Speex).
+//! # Takt
 //!
-//! Alles wird in [`Echounterdruecker::neu`] angelegt; [`Echounterdruecker::process`]
-//! allokiert nicht und nimmt keine Sperre.
+//! AEC3 rechnet in Rahmen von 10 ms (480 Samples bei 48 kHz). Der Audio-Callback
+//! liefert beliebig große Blöcke, deshalb sammelt [`Echounterdruecker`] die
+//! Samples ein und gibt sie einen Rahmen später aus: Mehrtakt von
+//! [`VERZOEGERUNG`] Samples (10 ms), dazu die Verzögerung, die AEC3 selbst
+//! einrechnet. Die Laufzeit Referenz → Mikro muss **nicht** eingestellt werden;
+//! AEC3 schätzt sie selbst (gemessen: 0, 47 und 400 ms eingestellt ändern das
+//! Ergebnis nicht).
+//!
+//! # Kein Allokieren, keine Sperre
+//!
+//! Alle Puffer liegen im [`Echounterdruecker`] und entstehen in
+//! [`Echounterdruecker::neu`]; `process` baut nichts und sperrt nichts. Belegt
+//! in `crates/core/tests/allokation.rs` (mit Echounterdrückung an allen
+//! virtuellen Bussen) und – für `sonora` allein – in
+//! `crates/core/examples/echo_verfahren.rs`.
 
-// Je Bin laufen mehrere parallele Felder (Spektren, Gewichte, Leistung,
-// Schrittweite) im Gleichschritt; der Index liest sich dort besser als ein
-// Zip über vier Iteratoren.
-#![allow(clippy::needless_range_loop)]
+use sonora::config::EchoCanceller;
+use sonora::{AudioProcessing, Config, StreamConfig};
 
-use crate::dsp::Fft;
+/// Länge eines Rahmens, den AEC3 verarbeitet: 10 ms.
+pub const RAHMEN_MS: u32 = 10;
+/// Größter Rahmen (10 ms bei 96 kHz) – Puffergröße des Sammlers.
+pub const RAHMEN_MAX: usize = 960;
 
-/// Samples je Block (Hop).
-pub const BLOCK: usize = 128;
-/// FFT-Größe (Overlap-Save: zwei Blöcke).
-pub const FFT_N: usize = 2 * BLOCK;
-/// Anzahl der Partitionen; Filterlänge = `PARTITIONEN * BLOCK`.
-pub const PARTITIONEN: usize = 96;
-/// Frequenzbins eines reellen Signals (0..=N/2).
-const BINS: usize = FFT_N / 2 + 1;
+/// Was AEC3 selbst an Verzögerung mitbringt: der Puffer, mit dem es Referenz
+/// und Mikrofon zur Deckung bringt (bei 48 kHz gemessen 432 Samples = 9 ms,
+/// unabhängig von Inhalt und Raum). Zusammen mit dem Sammler sind das 19 ms.
+pub const AEC3_VERZOEGERUNG: usize = 432;
 
-/// Schrittweite des Hintergrundfilters (NLMS, normiert).
-const MU: f32 = 0.5;
-/// Glättung der Fehlerleistungen für den Vergleich der beiden Filter.
-const FEHLER_GLATT: f32 = 0.8;
-/// Der Hintergrund wird übernommen, wenn sein Fehler kleiner ist als dieser
-/// Anteil des Vordergrundfehlers.
-const UEBERNEHMEN: f32 = 0.9;
-/// Ist der Hintergrund um diesen Faktor schlechter, ist er beim
-/// Doppelsprechen weggelaufen und wird auf den Vordergrund zurückgesetzt.
-const ZURUECKSETZEN: f32 = 4.0;
-/// Glättung der Referenzleistung je Bin.
-const LEISTUNG_GLATT: f32 = 0.9;
-/// Unter dieser mittleren Leistung je Sample gilt die Referenz als still –
-/// dann wird nicht gelernt (nichts zu lernen, nur Rauschen).
-const REF_STILL: f32 = 1.0e-8;
+/// Unter diesem Pegel (Spitze im Rahmen, −80 dBFS) gilt die Referenz als
+/// still: es spielt nichts, es gibt nichts auszurechnen.
+const STILL_SCHWELLE: f32 = 1.0e-4;
 
-/// Komplexer Wert, schlicht.
-#[derive(Clone, Copy, Default)]
-struct K {
-    re: f32,
-    im: f32,
-}
+/// So viele stille Rahmen (10 ms) am Stück, bis durchgeschaltet wird. Kürzer
+/// wäre falsch: der Nachhall eines Tons läuft nach, wenn die Referenz schon
+/// still ist.
+const STILL_RAHMEN: u32 = 20;
+
+/// Länge der Brücke (Mikrofon unverändert, nur verzögert): die Ausgabe des
+/// Echounterdrückers kommt um so viele Samples später.
+const BRUECKE_MAX: usize = RAHMEN_MAX + AEC3_VERZOEGERUNG;
 
 /// Echounterdrücker für einen Kanal.
 pub struct Echounterdruecker {
-    fft: Fft,
-    /// Hintergrundfilter (lernt immer) je Partition und Bin.
-    w: Vec<[K; BINS]>,
-    /// Vordergrundfilter (wird ausgegeben).
-    w_vorn: Vec<[K; BINS]>,
-    /// Geglättete Fehlerleistungen von Hintergrund und Vordergrund.
-    fehler_hinten: f32,
-    fehler_vorn: f32,
-    /// Zähler für die Fehlersuche: übernommene und zurückgesetzte Blöcke.
-    uebernommen: u32,
-    zurueckgesetzt: u32,
-    /// Spektren der letzten Referenzblöcke (Ring, `x_pos` = neuester).
-    x: Vec<[K; BINS]>,
-    x_pos: usize,
-    /// Geglättete Leistung der Referenz je Bin.
-    leistung: [f32; BINS],
-    /// Letzter Referenzblock (Overlap-Save braucht zwei).
-    ref_alt: [f32; BLOCK],
-    /// Eingangssammler: Mikrofon und Referenz des laufenden Blocks.
-    mic_in: [f32; BLOCK],
-    ref_in: [f32; BLOCK],
-    /// Ausgabe des vorigen Blocks (wird während des Sammelns ausgegeben).
-    aus: [f32; BLOCK],
-    pos: usize,
-    /// Partition, deren Gradient im nächsten Block begrenzt wird.
-    constraint: usize,
-    // Arbeitspuffer
-    re: [f32; FFT_N],
-    im: [f32; FFT_N],
-    e_spek: [K; BINS],
-    y_spek: [K; BINS],
-}
-
-impl Default for Echounterdruecker {
-    fn default() -> Self {
-        Self::neu()
-    }
+    /// Der Rechner von `sonora`; entsteht in [`Self::neu`].
+    apm: AudioProcessing,
+    /// Samples je Rahmen (10 ms bei der Abtastrate der Engine).
+    rahmen: usize,
+    /// Sammler für das, was die Boxen spielen (Referenz).
+    referenz: [f32; RAHMEN_MAX],
+    referenz_pos: usize,
+    /// Sammler für das Mikrofon.
+    mikro: [f32; RAHMEN_MAX],
+    mikro_pos: usize,
+    /// Ergebnis des letzten Rahmens; wird Sample für Sample ausgegeben.
+    aus: [f32; RAHMEN_MAX],
+    aus_pos: usize,
+    /// Arbeitspuffer für sonora (die Render-Ausgabe wird nicht gebraucht).
+    scratch: [f32; RAHMEN_MAX],
+    /// Brücke: das Mikrofon unverändert, nur verzögert. Sie ist die Ausgabe,
+    /// solange nichts spielt (siehe [`STILL_SCHWELLE`]).
+    bruecke: [f32; BRUECKE_MAX],
+    bruecke_pos: usize,
+    bruecke_laenge: usize,
+    /// So viele Rahmen war die Referenz am Stück still.
+    still_seit: u32,
 }
 
 impl Echounterdruecker {
-    /// Legt alle Puffer an (außerhalb des Audio-Threads aufrufen).
-    pub fn neu() -> Echounterdruecker {
-        Echounterdruecker {
-            fft: Fft::new(FFT_N),
-            w: vec![[K::default(); BINS]; PARTITIONEN],
-            w_vorn: vec![[K::default(); BINS]; PARTITIONEN],
-            fehler_hinten: 0.0,
-            fehler_vorn: 0.0,
-            uebernommen: 0,
-            zurueckgesetzt: 0,
-            x: vec![[K::default(); BINS]; PARTITIONEN],
-            x_pos: 0,
-            leistung: [0.0; BINS],
-            ref_alt: [0.0; BLOCK],
-            mic_in: [0.0; BLOCK],
-            ref_in: [0.0; BLOCK],
-            aus: [0.0; BLOCK],
-            pos: 0,
-            constraint: 0,
-            re: [0.0; FFT_N],
-            im: [0.0; FFT_N],
-            e_spek: [K::default(); BINS],
-            y_spek: [K::default(); BINS],
-        }
+    /// Legt den Rechner an. **Außerhalb des Audio-Threads aufrufen** – hier
+    /// wird allokiert.
+    ///
+    /// `abtastrate` bestimmt die Rahmengröße (10 ms). AEC3 selbst rechnet
+    /// intern mit 16 kHz und passt sich an.
+    pub fn neu(abtastrate: u32) -> Echounterdruecker {
+        let rahmen = (abtastrate as usize / 1000) * RAHMEN_MS as usize;
+        let rahmen = rahmen.clamp(80, RAHMEN_MAX);
+        let mut apm = AudioProcessing::builder()
+            .config(Config {
+                echo_canceller: Some(EchoCanceller::default()),
+                // Die Rauschunterdrückung bleibt aus: ECHO soll den Systemton
+                // herausrechnen, nicht am Mikrofonklang drehen.
+                noise_suppression: None,
+                ..Default::default()
+            })
+            .capture_config(StreamConfig::new(abtastrate, 1))
+            .render_config(StreamConfig::new(abtastrate, 1))
+            .build();
+        // Die Laufzeit schätzt AEC3 selbst; ein grober Wert genügt als Start.
+        let _ = apm.set_stream_delay_ms(0);
+        let mut e = Echounterdruecker {
+            apm,
+            rahmen,
+            referenz: [0.0; RAHMEN_MAX],
+            referenz_pos: 0,
+            mikro: [0.0; RAHMEN_MAX],
+            mikro_pos: 0,
+            aus: [0.0; RAHMEN_MAX],
+            // Kein Rahmen fertig: die ersten Samples sind Stille, damit die
+            // Ausgabe um genau einen Rahmen verzögert ist.
+            aus_pos: RAHMEN_MAX,
+            scratch: [0.0; RAHMEN_MAX],
+            bruecke: [0.0; BRUECKE_MAX],
+            bruecke_pos: 0,
+            bruecke_laenge: 0,
+            // Am Anfang läuft nichts: erst wenn die Referenz laut wird,
+            // rechnet AEC3 mit.
+            still_seit: STILL_RAHMEN,
+        };
+        e.bruecke_laenge = e.rahmen + AEC3_VERZOEGERUNG;
+        e
     }
 
-    /// Alles vergessen (Filter, Verlauf, Puffer). Allokiert nicht.
+    /// Samples, um die die Ausgabe später kommt: der Sammler (ein Rahmen =
+    /// 10 ms) und die Verzögerung von AEC3 selbst (gemessen 19 ms zusammen).
+    pub fn verzoegerung(&self) -> usize {
+        self.rahmen + AEC3_VERZOEGERUNG
+    }
+
+    /// Länge der Brücke in Samples (= [`Echounterdruecker::verzoegerung`]).
+    fn bruecke_laenge(&self) -> usize {
+        self.bruecke_laenge
+    }
+
+    /// Puffer leeren. Der gelernte Filter in AEC3 bleibt stehen und passt sich
+    /// dem neuen Raum innerhalb weniger hundert Millisekunden an; ihn zu
+    /// verwerfen hieße, `sonora` neu zu bauen – und das allokiert. Allokiert
+    /// hier nichts.
     pub fn reset(&mut self) {
-        for p in self
-            .w
-            .iter_mut()
-            .chain(self.w_vorn.iter_mut())
-            .chain(self.x.iter_mut())
-        {
-            *p = [K::default(); BINS];
-        }
-        self.x_pos = 0;
-        self.leistung = [0.0; BINS];
-        self.ref_alt = [0.0; BLOCK];
-        self.mic_in = [0.0; BLOCK];
-        self.ref_in = [0.0; BLOCK];
-        self.aus = [0.0; BLOCK];
-        self.pos = 0;
-        self.constraint = 0;
-        self.fehler_hinten = 0.0;
-        self.fehler_vorn = 0.0;
+        self.referenz.fill(0.0);
+        self.referenz_pos = 0;
+        self.mikro.fill(0.0);
+        self.mikro_pos = 0;
+        self.aus.fill(0.0);
+        self.aus_pos = RAHMEN_MAX;
+        self.bruecke.fill(0.0);
+        self.bruecke_pos = 0;
+        self.still_seit = STILL_RAHMEN;
     }
 
     /// Ein Sample: `mic` mit Echo hinein, Referenz `referenz` (was die Boxen
-    /// spielen) dazu; heraus kommt das bereinigte Sample, [`BLOCK`] Samples
-    /// verzögert.
+    /// spielen) dazu; heraus kommt das bereinigte Sample, einen Rahmen später.
+    ///
+    /// Spielt nichts (Referenz still), kommt das Mikrofon unverändert durch –
+    /// nur um dieselbe Zeit verzögert. Ohne diesen Weg würde AEC3 auch ein
+    /// Mikrofon ohne Echo verbiegen: gemessen bleibt der Pegel gleich, die
+    /// Wellenform aber nicht.
     #[inline]
     pub fn process(&mut self, mic: f32, referenz: f32) -> f32 {
-        let y = self.aus[self.pos];
-        self.mic_in[self.pos] = mic;
-        self.ref_in[self.pos] = referenz;
-        self.pos += 1;
-        if self.pos == BLOCK {
-            self.pos = 0;
-            self.block();
+        // (0) Brücke: das trockene Mikrofon, um die Ausgabeverzögerung später.
+        let laenge = self.bruecke_laenge();
+        let trocken = self.bruecke[self.bruecke_pos];
+        self.bruecke[self.bruecke_pos] = mic;
+        self.bruecke_pos += 1;
+        if self.bruecke_pos >= laenge {
+            self.bruecke_pos = 0;
         }
-        y
-    }
 
-    /// (übernommen, zurückgesetzt) seit dem Anlegen – zur Fehlersuche.
-    pub fn zaehler(&self) -> (u32, u32) {
-        (self.uebernommen, self.zurueckgesetzt)
-    }
-
-    /// Spektrum eines reellen Puffers in `self.re/im` → Bins.
-    fn vorwaerts(&mut self) {
-        self.im = [0.0; FFT_N];
-        self.fft.forward(&mut self.re, &mut self.im);
-    }
-
-    /// Bins → reelles Zeitsignal in `self.re` (Spiegelung ergänzt).
-    fn rueckwaerts(&mut self, spek: &[K; BINS]) {
-        for (k, s) in spek.iter().enumerate() {
-            self.re[k] = s.re;
-            self.im[k] = s.im;
-        }
-        for k in 1..FFT_N / 2 {
-            self.re[FFT_N - k] = spek[k].re;
-            self.im[FFT_N - k] = -spek[k].im;
-        }
-        self.fft.inverse(&mut self.re, &mut self.im);
-    }
-
-    fn block(&mut self) {
-        // (1) Referenzspektrum: [voriger Block, aktueller Block].
-        self.re[..BLOCK].copy_from_slice(&self.ref_alt);
-        self.re[BLOCK..].copy_from_slice(&self.ref_in);
-        self.ref_alt = self.ref_in;
-        self.vorwaerts();
-        self.x_pos = (self.x_pos + 1) % PARTITIONEN;
-        let neu = &mut self.x[self.x_pos];
-        for k in 0..BINS {
-            neu[k] = K {
-                re: self.re[k],
-                im: self.im[k],
+        // (1) Referenz einsammeln; ist ein Rahmen voll, lernt AEC3 daran.
+        self.referenz[self.referenz_pos] = referenz;
+        self.referenz_pos += 1;
+        if self.referenz_pos == self.rahmen {
+            self.referenz_pos = 0;
+            let spitze = self.referenz[..self.rahmen]
+                .iter()
+                .fold(0.0f32, |a, v| a.max(v.abs()));
+            self.still_seit = if spitze < STILL_SCHWELLE {
+                (self.still_seit + 1).min(STILL_RAHMEN)
+            } else {
+                0
             };
-        }
-        let ref_energie: f32 = self.ref_in.iter().map(|v| v * v).sum::<f32>() / BLOCK as f32;
-        for k in 0..BINS {
-            let p = neu[k].re * neu[k].re + neu[k].im * neu[k].im;
-            self.leistung[k] = LEISTUNG_GLATT * self.leistung[k] + (1.0 - LEISTUNG_GLATT) * p;
-        }
-
-        // (2) Echoschätzung beider Filter, Fehler im Zeitbereich.
-        let mut e_hinten = [0.0f32; BLOCK];
-        let mut leistung_hinten = 0.0f32;
-        let mut leistung_vorn = 0.0f32;
-        for vorn in [false, true] {
-            self.schaetzen(vorn);
-            let y_spek = self.y_spek;
-            self.rueckwaerts(&y_spek);
-            for n in 0..BLOCK {
-                let e = self.mic_in[n] - self.re[BLOCK + n];
-                if vorn {
-                    self.aus[n] = e;
-                    leistung_vorn += e * e;
-                } else {
-                    e_hinten[n] = e;
-                    leistung_hinten += e * e;
-                }
-            }
-        }
-        if ref_energie < REF_STILL {
-            return;
-        }
-
-        // (3) Vergleich: besserer Hintergrund wird übernommen, weggelaufener
-        //     zurückgesetzt.
-        let g = FEHLER_GLATT;
-        self.fehler_hinten = g * self.fehler_hinten + (1.0 - g) * leistung_hinten;
-        self.fehler_vorn = g * self.fehler_vorn + (1.0 - g) * leistung_vorn;
-        if self.fehler_hinten < UEBERNEHMEN * self.fehler_vorn {
-            self.w_vorn.copy_from_slice(&self.w);
-            self.fehler_vorn = self.fehler_hinten;
-            self.uebernommen += 1;
-        } else if self.fehler_hinten > ZURUECKSETZEN * self.fehler_vorn {
-            self.w.copy_from_slice(&self.w_vorn);
-            self.fehler_hinten = self.fehler_vorn;
-            self.zurueckgesetzt += 1;
-            return;
-        }
-
-        // (4) Fehlerspektrum des Hintergrunds aus [0, e].
-        self.re[..BLOCK].fill(0.0);
-        self.re[BLOCK..].copy_from_slice(&e_hinten);
-        self.vorwaerts();
-        for k in 0..BINS {
-            self.e_spek[k] = K {
-                re: self.re[k],
-                im: self.im[k],
-            };
-        }
-
-        // (5) Schrittweite je Bin, normiert auf die Referenzleistung.
-        let mut norm = [0.0f32; BINS];
-        for k in 0..BINS {
-            norm[k] = MU / (PARTITIONEN as f32 * self.leistung[k] + 1.0e-6 * FFT_N as f32);
-        }
-
-        // (6) W_p += μ_k · conj(X_{k−p}) · E.
-        for p in 0..PARTITIONEN {
-            let xi = (self.x_pos + PARTITIONEN - p) % PARTITIONEN;
-            let x = &self.x[xi];
-            let w = &mut self.w[p];
-            for k in 0..BINS {
-                let g_re = x[k].re * self.e_spek[k].re + x[k].im * self.e_spek[k].im;
-                let g_im = x[k].re * self.e_spek[k].im - x[k].im * self.e_spek[k].re;
-                w[k].re += norm[k] * g_re;
-                w[k].im += norm[k] * g_im;
+            if self.still_seit < STILL_RAHMEN {
+                let _ = self.apm.process_render_f32(
+                    &[&self.referenz[..self.rahmen]],
+                    &mut [&mut self.scratch[..self.rahmen]],
+                );
             }
         }
 
-        // (7) Zeitbegrenzung einer Partition reihum: zweite Hälfte der
-        //     Impulsantwort null, sonst entsteht zirkuläre Faltung.
-        let p = self.constraint;
-        self.constraint = (self.constraint + 1) % PARTITIONEN;
-        let w = self.w[p];
-        self.rueckwaerts(&w);
-        self.re[BLOCK..].fill(0.0);
-        self.vorwaerts();
-        for k in 0..BINS {
-            self.w[p][k] = K {
-                re: self.re[k],
-                im: self.im[k],
-            };
-        }
-    }
-
-    /// `y_spek` = Σ W_p · X_{k−p} für Vorder- oder Hintergrund.
-    fn schaetzen(&mut self, vorn: bool) {
-        self.y_spek = [K::default(); BINS];
-        let w_alle = if vorn { &self.w_vorn } else { &self.w };
-        for (p, w) in w_alle.iter().enumerate() {
-            let x = &self.x[(self.x_pos + PARTITIONEN - p) % PARTITIONEN];
-            for k in 0..BINS {
-                self.y_spek[k].re += w[k].re * x[k].re - w[k].im * x[k].im;
-                self.y_spek[k].im += w[k].re * x[k].im + w[k].im * x[k].re;
+        // (2) Mikrofon einsammeln; ist ein Rahmen voll, wird er bereinigt und
+        // als nächste Ausgabe abgelegt.
+        self.mikro[self.mikro_pos] = mic;
+        self.mikro_pos += 1;
+        if self.mikro_pos == self.rahmen {
+            self.mikro_pos = 0;
+            if self.still_seit < STILL_RAHMEN {
+                let _ = self.apm.process_capture_f32(
+                    &[&self.mikro[..self.rahmen]],
+                    &mut [&mut self.scratch[..self.rahmen]],
+                );
+                self.aus[..self.rahmen].copy_from_slice(&self.scratch[..self.rahmen]);
+                self.aus_pos = 0;
+            } else {
+                // Nichts zu rechnen: die Brücke ist die Ausgabe.
+                self.aus_pos = RAHMEN_MAX;
             }
+        }
+
+        // (3) Ausgeben, was vom letzten fertigen Rahmen übrig ist.
+        if self.still_seit < STILL_RAHMEN && self.aus_pos < self.rahmen {
+            let y = self.aus[self.aus_pos];
+            self.aus_pos += 1;
+            y
+        } else {
+            trocken
         }
     }
 }
@@ -360,17 +270,17 @@ mod tests {
     }
 
     fn neu() -> Box<Echounterdruecker> {
-        // Gut 200 KiB Zustand: auf dem Heap bauen.
+        // Der Zustand von AEC3 ist groß: auf dem Heap bauen.
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
-            .spawn(|| Box::new(Echounterdruecker::neu()))
+            .spawn(|| Box::new(Echounterdruecker::neu(48_000)))
             .unwrap()
             .join()
             .unwrap()
     }
 
     #[test]
-    fn reines_echo_wird_um_mehr_als_30_db_gesenkt() {
+    fn reines_echo_wird_stark_gesenkt() {
         let mut aec = neu();
         let mut raum = Raum::neu();
         let mut r = Rauschen(1);
@@ -386,21 +296,26 @@ mod tests {
                 aus_letzte.push(aus);
             }
         }
-        let erle = 10.0 * (leistung(&mic_letzte) / leistung(&aus_letzte)).log10();
+        let erle = 10.0 * (leistung(&mic_letzte) / leistung(&aus_letzte).max(1e-20)).log10();
         eprintln!("ERLE {erle:.1} dB");
-        assert!(erle > 30.0, "ERLE nur {erle:.1} dB");
+        assert!(erle > 20.0, "ERLE nur {erle:.1} dB");
     }
 
     #[test]
     fn stille_referenz_laesst_das_mikrofon_durch() {
         let mut aec = neu();
         let mut r = Rauschen(7);
-        let eingang: Vec<f32> = (0..4800).map(|_| 0.2 * r.next()).collect();
+        let verzoegerung = aec.verzoegerung();
+        let eingang: Vec<f32> = (0..24_000).map(|_| 0.2 * r.next()).collect();
         let aus: Vec<f32> = eingang.iter().map(|&x| aec.process(x, 0.0)).collect();
-        // Um einen Block verzögert, sonst unverändert.
-        for n in BLOCK..eingang.len() {
-            assert!((aus[n] - eingang[n - BLOCK]).abs() < 1e-5, "Sample {n}");
-        }
+        // Nur verzögert, sonst unverändert: die Rauschunterdrückung ist aus,
+        // der Hochpass von AEC3 lässt nur die tiefsten Frequenzen weg.
+        let fehler: f32 = (verzoegerung..eingang.len())
+            .map(|n| (aus[n] - eingang[n - verzoegerung]).abs())
+            .fold(0.0, f32::max);
+        let pegel = eingang.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        eprintln!("größte Abweichung {fehler:.4} bei Pegel {pegel:.2}");
+        assert!(fehler < 0.05 * pegel, "Mikrofon wird verändert");
     }
 
     #[test]
@@ -408,27 +323,43 @@ mod tests {
         let mut aec = neu();
         let mut raum = Raum::neu();
         let mut r = Rauschen(3);
-        let mut s = Rauschen(99);
         let sr = 48_000;
         // Erst lernen (nur Systemton) …
-        for _ in 0..sr * 4 {
+        let (mut echo_nur, mut aus_nur) = (Vec::new(), Vec::new());
+        for i in 0..sr * 4 {
             let boxen = 0.3 * r.next();
-            aec.process(raum.process(boxen), boxen);
+            let m = raum.process(boxen);
+            let a = aec.process(m, boxen);
+            if i >= sr * 3 {
+                echo_nur.push(m);
+                aus_nur.push(a);
+            }
         }
-        // … dann spricht jemand dazu: die Stimme muss heraus, das Echo nicht.
+        // … dann spricht jemand dazu: die Stimme muss durchkommen, das Echo
+        // nicht. Die Stimme ist ein Ton mit Vibrato (kein Rauschen), sonst
+        // wäre sie vom Rauschen des Systemtons nicht zu unterscheiden.
         let mut stimme = Vec::new();
         let mut aus = Vec::new();
         for i in 0..sr {
             let boxen = 0.3 * r.next();
-            let v = 0.2 * s.next() * (i as f32 * 0.001).sin().abs();
+            let t = i as f32 / sr as f32;
+            let v = 0.15
+                * (2.0 * std::f32::consts::PI * (220.0 + 4.0 * (t * 60.0).sin()) * i as f32
+                    / sr as f32)
+                    .sin();
             stimme.push(v);
             aus.push(aec.process(raum.process(boxen) + v, boxen));
         }
-        // Ausgabe ist um BLOCK verzögert; Rest = Ausgabe − Stimme.
-        let rest: Vec<f32> = (BLOCK..sr).map(|n| aus[n] - stimme[n - BLOCK]).collect();
-        let snr = 10.0 * (leistung(&stimme) / leistung(&rest)).log10();
-        eprintln!("Stimme/Rest {snr:.1} dB");
-        assert!(snr > 20.0, "Stimme zu stark verändert: {snr:.1} dB");
+        // Ausgabe ist verzögert; verglichen wird der Pegel, nicht das Sample –
+        // die Verzögerung von AEC3 ist nicht auf das Sample genau festgelegt.
+        let stimme_db = 10.0 * leistung(&stimme).log10();
+        let doppel_db = 10.0 * leistung(&aus[aus.len() / 2..]).log10();
+        let echo_db = 10.0 * leistung(&aus_nur[aus_nur.len() / 2..]).log10();
+        eprintln!("Stimme {stimme_db:.1} dB, Ausgang beim Doppelsprechen {doppel_db:.1} dB (vorher {echo_db:.1} dB)");
+        assert!(
+            (doppel_db - stimme_db).abs() < 5.0,
+            "Stimme kommt nicht durch: {doppel_db:.1} dB statt {stimme_db:.1} dB"
+        );
     }
 
     #[test]
@@ -444,22 +375,22 @@ mod tests {
         // Jemand stellt die Boxen um: anderer Weg, andere Laufzeit.
         raum.wege = [(2400, 0.4), (2900, -0.25), (6000, 0.1)];
         let (mut mic, mut aus) = (Vec::new(), Vec::new());
-        for i in 0..sr * 4 {
+        for i in 0..sr * 5 {
             let b = 0.3 * r.next();
             let m = raum.process(b);
             let a = aec.process(m, b);
-            if i >= sr * 3 {
+            if i >= sr * 4 {
                 mic.push(m);
                 aus.push(a);
             }
         }
-        let erle = 10.0 * (leistung(&mic) / leistung(&aus)).log10();
+        let erle = 10.0 * (leistung(&mic) / leistung(&aus).max(1e-20)).log10();
         eprintln!("ERLE nach Wechsel {erle:.1} dB");
-        assert!(erle > 20.0, "ERLE nach Wechsel nur {erle:.1} dB");
+        assert!(erle > 15.0, "ERLE nach Wechsel nur {erle:.1} dB");
     }
 
     #[test]
-    fn reset_vergisst_den_filter() {
+    fn reset_laesst_nichts_alten_durch() {
         let mut aec = neu();
         let mut r = Rauschen(5);
         for _ in 0..48_000 {
@@ -467,10 +398,8 @@ mod tests {
             aec.process(0.5 * b, b);
         }
         aec.reset();
-        let null = |w: &Vec<[K; BINS]>| {
-            w.iter()
-                .all(|p| p.iter().all(|k| k.re == 0.0 && k.im == 0.0))
-        };
-        assert!(null(&aec.w) && null(&aec.w_vorn));
+        assert!(aec.referenz_pos == 0 && aec.mikro_pos == 0);
+        // Nach dem Leeren kommt erst einmal Stille (kein Rahmen fertig).
+        assert_eq!(aec.process(0.5, 0.5), 0.0);
     }
 }

@@ -11,10 +11,12 @@
 //!
 //! Busse B1..B3 (virtuell):  Summe → Mono/Modus → **Echounterdrückung** →
 //!   **Noise Gate** → Delay → Trim → Gain/Mute.
-//!   Die Echounterdrückung zieht ab, was die Boxen spielen: Referenz ist der
-//!   fertige Ausgang eines Hardware-Busses (`aec_ref`, ab Werk A1). Dass die
-//!   A-Busse vor den B-Bussen gerechnet werden, ist deshalb Absicht. Das Gate
-//!   entscheidet danach am echofreien Signal über Pausen.
+//!   Die Echounterdrückung zieht ab, was die Boxen spielen. Die Referenz kommt
+//!   von außen: an den Eingängen `echo_ref_L/R` hängen die Monitore der
+//!   gewählten Ausgabegeräte (siehe [`crate::echo`]) – also genau der Ton, den
+//!   die Boxen spielen, auch wenn ein Programm an Crosspoint vorbei auf das
+//!   Gerät spielt (Chromium auf HDMI). Das Gate entscheidet danach am
+//!   echofreien Signal über Pausen.
 //!
 //! Die Filter stehen im Modell als [`AusgangsFilter`] – nur die virtuellen
 //! Busse haben einen; ein Hardware-Bus nimmt `gate`/`aec` nicht an.
@@ -73,8 +75,6 @@ pub struct AusgangsFilter {
     pub gate: GateParam,
     /// Echounterdrückung an (`aec`).
     pub aec: AtomicBool,
-    /// Hardware-Bus, dessen Ausgang die Boxen spielen (`aec_ref`, 0..4 = A1..A5).
-    pub aec_ref: AtomicU32,
 }
 
 impl AusgangsFilter {
@@ -82,7 +82,6 @@ impl AusgangsFilter {
         AusgangsFilter {
             gate: GateParam::new(),
             aec: AtomicBool::new(false),
-            aec_ref: AtomicU32::new(0),
         }
     }
 
@@ -96,13 +95,11 @@ impl AusgangsFilter {
             "gate_hold" => fset(&g.hold, v.clamp(0.0, 2000.0)),
             "gate_release" => fset(&g.release, v.clamp(1.0, 5000.0)),
             "aec" => self.aec.store(v != 0.0, Relaxed),
-            "aec_ref" => {
-                let i = v.round();
-                if !(0.0..ERSTER_VIRTUELLER as f32).contains(&i) {
-                    return false;
-                }
-                self.aec_ref.store(i as u32, Relaxed)
-            }
+            // `aec_ref` (bis ADR 0002: welcher Hardware-Bus auf den Boxen
+            // liegt) gibt es nicht mehr: die Referenz kommt jetzt vom
+            // Ausgabegerät. Alte Presets laden weiter, der Wert wird
+            // übergangen und nicht abgelehnt.
+            "aec_ref" => {}
             _ => return false,
         }
         true
@@ -119,7 +116,6 @@ impl AusgangsFilter {
             ("gate_hold", Value::num(fget(&g.hold) as f64)),
             ("gate_release", Value::num(fget(&g.release) as f64)),
             ("aec", Value::Bool(self.aec.load(Relaxed))),
-            ("aec_ref", Value::num(self.aec_ref.load(Relaxed) as f64)),
         ])
     }
 }
@@ -137,13 +133,12 @@ pub fn filter_get(f: &AusgangsFilter, param: &str) -> Option<f32> {
         "gate_hold" => fget(&g.hold),
         "gate_release" => fget(&g.release),
         "aec" => schalter(&f.aec),
-        "aec_ref" => f.aec_ref.load(Relaxed) as f32,
         _ => return None,
     })
 }
 
 /// Namen der Filterparameter (für Presets, OSC und Oberfläche).
-pub const FILTER_PARAMS: [&str; 8] = [
+pub const FILTER_PARAMS: [&str; 7] = [
     "gate",
     "gate_schwelle",
     "gate_tiefe",
@@ -151,7 +146,6 @@ pub const FILTER_PARAMS: [&str; 8] = [
     "gate_hold",
     "gate_release",
     "aec",
-    "aec_ref",
 ];
 
 pub struct StripParam {
@@ -517,6 +511,10 @@ fn bus_mix(v: [f32; 2], mode: u32, cross: bool) -> [f32; 2] {
 pub struct Io {
     pub ins: [[*const f32; 2]; STRIPS],
     pub outs: [[*mut f32; 2]; BUSES],
+    /// Referenz der Echounterdrückung (`echo_ref_L/R`): was die Boxen spielen.
+    /// `null` heißt „kein Ausgabegerät gewählt“ – dann bleibt die
+    /// Echounterdrückung still und lässt das Mikrofon unverändert.
+    pub echo_ref: [*const f32; 2],
 }
 
 /// Filterzustand eines virtuellen Busses (beide Kanäle).
@@ -536,7 +534,9 @@ pub struct EngineDsp {
 }
 
 impl EngineDsp {
-    pub fn new(max_block: usize) -> EngineDsp {
+    /// `abtastrate` legt die Rahmengröße der Echounterdrückung fest (10 ms) und
+    /// gehört deshalb hierher, nicht in den Callback.
+    pub fn new(max_block: usize, abtastrate: u32) -> EngineDsp {
         EngineDsp {
             bus_delay: std::array::from_fn(|_| {
                 [DelayLine::new(max_block * 4), DelayLine::new(max_block * 4)]
@@ -546,7 +546,10 @@ impl EngineDsp {
             filter: (0..VIRTUELLE)
                 .map(|_| FilterDsp {
                     gate: [Gate::default(); 2],
-                    aec: [Echounterdruecker::neu(), Echounterdruecker::neu()],
+                    aec: [
+                        Echounterdruecker::neu(abtastrate),
+                        Echounterdruecker::neu(abtastrate),
+                    ],
                     aec_war_an: false,
                 })
                 .collect(),
@@ -625,9 +628,22 @@ impl EngineDsp {
                 }
             }
 
-            // Hardware-Busse zuerst: ihr Ausgang ist die Referenz der
-            // Echounterdrückung an den virtuellen Bussen.
-            let mut aus = [[0f32; 2]; BUSES];
+            // Alle Busse in einer Reihe; die Referenz der Echounterdrückung
+            // kommt von den Ports `echo_ref_L/R` – dort hängen die Monitore der
+            // gewählten Ausgabegeräte, unabhängig davon, welcher Bus sie spielt.
+            let referenz = if io.echo_ref[0].is_null() {
+                0.0
+            } else {
+                // SAFETY: wie oben, `frames` Samples je Port. Ein Kanal reicht
+                // als Referenz; bei Stereo wird gemittelt.
+                unsafe {
+                    if io.echo_ref[1].is_null() {
+                        *io.echo_ref[0].add(n)
+                    } else {
+                        0.5 * (*io.echo_ref[0].add(n) + *io.echo_ref[1].add(n))
+                    }
+                }
+            };
             for bi in 0..BUSES {
                 let bp = &p.buses[bi];
                 let mut v = acc[bi];
@@ -639,8 +655,6 @@ impl EngineDsp {
                 if let Some(fp) = bp.filter.as_ref() {
                     let f = &mut self.filter[bi - ERSTER_VIRTUELLER];
                     if f.aec_war_an {
-                        let r = aus[fp.aec_ref.load(Relaxed) as usize % ERSTER_VIRTUELLER];
-                        let referenz = 0.5 * (r[0] + r[1]);
                         for ch in 0..2 {
                             v[ch] = f.aec[ch].process(v[ch], referenz);
                         }
@@ -662,7 +676,6 @@ impl EngineDsp {
                     x *= db_to_lin(fget(&bp.trim[ch]));
                     v[ch] = x * gain;
                 }
-                aus[bi] = v;
                 peak_b[bi] = peak_b[bi].max(v[0].abs().max(v[1].abs()));
                 // SAFETY: wie oben, `frames` Samples je Ausgangsport.
                 unsafe {
@@ -695,6 +708,10 @@ mod tests {
     struct Buf {
         ins: Vec<Vec<f32>>,
         outs: Vec<Vec<f32>>,
+        /// Referenz der Echounterdrückung (`echo_ref`), ein Paar.
+        echo_ref: [Vec<f32>; 2],
+        /// Liegt sie an den Ports? Ohne Ausgabegerät bleiben die Ports still.
+        echo_ref_an: bool,
     }
 
     impl Buf {
@@ -703,6 +720,8 @@ mod tests {
             let mut b = Buf {
                 ins: vec![vec![0.0f32; frames]; STRIPS * 2],
                 outs: vec![vec![0.0f32; frames]; BUSES * 2],
+                echo_ref: [vec![0.0f32; frames], vec![0.0f32; frames]],
+                echo_ref_an: false,
             };
             b.set_strip(0, level);
             b
@@ -719,10 +738,21 @@ mod tests {
             self.ins[strip * 2 + ch].iter_mut().for_each(|x| *x = level);
         }
 
+        /// Referenz der Echounterdrückung: was die Boxen spielen.
+        fn set_echo_ref(&mut self, frame: impl Fn(usize) -> f32) {
+            self.echo_ref_an = true;
+            for n in 0..self.echo_ref[0].len() {
+                let v = frame(n);
+                self.echo_ref[0][n] = v;
+                self.echo_ref[1][n] = v;
+            }
+        }
+
         fn io(&mut self) -> Io {
             let mut io = Io {
                 ins: [[std::ptr::null(); 2]; STRIPS],
                 outs: [[std::ptr::null_mut(); 2]; BUSES],
+                echo_ref: [std::ptr::null(); 2],
             };
             for s in 0..STRIPS {
                 for c in 0..2 {
@@ -732,6 +762,11 @@ mod tests {
             for b in 0..BUSES {
                 for c in 0..2 {
                     io.outs[b][c] = self.outs[b * 2 + c].as_mut_ptr();
+                }
+            }
+            if self.echo_ref_an {
+                for c in 0..2 {
+                    io.echo_ref[c] = self.echo_ref[c].as_ptr();
                 }
             }
             io
@@ -758,7 +793,7 @@ mod tests {
     fn dsp_neu() -> Box<EngineDsp> {
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
-            .spawn(|| Box::new(EngineDsp::new(64)))
+            .spawn(|| Box::new(EngineDsp::new(64, 48_000)))
             .expect("Thread")
             .join()
             .expect("DSP")
@@ -1074,13 +1109,15 @@ mod tests {
     }
 
     #[test]
-    fn aec_ref_nur_auf_hardware_busse() {
+    fn alte_presets_mit_aec_ref_laden_weiter() {
+        // `aec_ref` (welcher Hardware-Bus auf den Boxen liegt) gibt es nicht
+        // mehr – die Referenz kommt vom Ausgabegerät. Ein altes Preset darf
+        // trotzdem laden, der Wert wird stillschweigend übergangen.
         let p = params();
         assert!(p.set("bus", 5, "aec_ref", 4.0));
-        assert!(!p.set("bus", 5, "aec_ref", 5.0), "B1 als Referenz");
-        assert!(!p.set("bus", 5, "aec_ref", -1.0));
         let f = p.buses[5].filter.as_ref().unwrap();
-        assert_eq!(f.aec_ref.load(Relaxed), 4);
+        assert_eq!(filter_get(f, "aec_ref"), None);
+        assert!(!p.set("bus", 5, "aec_refquatsch", 1.0));
     }
 
     #[test]
@@ -1126,9 +1163,10 @@ mod tests {
 
     #[test]
     fn echo_der_boxen_wird_aus_b1_gerechnet() {
-        // Streifen 6 = Systemton (nur auf A1, die Boxen), Streifen 1 = Mikro,
-        // das den Systemton gedämpft und verzögert aufnimmt; das Mikro geht
-        // auf B1 (nicht auf A1, sonst rückkoppelt es im Test).
+        // Streifen 1 = Mikro, das den Systemton gedämpft und verzögert
+        // aufnimmt; das Mikro geht auf B1. Die Referenz kommt von den Ports
+        // `echo_ref_L/R` – so, wie sie im Betrieb an den Monitoren der
+        // Ausgabegeräte hängen.
         let p = params();
         let mut dsp = dsp_neu();
         p.set("strip", 0, "send0", 0.0);
@@ -1141,22 +1179,22 @@ mod tests {
         let mut pos = 0usize;
         let (mut mic_p, mut aus_p) = (0.0f64, 0.0f64);
         let bloecke = 48_000 * 6 / block;
+        let mut systemton = vec![0.0f32; block];
         for b in 0..bloecke {
-            for n in 0..block {
+            for (n, ton) in systemton.iter_mut().enumerate().take(block) {
                 zufall ^= zufall << 13;
                 zufall ^= zufall >> 17;
                 zufall ^= zufall << 5;
                 let sys = 0.3 * ((zufall as f32 / u32::MAX as f32) * 2.0 - 1.0);
-                buf.ins[5 * 2][n] = sys;
-                buf.ins[5 * 2 + 1][n] = sys;
-                // A1 gibt den Systemton im selben Sample aus; der Raum
-                // verzögert ihn um 20 ms.
+                *ton = sys;
+                // Der Raum verzögert den Systemton um 20 ms.
                 verlauf[pos] = sys;
                 let echo = 0.4 * verlauf[(pos + 4096 - 960) % 4096];
                 pos = (pos + 1) % 4096;
                 buf.ins[0][n] = echo;
                 buf.ins[1][n] = echo;
             }
+            buf.set_echo_ref(|n| systemton[n]);
             let io = buf.io();
             dsp.process(&p, &io, block);
             if b >= bloecke - 48_000 / block {
@@ -1167,6 +1205,46 @@ mod tests {
             }
         }
         let erle = 10.0 * (mic_p / aus_p).log10();
-        assert!(erle > 25.0, "Echo auf B1 nur um {erle:.1} dB gesenkt");
+        assert!(erle > 15.0, "Echo auf B1 nur um {erle:.1} dB gesenkt");
+    }
+
+    #[test]
+    fn ohne_ausgabegeraet_bleibt_das_mikrofon_unveraendert() {
+        // Keine Referenz gewählt: die Ports sind still, die Echounterdrückung
+        // darf das Signal nicht verbiegen.
+        let p = params();
+        let mut dsp = dsp_neu();
+        p.set("strip", 0, "send0", 0.0);
+        p.set("strip", 0, "send5", 1.0);
+        p.set("bus", 5, "aec", 1.0);
+        // Ein Signal statt Gleichspannung: AEC3 hat einen Hochpass, der
+        // Gleichanteile wegnimmt – das wäre hier nicht die Frage.
+        let mut buf = Buf::new(0.0, 64);
+        let mut zufall = 1u32;
+        let mut verlauf: Vec<f32> = Vec::new();
+        for n in 0..64 {
+            zufall ^= zufall << 13;
+            zufall ^= zufall >> 17;
+            zufall ^= zufall << 5;
+            let v = 0.25 * ((zufall as f32 / u32::MAX as f32) * 2.0 - 1.0);
+            buf.ins[0][n] = v;
+            buf.ins[1][n] = v;
+            verlauf.push(v);
+        }
+        for _ in 0..60 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        // Nach der Verzögerung steht der Pegel unverändert am Ausgang.
+        let pegel =
+            |v: &[f32]| -> f32 { (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt() };
+        // Das Testsignal wiederholt sich alle 64 Samples; damit ist der
+        // Pegel eines Fensters unabhängig davon, um wie viele Samples die
+        // Echounterdrückung verzögert (der verzögerte Block ist eine
+        // zyklische Verschiebung derselben Periode).
+        let ein = pegel(&verlauf);
+        let aus = pegel(&buf.outs[5 * 2]);
+        eprintln!("ein {ein:.4}, aus {aus:.4}");
+        assert!((aus - ein).abs() < 0.1 * ein, "B1 war {aus}, Eingang {ein}");
     }
 }

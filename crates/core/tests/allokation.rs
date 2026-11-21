@@ -2,9 +2,10 @@
 //!
 //! Ein zaehlender Allokator umhuellt das ganze Testprogramm. Gemessen wird
 //! nur das Fenster um `EngineDsp::process` – Aufbau, Presets und Puffer
-//! entstehen vorher. Im Fenster sind Gate und Echounterdrückung (mit FFT und
-//! Filterpartitionen) an allen virtuellen Bussen aktiv: alle Puffer liegen im
-//! DSP-Zustand, `process` baut kein Vec und ruft kein `format!`.
+//! entstehen vorher. Im Fenster sind Gate und Echounterdrückung (AEC3 aus
+//! `sonora`) an allen virtuellen Bussen aktiv, mit einer echten Referenz auf
+//! `echo_ref_L/R`: alle Puffer liegen im DSP-Zustand, `process` baut kein Vec
+//! und ruft kein `format!`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -60,8 +61,8 @@ fn process_allokiert_nichts() {
 
     // Der DSP-Zustand ist gross; er entsteht auf einem eigenen Stapel.
     let mut dsp = std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| Box::new(EngineDsp::new(BLOCK)))
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| Box::new(EngineDsp::new(BLOCK, 48_000)))
         .unwrap()
         .join()
         .unwrap();
@@ -86,9 +87,14 @@ fn process_allokiert_nichts() {
         ins[k][..N].copy_from_slice(&signal);
     }
 
+    // Referenz der Echounterdrückung: was die Boxen spielen (Sinus).
+    let referenz: Vec<f32> = (0..N)
+        .map(|i| 0.2 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48000.0).sin())
+        .collect();
     let mut io = Io {
         ins: [[std::ptr::null(); 2]; STRIPS],
         outs: [[std::ptr::null_mut(); 2]; BUSES],
+        echo_ref: [referenz.as_ptr(), referenz.as_ptr()],
     };
     for k in 0..STRIPS {
         for c in 0..2 {
