@@ -22,6 +22,15 @@
 //! AEC3 schätzt sie selbst (gemessen: 0, 47 und 400 ms eingestellt ändern das
 //! Ergebnis nicht).
 //!
+//! # Rauschunterdrückung (NR)
+//!
+//! Dieselbe `sonora`-Instanz kann auch die Rauschunterdrückung rechnen (Lüfter,
+//! Tastatur, Maus). Sie ist ein **eigener Filter** (`nr`), unabhängig von der
+//! Echounterdrückung: mit `nr` allein läuft nur die Rauschunterdrückung, ohne
+//! Referenz und ohne AEC3. Die Stufe (`nr_stufe`, 0..3) entspricht WebRTCs
+//! `NoiseSuppressionLevel` (6/12/18/21 dB). Der alte Parameter `aec_ns` wird
+//! weiter angenommen und schaltet dieselbe Rauschunterdrückung ein.
+//!
 //! # Kein Allokieren, keine Sperre
 //!
 //! Alle Puffer liegen im [`Echounterdruecker`] und entstehen in
@@ -30,22 +39,34 @@
 //! virtuellen Bussen) und – für `sonora` allein – in
 //! `crates/core/examples/echo_verfahren.rs`.
 
-use sonora::config::{EchoCanceller, NoiseSuppression};
+use sonora::config::{EchoCanceller, NoiseSuppression, NoiseSuppressionLevel};
 use sonora::{AudioProcessing, Config, StreamConfig};
 
-/// Was `sonora` rechnen soll. `ns` schaltet die Rauschunterdrückung nach der
-/// Echounterdrückung an – sie nimmt auch den Restecho mit, den AEC3 stehen
-/// lässt (WebRTC: 6/12/18 dB je Stufe, hier „Moderate"), dreht aber am
-/// Mikrofonklang.
-fn konfiguration(ns: bool) -> Config {
+/// Was `sonora` rechnen soll: Echounterdrückung (`echo`) und/oder
+/// Rauschunterdrückung (`nr`, Stufe 0..3).
+///
+/// Eine Instanz trägt beides, weil `sonora` beides in einem Durchlauf rechnet
+/// (AEC3 → NS). Ist nur NR gewählt, fehlt der Echounterdrücker ganz: dann
+/// braucht es keine Referenz.
+fn konfiguration(echo: bool, nr: bool, stufe: u8) -> Config {
     Config {
-        echo_canceller: Some(EchoCanceller::default()),
-        noise_suppression: if ns {
-            Some(NoiseSuppression::default())
-        } else {
-            None
-        },
+        echo_canceller: echo.then(EchoCanceller::default),
+        noise_suppression: nr.then(|| NoiseSuppression {
+            level: stufe_aus(stufe),
+            ..Default::default()
+        }),
         ..Default::default()
+    }
+}
+
+/// Stufe der Rauschunterdrückung: 0 niedrig (~6 dB), 1 mittel (~12 dB,
+/// Vorgabe), 2 hoch (~18 dB), 3 sehr hoch (~21 dB).
+pub fn stufe_aus(stufe: u8) -> NoiseSuppressionLevel {
+    match stufe {
+        0 => NoiseSuppressionLevel::Low,
+        2 => NoiseSuppressionLevel::High,
+        3 => NoiseSuppressionLevel::VeryHigh,
+        _ => NoiseSuppressionLevel::Moderate,
     }
 }
 
@@ -96,8 +117,12 @@ pub struct Echounterdruecker {
     bruecke_laenge: usize,
     /// So viele Rahmen war die Referenz am Stück still.
     still_seit: u32,
-    /// Läuft die Rauschunterdrückung mit (`aec_ns`)?
-    ns: bool,
+    /// Läuft die Echounterdrückung (`echo`)?
+    echo: bool,
+    /// Läuft die Rauschunterdrückung (`nr`)?
+    nr: bool,
+    /// Stufe der Rauschunterdrückung (0..3).
+    stufe: u8,
 }
 
 impl Echounterdruecker {
@@ -109,11 +134,11 @@ impl Echounterdruecker {
     pub fn neu(abtastrate: u32) -> Echounterdruecker {
         let rahmen = (abtastrate as usize / 1000) * RAHMEN_MS as usize;
         let rahmen = rahmen.clamp(80, RAHMEN_MAX);
-        // Die Rauschunterdrückung bleibt zunächst aus: ECHO soll den
-        // Systemton herausrechnen, nicht am Mikrofonklang drehen. Sie lässt
-        // sich mit [`Echounterdruecker::set_ns`] zuschalten.
+        // Beide Filter sind zunächst aus: ECHO soll den Systemton
+        // herausrechnen, NR soll aufräumen – beides nur auf Wunsch. Sie lassen
+        // sich mit [`Echounterdruecker::set_filter`] zuschalten.
         let mut apm = AudioProcessing::builder()
-            .config(konfiguration(false))
+            .config(konfiguration(false, false, 1))
             .capture_config(StreamConfig::new(abtastrate, 1))
             .render_config(StreamConfig::new(abtastrate, 1))
             .build();
@@ -137,7 +162,9 @@ impl Echounterdruecker {
             // Am Anfang läuft nichts: erst wenn die Referenz laut wird,
             // rechnet AEC3 mit.
             still_seit: STILL_RAHMEN,
-            ns: false,
+            echo: false,
+            nr: false,
+            stufe: 1,
         };
         e.bruecke_laenge = e.rahmen + AEC3_VERZOEGERUNG;
         e
@@ -149,19 +176,35 @@ impl Echounterdruecker {
         self.rahmen + AEC3_VERZOEGERUNG
     }
 
-    /// Rauschunterdrückung zu- oder abschalten (`aec_ns`).
+    /// Echounterdrückung und Rauschunterdrückung schalten (`aec`, `nr`).
     ///
-    /// **Keine Echtzeit-Operation:** beim Umschalten baut `sonora` den
-    /// Rauschunterdrücker einmal neu – das allokiert. Danach ist `process`
+    /// **Keine Echtzeit-Operation:** beim Umschalten baut `sonora` die
+    /// betroffenen Teile einmal neu – das allokiert. Danach ist `process`
     /// wieder frei von Allokationen (`tests/allokation.rs`). Aufgerufen wird
-    /// das aus [`crate::engine::EngineDsp::reconfigure`], und nur wenn sich der
-    /// Schalter gegenüber dem letzten Block geändert hat.
-    pub fn set_ns(&mut self, an: bool) {
-        if an == self.ns {
+    /// das aus [`crate::engine::EngineDsp::reconfigure`], und nur wenn sich
+    /// Schalter oder Stufe gegenüber dem letzten Block geändert haben.
+    pub fn set_filter(&mut self, echo: bool, nr: bool, stufe: u8) {
+        let stufe = stufe.min(3);
+        if echo == self.echo && nr == self.nr && (!nr || stufe == self.stufe) {
             return;
         }
-        self.apm.apply_config(konfiguration(an));
-        self.ns = an;
+        self.apm.apply_config(konfiguration(echo, nr, stufe));
+        self.echo = echo;
+        self.nr = nr;
+        self.stufe = stufe;
+    }
+
+    /// Nur die Rauschunterdrückung schalten (alter Einstieg für Messungen).
+    pub fn set_ns(&mut self, an: bool) {
+        self.set_filter(self.echo, an, self.stufe);
+    }
+
+    /// Wird für dieses Sample überhaupt gerechnet? Ohne NR nur, wenn die
+    /// Referenz etwas spielt (sonst ist das Mikrofon besser unverändert, siehe
+    /// [`STILL_SCHWELLE`]).
+    #[inline]
+    fn verarbeiten(&self) -> bool {
+        self.nr || (self.echo && self.still_seit < STILL_RAHMEN)
     }
 
     /// Länge der Brücke in Samples (= [`Echounterdruecker::verzoegerung`]).
@@ -216,7 +259,7 @@ impl Echounterdruecker {
             } else {
                 0
             };
-            if self.still_seit < STILL_RAHMEN {
+            if self.echo && self.still_seit < STILL_RAHMEN {
                 let _ = self.apm.process_render_f32(
                     &[&self.referenz[..self.rahmen]],
                     &mut [&mut self.scratch[..self.rahmen]],
@@ -230,7 +273,7 @@ impl Echounterdruecker {
         self.mikro_pos += 1;
         if self.mikro_pos == self.rahmen {
             self.mikro_pos = 0;
-            if self.still_seit < STILL_RAHMEN {
+            if self.verarbeiten() {
                 let _ = self.apm.process_capture_f32(
                     &[&self.mikro[..self.rahmen]],
                     &mut [&mut self.scratch[..self.rahmen]],
@@ -244,7 +287,7 @@ impl Echounterdruecker {
         }
 
         // (3) Ausgeben, was vom letzten fertigen Rahmen übrig ist.
-        if self.still_seit < STILL_RAHMEN && self.aus_pos < self.rahmen {
+        if self.verarbeiten() && self.aus_pos < self.rahmen {
             let y = self.aus[self.aus_pos];
             self.aus_pos += 1;
             y
@@ -300,14 +343,51 @@ mod tests {
         v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32
     }
 
+    /// Ein Echounterdrücker mit **eingeschalteter** Echounterdrückung, wie ihn
+    /// der Kern nach dem ersten Block hat.
     fn neu() -> Box<Echounterdruecker> {
         // Der Zustand von AEC3 ist groß: auf dem Heap bauen.
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
-            .spawn(|| Box::new(Echounterdruecker::neu(48_000)))
+            .spawn(|| {
+                let mut d = Box::new(Echounterdruecker::neu(48_000));
+                d.set_filter(true, false, 1);
+                d
+            })
             .unwrap()
             .join()
             .unwrap()
+    }
+
+    #[test]
+    fn rauschunterdrueckung_ohne_echounterdrueckung() {
+        // NR ist ein eigener Filter: ohne `echo` läuft nur `sonora`s
+        // Rauschunterdrückung, ohne Referenz. Zum Vergleich dieselbe Strecke
+        // mit ausgeschaltetem NR (dann geht das Mikrofon unverändert durch).
+        let sr = 48_000usize;
+        let mut r = Rauschen(7);
+        let eingang: Vec<f32> = (0..sr * 3).map(|_| 0.03 * r.next()).collect();
+        let messen = |nr: bool| {
+            let mut d = neu();
+            d.set_filter(false, nr, 2);
+            let mut summe = 0.0f64;
+            let mut n = 0usize;
+            for (i, x) in eingang.iter().enumerate() {
+                let y = d.process(*x, 0.0);
+                if i >= sr * 2 {
+                    summe += (y * y) as f64;
+                    n += 1;
+                }
+            }
+            (summe / n as f64).sqrt() as f32
+        };
+        let ohne = messen(false);
+        let mit = messen(true);
+        assert!(ohne > 0.01, "trockener Weg war still: {ohne}");
+        assert!(
+            mit < ohne * 0.5,
+            "NR hat nichts weggenommen: {ohne:.4} → {mit:.4}"
+        );
     }
 
     #[test]
