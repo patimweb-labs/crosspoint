@@ -1,0 +1,673 @@
+//! Gezeichnete Bausteine des Pults: Faderblock (Skala, Bahn, Griff, Pegel,
+//! Werte), Pan-Drehregler, Schalter, Kopfknöpfe, Chips, Segmentleiste.
+//!
+//! Jeder Baustein liest seine Farben aus dem Theme ([`Farben`]) und seine
+//! Maße aus den Tokens – kein Farbwert, keine Pixelzahl ohne Namen. Werte
+//! kommen herein, eine Änderung geht als Rückgabe hinaus; gespeichert wird
+//! hier nichts.
+
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
+    Vec2, WidgetInfo,
+};
+
+use crate::fmt::{self, fader_pos, pos_db, DB_MAX, DB_MIN};
+use crate::logik::{self, segment_stufe, Stufe, PEGEL_SEGMENTE, SKALA};
+use crate::thema::{self, Farben};
+
+fn mono(groesse: f32) -> FontId {
+    FontId::monospace(groesse)
+}
+
+fn fett(groesse: f32) -> FontId {
+    FontId::new(groesse, thema::fett())
+}
+
+/// Farbe mit Deckkraft.
+pub fn alpha(c: Color32, a: f32) -> Color32 {
+    c.gamma_multiply(a)
+}
+
+/// Rahmen eines Bereichs (Kopf, Tape, Zug, Makros).
+pub fn rahmen(f: &Farben, flaeche: Color32) -> egui::Frame {
+    egui::Frame::new()
+        .fill(flaeche)
+        .stroke(Stroke::new(thema::SIZE_BORDER, f.border_subtle))
+        .corner_radius(CornerRadius::same(thema::RADIUS_MD as u8))
+}
+
+// ------------------------------------------------------------ Faderblock ----
+
+/// Ergebnis einer Faderbedienung.
+pub struct FaderAntwort {
+    pub response: Response,
+    /// Neuer Wert in dB, falls bewegt.
+    pub neu: Option<f32>,
+}
+
+/// Faderblock eines Zugs: Skala links, Bahn mit Füllung und Griff, Pegel
+/// rechts, darunter Verstärkung und Pegel als Zahl.
+///
+/// Bedienung: ziehen, Mausrad (±0,5 dB), Doppelklick → 0 dB, Pfeiltasten bei
+/// Fokus (±0,5 dB, mit Umschalt ±3 dB). Für Screenreader ist er ein Regler
+/// mit Namen und Wert.
+pub fn fader(
+    ui: &mut Ui,
+    f: &Farben,
+    name: &str,
+    groesse: Vec2,
+    gain_db: f32,
+    pegel_db: f32,
+    spitze_db: f32,
+) -> FaderAntwort {
+    let (rect, response) = ui.allocate_exact_size(groesse, Sense::click_and_drag());
+    let pad = thema::SPACE_1;
+    let wert_h = thema::FONT_SIZE_SM + thema::SPACE_1;
+    let top = rect.top() + pad + thema::SPACE_2;
+    let len = (rect.height() - pad * 2.0 - thema::SPACE_2 - wert_h - thema::SPACE_2).max(20.0);
+    let bahn = thema::SIZE_FADER_BAHN;
+    let x_bahn = rect.center().x - bahn * 0.5 - thema::SPACE_1;
+
+    // Bedienung
+    let mut neu = None;
+    let id = response.id;
+    if response.drag_started() {
+        ui.data_mut(|d| d.insert_temp(id, (gain_db, 0.0f32)));
+    }
+    if response.dragged() {
+        let (start, weg) = ui
+            .data(|d| d.get_temp::<(f32, f32)>(id))
+            .unwrap_or((gain_db, 0.0));
+        let weg = weg + response.drag_delta().y;
+        ui.data_mut(|d| d.insert_temp(id, (start, weg)));
+        let w = logik::fader_ziehen(start, weg, len, gain_db);
+        if w != gain_db {
+            neu = Some(w);
+        }
+    }
+    if response.double_clicked() {
+        neu = Some(0.0);
+    }
+    if response.hovered() {
+        let rad = ui.input(|i| i.smooth_scroll_delta.y);
+        if rad.abs() > 0.5 {
+            neu = Some((gain_db + rad.signum() * 0.5).clamp(DB_MIN, DB_MAX));
+        }
+    }
+    if response.has_focus() {
+        let (hoch, runter, gross) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.modifiers.shift,
+            )
+        });
+        let schritt = if gross { 3.0 } else { 0.5 };
+        if hoch {
+            neu = Some((gain_db + schritt).min(DB_MAX));
+        } else if runter {
+            neu = Some((gain_db - schritt).max(DB_MIN));
+        }
+    }
+    let gain = neu.unwrap_or(gain_db);
+    // Fader: senkrecht ziehen (wie in der GTK-Oberfläche).
+    let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+    response.widget_info(|| WidgetInfo::slider(true, gain as f64, format!("{name} Fader dB")));
+
+    let p = ui.painter_at(rect);
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    p.rect_filled(rect, ecke, alpha(f.bg_canvas, 0.75));
+
+    // Bahn und Füllung unterhalb des Griffs
+    let bahn_rect = Rect::from_min_size(Pos2::new(x_bahn, top), Vec2::new(bahn, len));
+    p.rect_filled(bahn_rect, ecke, alpha(f.border_subtle, 0.55));
+    p.rect_filled(bahn_rect.shrink(1.0), ecke, alpha(f.bg_canvas, 0.9));
+    let gy = top + (1.0 - fader_pos(gain)) * len;
+    if gy < top + len - 2.0 {
+        let fuellung = Rect::from_min_max(
+            Pos2::new(x_bahn + 1.0, gy + 2.0),
+            Pos2::new(x_bahn + bahn - 1.0, top + len - 1.0),
+        );
+        p.rect_filled(fuellung, ecke, f.accent_deep);
+    }
+
+    // Skala
+    let skala_rechts = x_bahn - thema::SPACE_1;
+    let platz = skala_rechts - rect.left() - thema::SPACE_2;
+    // Schmale Züge (Busse): die Skala wird kleiner gesetzt statt wegzufallen,
+    // höchstens bis 3/4 der kleinen Schrift (wie in der GTK-Oberfläche).
+    let fs = thema::FONT_SIZE_SM;
+    let fs_skala = (platz / 1.9).min(fs);
+    let breit_genug = fs_skala >= fs * 0.75;
+    for (db, text) in SKALA {
+        let y = top + (1.0 - fader_pos(db)) * len;
+        let haupt = db == 0.0;
+        let farbe = if haupt { f.text_default } else { f.text_muted };
+        let strich = if haupt { 5.0 } else { 3.0 };
+        p.line_segment(
+            [
+                Pos2::new(skala_rechts, y),
+                Pos2::new(skala_rechts + strich, y),
+            ],
+            Stroke::new(
+                if haupt { 1.5 } else { 1.0 },
+                alpha(farbe, if haupt { 0.9 } else { 0.55 }),
+            ),
+        );
+        if breit_genug {
+            p.text(
+                Pos2::new(skala_rechts - thema::SPACE_1, y),
+                Align2::RIGHT_CENTER,
+                text,
+                mono(fs_skala),
+                alpha(farbe, if haupt { 0.95 } else { 0.6 }),
+            );
+        }
+    }
+
+    // Pegel rechts
+    let meter_w = thema::SIZE_PEGEL_BREITE;
+    let meter = Rect::from_min_size(
+        Pos2::new(rect.right() - pad - meter_w - thema::SPACE_1, top),
+        Vec2::new(meter_w, len),
+    );
+    pegelsaeule(&p, f, meter, pegel_db, spitze_db);
+
+    // Griff
+    let griff_w = bahn + thema::SPACE_3;
+    let griff_h = thema::SPACE_3 + 1.0;
+    let griff = Rect::from_center_size(
+        Pos2::new(x_bahn + bahn * 0.5, gy),
+        Vec2::new(griff_w, griff_h),
+    );
+    p.rect_filled(griff, ecke, f.bg_raised);
+    let rand = if response.hovered() || response.dragged() || response.has_focus() {
+        f.focus_ring
+    } else {
+        f.border_strong
+    };
+    p.rect_stroke(
+        griff,
+        ecke,
+        Stroke::new(thema::SIZE_BORDER, rand),
+        StrokeKind::Inside,
+    );
+    p.line_segment(
+        [
+            Pos2::new(griff.left() + 1.0, gy),
+            Pos2::new(griff.right() - 1.0, gy),
+        ],
+        Stroke::new(1.5, f.accent_default),
+    );
+
+    // Werte: Verstärkung | Pegel
+    let unten = rect.bottom() - pad - wert_h;
+    let feld_w = (rect.width() - pad * 2.0 - 1.0) * 0.5;
+    for (i, (text, farbe)) in [
+        (fmt::gain_text(gain), f.text_default),
+        (fmt::db_text(pegel_db), f.accent_default),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let feld = Rect::from_min_size(
+            Pos2::new(rect.left() + pad + i as f32 * (feld_w + 1.0), unten),
+            Vec2::new(feld_w, wert_h),
+        );
+        p.rect_filled(feld, ecke, alpha(f.bg_canvas, 0.85));
+        p.text(feld.center(), Align2::CENTER_CENTER, text, mono(fs), farbe);
+    }
+    if response.has_focus() {
+        p.rect_stroke(
+            rect,
+            ecke,
+            Stroke::new(thema::SIZE_FOCUS, f.focus_ring),
+            StrokeKind::Inside,
+        );
+    }
+
+    FaderAntwort { response, neu }
+}
+
+/// Senkrechte Pegelsäule mit Segmenten und Spitzenmarke.
+pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32) {
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    p.rect_filled(r, ecke, alpha(f.bg_canvas, 0.95));
+    let seg_h = r.height() / PEGEL_SEGMENTE as f32;
+    for i in 0..PEGEL_SEGMENTE {
+        let seg_db = pos_db((i as f32 + 1.0) / PEGEL_SEGMENTE as f32);
+        let y = r.bottom() - (i as f32 + 1.0) * seg_h;
+        let farbe = if seg_db <= db {
+            match segment_stufe(seg_db) {
+                Stufe::Spitze => f.status_warn,
+                Stufe::Laut => alpha(f.status_warn, 0.9),
+                Stufe::Normal => f.accent_default,
+            }
+        } else {
+            alpha(f.border_subtle, 0.26)
+        };
+        let seg = Rect::from_min_size(
+            Pos2::new(r.left() + 1.0, y + 0.6),
+            Vec2::new(r.width() - 2.0, (seg_h - 1.4).max(0.8)),
+        );
+        p.rect_filled(seg, CornerRadius::ZERO, farbe);
+    }
+    if spitze > DB_MIN + 5.0 {
+        let y = r.top() + (1.0 - fader_pos(spitze)) * r.height();
+        p.line_segment(
+            [Pos2::new(r.left() + 1.0, y), Pos2::new(r.right() - 1.0, y)],
+            Stroke::new(1.5, alpha(f.text_default, 0.85)),
+        );
+    }
+}
+
+// ----------------------------------------------------------- Pan-Regler ----
+
+/// Pan-Drehregler mit Kranz (−135°..135°) und Text (`C`, `L40`, `R100`).
+/// Ziehen waagerecht oder senkrecht, Doppelklick → Mitte, Mausrad, Pfeiltasten.
+pub fn pan(ui: &mut Ui, f: &Farben, name: &str, breite: f32, pan: f32) -> (Response, Option<f32>) {
+    let hoehe = thema::SIZE_PAN + thema::SPACE_5;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(breite, hoehe), Sense::click_and_drag());
+    let mut neu = None;
+    if response.dragged() {
+        let d = response.drag_delta();
+        let w = (pan + (d.x - d.y) / 120.0).clamp(-1.0, 1.0);
+        if w != pan {
+            neu = Some(w);
+        }
+    }
+    if response.double_clicked() {
+        neu = Some(0.0);
+    }
+    if response.hovered() {
+        let rad = ui.input(|i| i.smooth_scroll_delta.y);
+        if rad.abs() > 0.5 {
+            neu = Some((pan + rad.signum() * 0.05).clamp(-1.0, 1.0));
+        }
+    }
+    if response.has_focus() {
+        let (l, r) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+            )
+        });
+        if l {
+            neu = Some((pan - 0.1).max(-1.0));
+        } else if r {
+            neu = Some((pan + 0.1).min(1.0));
+        }
+    }
+    let wert = neu.unwrap_or(pan);
+    let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    response.widget_info(|| WidgetInfo::slider(true, wert as f64, format!("{name} Pan")));
+
+    let p = ui.painter_at(rect);
+    p.text(
+        rect.left_top() + Vec2::new(1.0, 0.0),
+        Align2::LEFT_TOP,
+        "PAN",
+        mono(thema::FONT_SIZE_SM),
+        alpha(f.text_muted, 0.85),
+    );
+    let radius = thema::SIZE_PAN * 0.5;
+    let c = Pos2::new(
+        rect.center().x - thema::SPACE_2,
+        rect.bottom() - radius - thema::SPACE_1,
+    );
+    p.circle_filled(c, radius, f.bg_raised);
+    let rand = if response.hovered() || response.has_focus() {
+        f.focus_ring
+    } else {
+        f.border_subtle
+    };
+    p.circle_stroke(c, radius, Stroke::new(thema::SIZE_BORDER, rand));
+    p.circle_filled(c, radius - 3.0, alpha(f.bg_canvas, 0.35));
+    let zeiger = wert.clamp(-1.0, 1.0) * 135.0;
+    for i in 0..=20 {
+        let winkel = -135.0 + i as f32 * 13.5;
+        let aktiv = if zeiger >= 0.0 {
+            (0.0..=zeiger).contains(&winkel)
+        } else {
+            (zeiger..=0.0).contains(&winkel)
+        };
+        let (s, co) = winkel.to_radians().sin_cos();
+        let r1 = radius + 2.0;
+        let r2 = radius + if i % 5 == 0 { 4.5 } else { 3.2 };
+        p.line_segment(
+            [
+                Pos2::new(c.x + s * r1, c.y - co * r1),
+                Pos2::new(c.x + s * r2, c.y - co * r2),
+            ],
+            Stroke::new(
+                1.0,
+                if aktiv {
+                    alpha(f.accent_default, 0.95)
+                } else {
+                    alpha(f.border_strong, 0.55)
+                },
+            ),
+        );
+    }
+    let (s, co) = (wert.clamp(-1.0, 1.0) * 135.0).to_radians().sin_cos();
+    p.line_segment(
+        [
+            Pos2::new(c.x + s * 2.0, c.y - co * 2.0),
+            Pos2::new(c.x + s * (radius - 2.0), c.y - co * (radius - 2.0)),
+        ],
+        Stroke::new(2.0, f.accent_default),
+    );
+    p.text(
+        Pos2::new(c.x + radius + thema::SPACE_2, c.y),
+        Align2::LEFT_CENTER,
+        logik::pan_text(wert),
+        mono(thema::FONT_SIZE_SM),
+        f.text_default,
+    );
+    (response, neu)
+}
+
+// ------------------------------------------------------------- Schalter ----
+
+/// Farbe eines eingeschalteten Schalters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Art {
+    /// Akzent (M, GATE, ECHO, Zuordnung).
+    Akzent,
+    /// Schrift auf Grund (S).
+    Solo,
+    /// Dunkler Akzent (MONO).
+    Tief,
+}
+
+/// Umschalter im Zug: aus = Grund mit Linie, an = gefüllt.
+pub fn schalter(
+    ui: &mut Ui,
+    f: &Farben,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(groesse, Sense::click());
+    response.widget_info(|| WidgetInfo::selected(egui::Role::CheckBox, true, an, text));
+    let (flaeche, linie, schrift) = if an {
+        match art {
+            Art::Akzent => (f.accent_default, f.accent_default, f.text_on_accent),
+            Art::Solo => (f.text_default, f.text_default, f.bg_canvas),
+            Art::Tief => (f.accent_deep, f.accent_deep, f.text_default),
+        }
+    } else if response.hovered() {
+        (f.bg_canvas, f.accent_default, f.text_default)
+    } else {
+        (f.bg_canvas, f.border_subtle, f.text_muted)
+    };
+    let p = ui.painter();
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    p.rect_filled(rect, ecke, flaeche);
+    p.rect_stroke(
+        rect,
+        ecke,
+        Stroke::new(thema::SIZE_BORDER, linie),
+        StrokeKind::Inside,
+    );
+    p.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        fett(thema::FONT_SIZE_SM),
+        schrift,
+    );
+    if response.has_focus() {
+        p.rect_stroke(
+            rect.expand(1.0),
+            ecke,
+            Stroke::new(thema::SIZE_FOCUS, f.focus_ring),
+            StrokeKind::Outside,
+        );
+    }
+    response
+}
+
+/// Gezeichnetes Zeichen (IBM Plex Mono hat keine geometrischen Formen).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zeichen {
+    /// ● Aufnahme, Status
+    Punkt,
+    /// ■ Stopp, Marke
+    Quadrat,
+    /// ▾ eingeklappt umschalten
+    Runter,
+    /// ▸ aufklappen
+    Rechts,
+}
+
+impl Zeichen {
+    /// Führendes Zeichen eines Textes abtrennen: `"● REC"` → (Punkt, `"REC"`).
+    pub fn aus_text(text: &str) -> (Option<Zeichen>, &str) {
+        let mut z = text.chars();
+        let zeichen = match z.next() {
+            Some('●') => Zeichen::Punkt,
+            Some('■') | Some('▪') => Zeichen::Quadrat,
+            Some('▾') => Zeichen::Runter,
+            Some('▸') => Zeichen::Rechts,
+            _ => return (None, text),
+        };
+        (Some(zeichen), z.as_str().trim_start())
+    }
+
+    /// Zeichnet das Zeichen mittig in ein Quadrat der Kante `kante`.
+    pub fn malen(self, p: &egui::Painter, mitte: Pos2, kante: f32, farbe: Color32) {
+        let h = kante * 0.5;
+        match self {
+            Zeichen::Punkt => {
+                p.circle_filled(mitte, h * 0.8, farbe);
+            }
+            Zeichen::Quadrat => {
+                p.rect_filled(
+                    Rect::from_center_size(mitte, Vec2::splat(kante * 0.7)),
+                    CornerRadius::ZERO,
+                    farbe,
+                );
+            }
+            Zeichen::Runter => {
+                p.add(egui::Shape::convex_polygon(
+                    vec![
+                        mitte + Vec2::new(-h, -h * 0.5),
+                        mitte + Vec2::new(h, -h * 0.5),
+                        mitte + Vec2::new(0.0, h * 0.6),
+                    ],
+                    farbe,
+                    Stroke::NONE,
+                ));
+            }
+            Zeichen::Rechts => {
+                p.add(egui::Shape::convex_polygon(
+                    vec![
+                        mitte + Vec2::new(-h * 0.5, -h),
+                        mitte + Vec2::new(h * 0.6, 0.0),
+                        mitte + Vec2::new(-h * 0.5, h),
+                    ],
+                    farbe,
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+}
+
+/// Text mit gezeichnetem Zeichen davor (`● LAEUFT`, Marke `▪`).
+pub fn zeichen_text(
+    ui: &mut Ui,
+    text: &str,
+    font: FontId,
+    farbe: Color32,
+    zeichen_farbe: Color32,
+) -> Response {
+    let (zeichen, rest) = Zeichen::aus_text(text);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(rest.to_string(), font.clone(), farbe);
+    let kante = font.size * 0.6;
+    let luecke = if zeichen.is_some() && !rest.is_empty() {
+        thema::SPACE_1
+    } else {
+        0.0
+    };
+    let z_breite = if zeichen.is_some() {
+        kante + luecke
+    } else {
+        0.0
+    };
+    let groesse = Vec2::new(z_breite + galley.size().x, galley.size().y.max(kante));
+    let (rect, r) = ui.allocate_exact_size(groesse, Sense::hover());
+    r.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, rest));
+    if let Some(z) = zeichen {
+        z.malen(
+            ui.painter(),
+            Pos2::new(rect.left() + kante * 0.5, rect.center().y),
+            kante,
+            zeichen_farbe,
+        );
+    }
+    ui.painter().galley(
+        Pos2::new(
+            rect.left() + z_breite,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        farbe,
+    );
+    r
+}
+
+/// Knopf der Kopf- und Tape-Leiste (`PRESETS`, `● REC`). `an` füllt ihn.
+/// Ein führendes ●/■/▾/▸ wird gezeichnet, nicht gesetzt.
+pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Response {
+    let font = fett(thema::FONT_SIZE_SM);
+    let (zeichen, rest) = Zeichen::aus_text(text);
+    let kante = thema::FONT_SIZE_SM * 0.6;
+    let z_breite = if zeichen.is_some() {
+        kante + thema::SPACE_1
+    } else {
+        0.0
+    };
+    let text_breite = ui
+        .painter()
+        .layout_no_wrap(rest.to_string(), font.clone(), f.text_default)
+        .size()
+        .x;
+    let breite = z_breite + text_breite + thema::SPACE_4 + thema::SPACE_1;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(breite, thema::SIZE_CONTROL_MD), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, rest));
+    let (flaeche, linie, schrift) = match an {
+        Some(c) => (c, c, f.text_on_accent),
+        None if response.hovered() => (f.bg_canvas, f.accent_default, f.text_default),
+        None => (f.bg_canvas, f.border_subtle, f.text_default),
+    };
+    let p = ui.painter();
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    p.rect_filled(rect, ecke, flaeche);
+    p.rect_stroke(
+        rect,
+        ecke,
+        Stroke::new(thema::SIZE_BORDER, linie),
+        StrokeKind::Inside,
+    );
+    let links = rect.center().x - (z_breite + text_breite) * 0.5;
+    if let Some(z) = zeichen {
+        z.malen(
+            p,
+            Pos2::new(links + kante * 0.5, rect.center().y),
+            kante,
+            schrift,
+        );
+    }
+    p.text(
+        Pos2::new(links + z_breite, rect.center().y),
+        Align2::LEFT_CENTER,
+        rest,
+        font,
+        schrift,
+    );
+    if response.has_focus() {
+        p.rect_stroke(
+            rect.expand(1.0),
+            ecke,
+            Stroke::new(thema::SIZE_FOCUS, f.focus_ring),
+            StrokeKind::Outside,
+        );
+    }
+    response
+}
+
+/// Chip in der Kopfleiste: `SR 48.0 kHz`.
+pub fn chip(ui: &mut Ui, f: &Farben, schluessel: &str, wert: &str) {
+    let font = mono(thema::FONT_SIZE_SM);
+    let k = ui
+        .painter()
+        .layout_no_wrap(schluessel.to_string(), font.clone(), f.text_muted);
+    let w = ui
+        .painter()
+        .layout_no_wrap(wert.to_string(), font, f.text_default);
+    let innen = Vec2::new(k.size().x + thema::SPACE_1 + w.size().x, k.size().y);
+    let (rect, r) =
+        ui.allocate_exact_size(innen + Vec2::new(2.0 * thema::SPACE_2, 4.0), Sense::hover());
+    r.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, format!("{schluessel} {wert}")));
+    let p = ui.painter();
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    p.rect_filled(rect, ecke, f.bg_canvas);
+    p.rect_stroke(
+        rect,
+        ecke,
+        Stroke::new(thema::SIZE_BORDER, f.border_subtle),
+        StrokeKind::Inside,
+    );
+    let links = Pos2::new(rect.left() + thema::SPACE_2, rect.top() + 2.0);
+    let kb = k.size().x;
+    p.galley(links, k, f.text_muted);
+    p.galley(
+        links + Vec2::new(kb + thema::SPACE_1, 0.0),
+        w,
+        f.text_default,
+    );
+}
+
+/// Waagerechte Segmentleiste (Tape-Pegel).
+pub fn segmentleiste(ui: &mut Ui, f: &Farben, db: f32, segmente: usize) {
+    let seg_w = 3.0;
+    let groesse = Vec2::new(segmente as f32 * (seg_w + 1.0), thema::SPACE_3 - 3.0);
+    let (rect, _) = ui.allocate_exact_size(groesse, Sense::hover());
+    let p = ui.painter();
+    for i in 0..segmente {
+        let seg_db = pos_db((i as f32 + 1.0) / segmente as f32);
+        let spitze = i + 3 >= segmente;
+        let farbe = match (seg_db <= db, spitze) {
+            (true, true) => f.status_warn,
+            (true, false) => f.accent_default,
+            _ => f.border_subtle,
+        };
+        let x = rect.left() + i as f32 * (seg_w + 1.0);
+        p.rect_filled(
+            Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(seg_w, rect.height())),
+            CornerRadius::ZERO,
+            farbe,
+        );
+    }
+}
+
+/// Kleiner Kopftext (`8×8 DIGITAL MIXER`).
+pub fn text(f: &Farben, inhalt: &str, fett_: bool, gedaempft: bool) -> egui::RichText {
+    let font = if fett_ {
+        fett(thema::FONT_SIZE_SM)
+    } else {
+        mono(thema::FONT_SIZE_SM)
+    };
+    egui::RichText::new(inhalt).font(font).color(if gedaempft {
+        f.text_muted
+    } else {
+        f.text_default
+    })
+}

@@ -149,6 +149,7 @@ pub fn abgleich(
     zugriff: &dyn Zugriff,
     map: &mut DeviceMap,
     inputs_pfad: &Path,
+    echo_pfad: &Path,
     gemeldet: &mut BTreeSet<String>,
 ) -> Vec<String> {
     let Ok(graph) = zugriff.graph() else {
@@ -221,6 +222,30 @@ pub fn abgleich(
         }
     }
 
+    // ----- Echo-Referenz -----
+    for name in crate::echo::auswahl_mit(echo_pfad) {
+        let marke = format!("Echo:{name}");
+        if graph.knoten(&name).is_none() {
+            for (von, nach) in crate::echo::ports_zu(&name) {
+                let _ = zugriff.trennen(&von, &nach);
+            }
+            if gemeldet.insert(marke) {
+                zeilen.push(format!(
+                    "Geraet weg: {name} -> Echo-Referenz (Auswahl bleibt, Zustand 'fehlt')"
+                ));
+            }
+            continue;
+        }
+        gemeldet.remove(&marke);
+        if crate::echo::ist_verbunden(&graph, &name) {
+            continue;
+        }
+        match crate::echo::verbinden(zugriff, &graph, &name) {
+            Ok(()) => zeilen.push(format!("Geraet wieder da: {name} -> Echo-Referenz")),
+            Err(e) => zeilen.push(format!("Echo-Referenz auf '{name}' nicht verbindbar: {e}")),
+        }
+    }
+
     zeilen
 }
 
@@ -231,6 +256,7 @@ pub fn abgleich(
 /// wer das Wiederherstellen abschaltet, will auch keine automatischen
 /// Zuordnungen.
 pub fn spawn_wache(devices: Arc<Mutex<DeviceMap>>, inputs_pfad: PathBuf) {
+    let echopfad = crate::echo::datei_pfad();
     if crate::restore::deaktiviert() {
         println!("Geraetewache abgeschaltet (CROSSPOINT_NO_RESTORE)");
         return;
@@ -253,7 +279,7 @@ pub fn spawn_wache(devices: Arc<Mutex<DeviceMap>>, inputs_pfad: PathBuf) {
                 Ok(m) => m,
                 Err(vergiftet) => vergiftet.into_inner(),
             };
-            for zeile in abgleich(&zugriff, &mut map, &inputs_pfad, &mut gemeldet) {
+            for zeile in abgleich(&zugriff, &mut map, &inputs_pfad, &echopfad, &mut gemeldet) {
                 println!("{zeile}");
             }
         }
@@ -275,6 +301,13 @@ mod tests {
 
     fn tmp(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("crosspoint-wache-{}-{tag}", std::process::id()))
+    }
+
+    /// Pfad der Echo-Auswahl: leer, ausser der Test schreibt etwas hinein.
+    fn echo(tag: &str) -> PathBuf {
+        let p = tmp(&format!("echo-{tag}.json"));
+        let _ = std::fs::remove_file(&p);
+        p
     }
 
     /// Graph ohne das Mikrofon: der Sink und der Mixer bleiben, der Streifen
@@ -367,7 +400,7 @@ mod tests {
         // Erster Durchgang: Mikrofon fehlt -> nur eine Meldung, kein Verbinden.
         let zugriff = Wandelzugriff::neu(ohne_mic());
         let mut gemeldet = BTreeSet::new();
-        let zeilen = abgleich(&zugriff, &mut map, &pfad, &mut gemeldet);
+        let zeilen = abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet);
         assert_eq!(zeilen.len(), 1, "{zeilen:?}");
         assert!(zeilen[0].contains("Geraet weg"), "{zeilen:?}");
         assert!(zeilen[0].contains("Streifen 1"), "{zeilen:?}");
@@ -387,12 +420,12 @@ mod tests {
         );
 
         // Zweiter Durchgang ohne Änderung: keine neue Meldung.
-        let zeilen = abgleich(&zugriff, &mut map, &pfad, &mut gemeldet);
+        let zeilen = abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet);
         assert!(zeilen.is_empty(), "{zeilen:?}");
 
         // Gerät steckt wieder: Graph mit Mikrofon und Ports, aber ohne Link.
         zugriff.setzen(Graph::parse(DUMP_GEPLUGT).unwrap());
-        let zeilen = abgleich(&zugriff, &mut map, &pfad, &mut gemeldet);
+        let zeilen = abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet);
         assert_eq!(zeilen.len(), 1, "{zeilen:?}");
         assert_eq!(zeilen[0], format!("Geraet wieder da: {MIC} -> Streifen 1"));
         let aktionen = zugriff.aktionen();
@@ -406,7 +439,7 @@ mod tests {
         );
 
         // Und danach ist Ruhe: die Zuordnung steht.
-        assert!(abgleich(&zugriff, &mut map, &pfad, &mut gemeldet).is_empty());
+        assert!(abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet).is_empty());
         let _ = std::fs::remove_file(&pfad);
         let _ = std::fs::remove_file(&map_pfad);
     }
@@ -421,12 +454,12 @@ mod tests {
         let zugriff = Wandelzugriff::neu(Graph::parse(DUMP).unwrap());
         let mut gemeldet = BTreeSet::new();
         // Zuerst steht alles: kein Eingriff.
-        assert!(abgleich(&zugriff, &mut map, &pfad, &mut gemeldet).is_empty());
+        assert!(abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet).is_empty());
         assert!(zugriff.aktionen().is_empty());
 
         // Beide Geräte verschwinden.
         zugriff.setzen(Graph::parse(LEER).unwrap());
-        let zeilen = abgleich(&zugriff, &mut map, &pfad, &mut gemeldet);
+        let zeilen = abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet);
         assert_eq!(zeilen.len(), 2, "{zeilen:?}");
         assert!(
             zeilen.iter().all(|z| z.contains("Geraet weg")),
@@ -474,7 +507,7 @@ mod tests {
         std::fs::write(&pfad, "").unwrap();
         let zugriff = Wandelzugriff::neu(Graph::parse(DUMP).unwrap());
         let mut gemeldet = BTreeSet::new();
-        assert!(abgleich(&zugriff, &mut map, &pfad, &mut gemeldet).is_empty());
+        assert!(abgleich(&zugriff, &mut map, &pfad, &echo("abgleich"), &mut gemeldet).is_empty());
         assert!(zugriff.aktionen().is_empty(), "{:?}", zugriff.aktionen());
         let _ = std::fs::remove_file(&pfad);
         let _ = std::fs::remove_file(&map_pfad);

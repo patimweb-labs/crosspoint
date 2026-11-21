@@ -30,3 +30,11 @@ pipewire = "0.10"
 # Kleine Runtime im Registry-Thread (src/pw.rs): Ereignisse einsammeln,
 # ohne die HTTP-Schicht zu blockieren. Nur rt + time, kein Netzwerk.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+# Echounterdrueckung (src/aec.rs): WebRTCs AudioProcessing als reines Rust
+# (AEC3, BSD-3). Kein C, keine weiteren Systembibliotheken; kostet je Kanal
+# 0,4 % eines Kerns und allokiert im Callback nichts (tests/allokation.rs).
+sonora = "0.3"
+
+[dev-dependencies]
+# Nur fuer die Beispiele (WAV lesen und schreiben).
+hound = "3.5"

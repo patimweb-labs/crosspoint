@@ -4,6 +4,56 @@ Stand: 2026-10-29. Erledigt ist alles bis Release `v0.2.0` (natives Fenster,
 Zustand merken, Autostart, Tray). Diese Liste ist die Arbeitsgrundlage für das,
 was noch fehlt — sortiert nach Nutzen pro Aufwand.
 
+## Stand 2026-11-21 (Umbau)
+
+Erledigt:
+
+- [x] **Rohsignal an den Eingängen**: EQ, Kompressor, Gate, NR, TK, Lowcut,
+      Effektwege und Inserts sind aus den Kanalzügen und den Hardware-Bussen
+      entfernt (ADR 0002).
+- [x] **Noise Gate und Echounterdrückung an B1–B3** (`crates/core/src/aec.rs`),
+      Referenz = Ausgang eines Hardware-Busses (ab Werk A1).
+- [x] **Fenster in egui** statt GTK4 (`crates/fenster`, ADR 0003), Bilder aus
+      dem Oberflächentest, alle drei Themes.
+- [x] **Pakete**: Flatpak (Freedesktop-Runtime), AppImage, tar.gz (ADR 0004).
+- [x] Tray mit `ksni`; mit Tray schließt der Fensterknopf nur das Fenster,
+      ein zweiter Start holt das Fenster der laufenden Instanz.
+
+- [x] **Echo-Referenz vom Ausgabegerät** statt vom A-Bus: Monitore der
+      gewählten Geräte auf `echo_ref_L/R`, Auswahl in `echo.json`,
+      Häkchen je Gerät im ECHO-Menü (ADR 0005).
+- [x] **AEC3 statt eigenem Filter** (`sonora`, reines Rust): 21 dB statt 2,4 dB
+      bei getrennten Uhren, 0 Allokationen im Callback (ADR 0005).
+
+Offen:
+
+- [ ] **Einzelne Programme als Echo-Referenz wählbar:** heute hängt die
+      Referenz am Ausgabegerät (Monitor des Sinks) – alles, was dort landet,
+      ist in der Referenz. Wer nur den Browser herausrechnen will und den
+      Rest (Spiel, Musik) behalten möchte, braucht den Ton je Anwendung statt
+      je Gerät: `pw-dump` liefert Streams (`media.class: Stream/Output/Audio`)
+      mit eigenem `node.name`; sie ließen sich wie Sinks behandeln
+      (Monitor gibt es dort nicht, dafür den Stream-Ausgang direkt abgreifen
+      und auf `echo_ref_L/R` legen). Offene Fragen: welche Streams sind
+      stabil benannt, wie wird die Auswahl gespeichert, was passiert bei
+      einem Stream-Neustart.
+- [x] **Restecho-Unterdrückung als Schalter je Bus**: `aec_ns` an B1–B3,
+      Häkchen „RESTECHO MIT WEGRECHNEN“ im ECHO-Menü, Vorgabe aus. Messung:
+      +12–13 dB auf allen Pfaden (`echo_verfahren`), im eingeschwungenen
+      Zustand weiter 0 Allokationen im Callback. Offen bleibt die Abnahme am
+      echten Mikrofon: ob der rauere Klang bei Sprache akzeptabel ist, lässt
+      sich nur mit Aufnahme beurteilen.
+- [ ] Echounterdrückung mit echten Boxen und Mikrofon abhören: die
+      Entscheidung stützt sich auf den nachgebauten Pfad und die frühere
+      Feldmessung (1,5 dB gegen 30 dB), nicht auf eine eigene Aufnahme mit
+      AEC3 im Raum. Der Restecho-Schalter gehört in diese Abnahme.
+- [ ] Flatpak einmal vollständig mit `flatpak-builder` bauen (lokal fehlt
+      `org.freedesktop.Sdk//25.08`; die CI baut es).
+- [ ] AppImage lokal bauen und auf einer zweiten Distribution starten.
+- [ ] `web/index.html` (Web-Fernbedienung) zeigt noch EQ/COMP/GATE/NR an den
+      Eingängen; die Engine lehnt diese Werte ab. Auf Rohsignal + Filter an
+      B1–B3 umstellen.
+
 ## 0. Stand 2026-11-14 (Fehlerrunde)
 
 Erledigt in dieser Runde:
@@ -91,12 +141,10 @@ Nachgezogen am 2026-11-15:
 
 ## 5. Verpackung und Vertrieb
 
-- [ ] **macOS**: CoreAudio-Backend statt JACK, `.dmg`-Job, Signierung
-      (ohne Signatur „Right-click → Open" dokumentieren)
 - [ ] **Flathub-Einreichung**: Metainfo ist da, Screenshots im Repo,
       Einreichung als PR gegen `flathub/flathub`
 - [x] **Host-Betrieb ohne Flatpak** ebenfalls nativ: `crosspoint-launch.sh`
-      startet `crosspoint` (GTK4, `cargo build --release --features ui`)
+      startet `crosspoint` (`cargo build --release --features ui`)
 - [ ] release-please-Kette einmal komplett durchlaufen lassen
       (Feature-Commit → Release-PR → Merge), bisher wird per Tag ausgelöst
 
@@ -106,10 +154,14 @@ Nachgezogen am 2026-11-15:
 - [x] Brave-Reste des alten Fensterpfads entfernt: `crosspoint-launch.sh`
       startet das native Fenster, `crosspoint-browser-prefs.sh` und
       `tools/fenster_screenshot.py` (CDP gegen Brave) sind weg (2026-11-15)
-- [x] Tray im nativen Fenster (`crosspoint --minimized`, `crates/ui-gtk/src/tray.rs`);
-      `crosspoint-fenster` bleibt nur Rückfall (2026-11-15)
+- [x] Tray im nativen Fenster (`crosspoint --minimized`, seit 2026-11-21
+      `crates/fenster/src/tray.rs`); der WebKit-Rückfall `crosspoint-fenster`
+      ist entfernt
 
 ## Nicht geplant (bewusste Entscheidung)
+
+- **Windows und macOS**: ausgeliefert wird nur für Linux (Flatpak, AppImage,
+  tar.gz), siehe `docs/architektur.md`.
 
 - **Eigenes VST-Hosting**: VST3-SDK, Plugin-Scan, GUI-Einbettung, Sandboxing —
   Wochen Arbeit. Carla macht das seit Jahren; wir verdrahten es.

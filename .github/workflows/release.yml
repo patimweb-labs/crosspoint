@@ -5,8 +5,9 @@ name: Release
 # Workflow baut die Pakete und haengt sie an.
 #
 # Zwei getrennte Paket-Jobs, weil die Umgebungen sich ausschliessen:
-#   flatpak    braucht den GNOME-Container (flatpak-builder, Runtime, WebKit)
-#   tarball    braucht apt und libjack auf einem normalen Ubuntu-Runner
+#   flatpak    braucht den Freedesktop-Container (flatpak-builder, Runtime)
+#   tarball    baut auf einem normalen Ubuntu-Runner: tar.gz und AppImage
+#              (packaging/linux/paket.sh)
 # In einem Job scheitert beides: im Container gibt es kein apt, auf dem Runner
 # kein vorinstalliertes flatpak-builder.
 
@@ -124,18 +125,18 @@ jobs:
       - name: Bauen
         run: cargo build --release --locked
       - name: Oberflaeche bauen
+        run: cargo build --release --locked --features ui --bin crosspoint
+      # appimagetool laeuft selbst als AppImage; ohne FUSE entpackt es sich.
+      - name: appimagetool
         run: |
-          sudo apt-get install -y -qq libgtk-4-dev
-          cargo build --release --locked --features ui --bin crosspoint
-      - name: Paket schnueren
-        run: |
-          mkdir -p dist
-          cp target/release/crosspoint-engine dist/
-          cp target/release/crosspoint dist/
-          cp scripts/crosspoint-launch.sh scripts/crosspoint-start.sh scripts/crosspoint-wire.sh dist/
-          cp packaging/linux/de.weppelmann.Crosspoint.desktop dist/
-          cp docs/brand/crosspoint-icon-1024.png dist/crosspoint.png
-          tar -C dist -czf "crosspoint-${VERSION}-linux-x86_64.tar.gz" .
+          sudo apt-get install -y -qq file
+          curl -fsSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo install -m755 appimagetool /usr/local/bin/appimagetool
+      - name: Pakete schnueren (tar.gz, AppImage)
+        env:
+          OHNE_BAU: "1"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: packaging/linux/paket.sh
       - uses: actions/upload-artifact@v4
         with:
           name: engine
@@ -145,7 +146,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tarball
-          path: crosspoint-*.tar.gz
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
 
   attach:
     # Wartet auf beide Paket-Jobs. Faellt einer aus, wird trotzdem
@@ -161,7 +165,7 @@ jobs:
       - name: Pakete pruefen
         run: |
           find pakete -type f -printf '%p %s Bytes\n'
-          anzahl=$(find pakete -type f \( -name '*.tar.gz' -o -name '*.flatpak' \) | wc -l)
+          anzahl=$(find pakete -type f \( -name '*.tar.gz' -o -name '*.flatpak' -o -name '*.AppImage' \) | wc -l)
           echo "Pakete gefunden: $anzahl"
           if [ "$anzahl" -eq 0 ]; then
             echo "Keine Pakete im Artefakt - Abbruch statt stillem Erfolg"; exit 1
@@ -177,6 +181,6 @@ jobs:
           # findet ihn aber. Fehlt er ganz, wird er veroeffentlicht angelegt.
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag
-          find pakete -type f \( -name '*.tar.gz' -o -name '*.flatpak' \) -print0 |
+          find pakete -type f \( -name '*.tar.gz' -o -name '*.flatpak' -o -name '*.AppImage' \) -print0 |
             xargs -0 gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber
           gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false

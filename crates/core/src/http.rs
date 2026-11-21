@@ -393,25 +393,6 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
                 }
             }
         }
-        ("GET", p) if p.starts_with("/api/eq") => {
-            let strip: usize = p
-                .split("strip=")
-                .nth(1)
-                .and_then(|s| s.split(&['&', ' '][..]).next())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            match params.eq_json(strip) {
-                Some(v) => {
-                    let body = v.to_json();
-                    reply("200 OK", "application/json", body.as_bytes())
-                }
-                None => reply(
-                    "404 Not Found",
-                    "application/json",
-                    b"{\"error\":\"strip\"}",
-                ),
-            }
-        }
         ("GET", p) if p.starts_with("/api/inputs") => {
             let mit = p.contains("monitors=1");
             let body = crate::inputs::status_json(&PipeWire, mit);
@@ -475,6 +456,39 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             };
             reply("200 OK", "application/json", body.as_bytes())
         }
+        // Echo-Referenz: welche Ausgabegeräte spielen auf den Boxen?
+        ("GET", p) if p.starts_with("/api/echo") => {
+            let body = crate::echo::status_json(&PipeWire);
+            reply("200 OK", "application/json", body.as_bytes())
+        }
+        ("POST", p) if p.starts_with("/api/echo") => {
+            let v = json::parse(body).unwrap_or(Value::Null);
+            // Angenommen wird `{"geraete":["<node.name>", …]}`; `null` oder
+            // eine fehlende Liste hebt die Auswahl auf.
+            let geraete: Vec<String> = v
+                .get("geraete")
+                .and_then(|x| match x {
+                    Value::Arr(a) => Some(a.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Value::Str(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                    _ => None,
+                })
+                .collect();
+            let out = match crate::echo::setzen(&PipeWire, &geraete) {
+                Ok(fehler) => {
+                    for e in fehler {
+                        eprintln!("Echo-Referenz: {e}");
+                    }
+                    crate::echo::status_json(&PipeWire)
+                }
+                Err(e) => format!("{{\"error\":{}}}", json::quote(&e)),
+            };
+            reply("200 OK", "application/json", out.as_bytes())
+        }
         ("GET", p) if p.starts_with("/api/restore") => {
             let body = match restore.lock() {
                 Ok(e) => e.to_json(),
@@ -501,13 +515,15 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", ergebnis.to_json().as_bytes())
         }
         // Effekt-Host (mod-host): Ketten, Bypass und Host-Status.
-        ("GET", p) if p.starts_with("/api/fx") => {
-            let body = crate::fx::api_json().to_json();
-            reply("200 OK", "application/json", body.as_bytes())
-        }
         ("GET", p) if p.starts_with("/api/autostart") => {
             let body = crate::autostart::status_json();
             reply("200 OK", "application/json", body.as_bytes())
+        }
+        // Ein zweiter Start (Launcher, Menü) bittet die laufende Instanz um
+        // ihr Fenster, statt eine zweite Engine zu starten.
+        ("POST", p) if p.starts_with("/api/fenster") => {
+            FENSTER_WUNSCH.store(true, std::sync::atomic::Ordering::Relaxed);
+            reply("200 OK", "application/json", br#"{"ok":true}"#)
         }
         ("POST", p) if p.starts_with("/api/autostart") => {
             let wunsch = json::parse(body)
@@ -605,60 +621,23 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
 }
 
 /// Preset anwenden: alle im JSON vorhandenen Felder werden gesetzt.
+///
+/// Ältere Presets mit Filtern an den Streifen (EQ, Comp, Gate, NR …) laden
+/// weiter – diese Felder gibt es nicht mehr, `Params::set` lehnt sie ab.
 pub fn apply_preset(params: &Arc<Params>, v: &Value) {
+    let zahl = |x: &Value| match x {
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        anders => anders.as_f64().map(|f| f as f32),
+    };
     if let Some(strips) = v.get("strips").and_then(|x| x.as_arr()) {
         for (i, s) in strips.iter().enumerate() {
-            for key in ["gain", "pan"] {
-                if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
-                    params.set("strip", i, key, x as f32);
-                }
-            }
-            for key in [
-                "mute", "solo", "mono", "eq", "comp", "gate", "denoiser", "nr_gate", "tk",
-            ] {
-                if let Some(b) = s.get(key).and_then(|x| x.as_bool()) {
-                    params.set("strip", i, key, if b { 1.0 } else { 0.0 });
-                }
-            }
-            // Zahlenwerte der neuen Stufen: Lowcut, TK, NR und Gate.
-            for key in [
-                "lowcut",
-                "tk_schwelle",
-                "tk_tiefe",
-                "nr",
-                "nr_schwelle",
-                "nr_modus",
-                "gate_schwelle",
-                "gate_hold",
-                "gate_tiefe",
-                "gate_attack",
-                "gate_release",
-                "comp_threshold",
-                "comp_ratio",
-                "comp_attack",
-                "comp_release",
-                "comp_knee",
-                "comp_gain_in",
-                "comp_gain_out",
-            ] {
-                if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
-                    params.set("strip", i, key, x as f32);
+            for key in ["gain", "pan", "mute", "solo", "mono"] {
+                if let Some(x) = s.get(key).and_then(zahl) {
+                    params.set("strip", i, key, x);
                 }
             }
             if let Some(Value::Str(name)) = s.get("label") {
                 params.set_text("strip", i, "label", name);
-            }
-            if let Some(cells) = s.get("eq_cells").and_then(|x| x.as_arr()) {
-                for (c, cell) in cells.iter().enumerate() {
-                    if let Some(an) = cell.get("on").and_then(|x| x.as_bool()) {
-                        params.set("strip", i, &format!("eq{c}_on"), if an { 1.0 } else { 0.0 });
-                    }
-                    for feld in ["type", "freq", "q", "gain"] {
-                        if let Some(x) = cell.get(feld).and_then(|x| x.as_f64()) {
-                            params.set("strip", i, &format!("eq{c}_{feld}"), x as f32);
-                        }
-                    }
-                }
             }
             if let Some(sends) = s.get("sends").and_then(|x| x.as_arr()) {
                 for (b, sv) in sends.iter().enumerate() {
@@ -671,18 +650,19 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
     }
     if let Some(buses) = v.get("buses").and_then(|x| x.as_arr()) {
         for (i, b) in buses.iter().enumerate() {
-            if let Some(x) = b.get("gain").and_then(|x| x.as_f64()) {
-                params.set("bus", i, "gain", x as f32);
+            for key in ["gain", "trim", "mute", "mono", "mode", "cross"] {
+                if let Some(x) = b.get(key).and_then(zahl) {
+                    params.set("bus", i, key, x);
+                }
             }
-            if let Some(x) = b.get("delay_ms").and_then(|x| x.as_f64()) {
-                params.set("bus", i, "delay", x as f32);
+            if let Some(x) = b.get("delay_ms").and_then(zahl) {
+                params.set("bus", i, "delay", x);
             }
-            if let Some(x) = b.get("trim").and_then(|x| x.as_f64()) {
-                params.set("bus", i, "trim", x as f32);
-            }
-            for key in ["mute", "mono", "eq", "limiter"] {
-                if let Some(x) = b.get(key).and_then(|x| x.as_bool()) {
-                    params.set("bus", i, key, if x { 1.0 } else { 0.0 });
+            if let Some(f) = b.get("filter") {
+                for key in crate::engine::FILTER_PARAMS {
+                    if let Some(x) = f.get(key).and_then(zahl) {
+                        params.set("bus", i, key, x);
+                    }
                 }
             }
             if let Some(Value::Str(name)) = b.get("label") {
@@ -695,6 +675,16 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
 /// Zeitpunkt der letzten Anfrage (ms seit UNIX-Epoche) - die Engine beendet
 /// sich, wenn die Oberflaeche laenger weg ist, damit die virtuellen Geraete
 /// nicht als Leichen im System stehen bleiben.
+/// Jemand möchte das Fenster sehen (`POST /api/fenster`). Das Fenster
+/// holt den Wunsch ab ([`fenster_gewuenscht`]).
+pub static FENSTER_WUNSCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Liefert einen offenen Fensterwunsch genau einmal.
+pub fn fenster_gewuenscht() -> bool {
+    FENSTER_WUNSCH.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub static LETZTE_ANFRAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn setze_anfrage() {
@@ -986,15 +976,67 @@ mod tests {
     }
 
     #[test]
-    fn pegel_und_eq_wege() {
+    fn fensterwunsch_wird_einmal_abgeholt() {
+        let z = zustand();
+        let a = route(&z, "POST", "/api/fenster", "");
+        assert_eq!(a.status, 200);
+        assert!(fenster_gewuenscht());
+        assert!(!fenster_gewuenscht());
+    }
+
+    #[test]
+    fn pegel_weg() {
         let z = zustand();
         let a = route(&z, "GET", "/api/levels", "");
         assert_eq!(text(&a), z.params.levels_json());
+        // Die EQ-Abfrage gibt es nicht mehr: Streifen haben keine Filter.
         let a = route(&z, "GET", "/api/eq?strip=0", "");
-        assert!(text(&a).contains(r#""cells""#));
-        let a = route(&z, "GET", "/api/eq?strip=99", "");
         assert_eq!(a.status, 404);
-        assert_eq!(text(&a), r#"{"error":"strip"}"#);
+    }
+
+    #[test]
+    fn altes_preset_laedt_und_filter_bleiben_im_preset() {
+        let z = zustand();
+        let alt = crate::json::parse(
+            r#"{"strips":[{"gain":-3,"eq":true,"comp":true,"gate_schwelle":-30,
+                "sends":[0,1,0,0,0,1,0,0]}],
+                "buses":[{"limiter":true,"mode":3},{},{},{},{},
+                {"filter":{"gate":true,"gate_schwelle":-38,"aec":true,"aec_ref":1}}]}"#,
+        )
+        .unwrap();
+        apply_preset(&z.params, &alt);
+        let bild = z.params.to_json();
+        let s0 = &bild.get("strips").unwrap().as_arr().unwrap()[0];
+        assert_eq!(s0.get("gain").and_then(|x| x.as_f64()), Some(-3.0));
+        assert!(s0.get("eq").is_none() && s0.get("comp").is_none());
+        let busse = bild.get("buses").unwrap().as_arr().unwrap();
+        assert_eq!(busse[0].get("mode").and_then(|x| x.as_f64()), Some(3.0));
+        assert_eq!(busse[0].get("filter"), Some(&Value::Null));
+        let f = busse[5].get("filter").unwrap();
+        assert_eq!(f.get("gate"), Some(&Value::Bool(true)));
+        assert_eq!(f.get("gate_schwelle").and_then(|x| x.as_f64()), Some(-38.0));
+        assert_eq!(f.get("aec"), Some(&Value::Bool(true)));
+        // `aec_ref` aus alten Presets wird übergangen: die Referenz kommt
+        // jetzt vom Ausgabegerät (siehe src/echo.rs).
+        assert!(f.get("aec_ref").is_none(), "{f:?}");
+        // Rundreise: das eigene Bild wieder einspielen ändert nichts.
+        let vorher = bild.to_json();
+        apply_preset(&z.params, &bild);
+        assert_eq!(z.params.to_json().to_json(), vorher);
+    }
+
+    #[test]
+    fn echo_referenz_hat_einen_endpunkt() {
+        // `GET /api/echo` meldet Auswahl und Ausgabegeraete. Ohne PipeWire
+        // bleibt die Liste leer und `error` sagt warum – der Endpunkt
+        // antwortet trotzdem.
+        let z = zustand();
+        let a = route(&z, "GET", "/api/echo", "");
+        assert_eq!(a.status, 200);
+        let wert = crate::json::parse(&text(&a)).unwrap();
+        assert!(wert.get("geraete").is_some(), "{}", text(&a));
+        assert!(wert.get("ausgabegeraete").is_some(), "{}", text(&a));
+        assert!(wert.get("error").is_some(), "{}", text(&a));
     }
 
     #[test]

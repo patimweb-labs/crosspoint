@@ -30,8 +30,8 @@ Pult-Modell gewohnt sind, aber kein Windows mehr starten wollen.
    Komponenten sind Fehler.
 7. **Drei Themes, sonst nichts:** `dark`, `light`, `mono`. Keine Runtime-Themes,
    keine Nutzer-Themes, kein Theme-Editor.
-8. **Tests sind Teil der Lieferung.** Unit, Integration, Vertrag, Frontend, axe.
-   Ein Fix ohne Test ist ein Fix auf Probe.
+8. **Tests sind Teil der Lieferung.** Unit, Integration, Vertrag, Oberfläche
+   (`egui_kittest` über AccessKit). Ein Fix ohne Test ist ein Fix auf Probe.
 9. **Keine Secrets** in Code, Commits, Logs oder Testdaten. Konfiguration über
    Umgebung, Beispiel in `.env.example`.
 10. **Plattformneutral.** Kein `cfg(target_os)` und keine Pfadannahmen im Frontend.
@@ -44,38 +44,57 @@ Pult-Modell gewohnt sind, aber kein Windows mehr starten wollen.
 ## 3. Struktur
 
 ```
-crates/domain    Datenmodell, Regeln, keine I/O          → Unit-Tests
-crates/adapters  Dateisystem, Netz, Geräte, Fremdsysteme → Integrationstests
-crates/ipc       Befehle/Ereignisse + Schema             → Vertragstests
-ui/              Vue 3 + TS, dünn; nutzt @weppelmann/components
-docs/            architektur.md, datenfluss.md, adr/
-tests/e2e/       Playwright gegen die App mit gemocktem Backend
+crates/core      Parametermodell, DSP, Engine (JACK-Client), Adapter
+                 (PipeWire, HTTP, OSC, VBAN, Geräte)          → Unit-/Integrationstests
+crates/fenster   egui-Oberfläche: modell (Summentypen), logik (Aktionen),
+                 ansichten (render), bausteine (Fader, Pegel, Schalter),
+                 thema (drei Themes aus tokens/*.json)        → Oberflächentests
+crates/macros    Makro-Engine: Kanalzüge, Programme, Persistenz
+crates/tape      Aufnahme und Wiedergabe (WAV)
+crates/vban      Netzwerk-Audio (VBAN)
+src/             Binärziele `crosspoint` (mit Feature `ui`) und `crosspoint-engine`
+web/             Web-Fernbedienung: eine HTML-Datei, von `http.rs` ausgeliefert
+data/            .desktop, Icons, `midimonster.cfg`, FX-Listen
+packaging/       Linux-Pakete (tar.gz, AppImage), Flatpak-Quellen
+docs/            architektur.md, datenfluss.md, adr/, bilder/
 ```
 
-Richtung der Abhängigkeiten: `domain ← adapters ← ipc ← ui`. Nie zurück.
-`ui/` kennt keine Domäne, nur Befehle, Ereignisse und Zustände.
+Richtung der Abhängigkeiten: `vban · tape · macros ← core ← fenster ← src/`.
+Nie zurück. `fenster` kennt keine PipeWire-Aufrufe und kein JSON, nur `Params`
+(Atomics), den Befehlskanal und die Pegel; `core` kennt kein egui.
 
 ## 4. Befehle
 
 ```bash
 # alles prüfen (das ist der Befehl vor jedem Commit)
-cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
-npm --prefix ui run lint && npm --prefix ui run typecheck && npm --prefix ui run test
-npm --prefix tests/e2e run test        # Playwright, headless
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --features ui -- -D warnings
+cargo test --workspace --features ui
 
-npm --prefix ui run dev                # Frontend autark, Backend gemockt
-npm --prefix ui run build              # Produktionsbuild
-cargo tauri build                      # Paket bauen
+# bauen
+cargo build --release                  # nur die Engine (crosspoint-engine)
+cargo build --release --features ui    # ein Prozess: Engine + Fenster (crosspoint)
+
+# Bilder der Oberfläche erzeugen (schreibt nach docs/bilder, braucht ein Display)
+CROSSPOINT_BILDER=$PWD/docs/bilder \
+  cargo test -p crosspoint-fenster --test oberflaeche
+
+# Pakete (nur Linux, siehe ADR 0004)
+packaging/linux/paket.sh               # tar.gz und AppImage nach dist/
+flatpak-builder --user --install-deps-from=flathub build-dir \
+  flatpak/de.weppelmann.Crosspoint.yml
 ```
 
-Frontend-Entwicklung läuft **ohne** das echte Backend: `ui/` startet gegen das
-Mock-Backend aus `@weppelmann/testkit`. Wer für eine UI-Aufgabe das echte
-Gerät, PipeWire oder eine WoW-Installation braucht, hat die Grenze falsch gezogen.
+Die Oberfläche wird **ohne** das echte Backend entwickelt und geprüft:
+`crates/fenster/tests/oberflaeche.rs` gibt ein Beispielmodell in das Fenster und
+bedient es über AccessKit – kein PipeWire, kein JACK, keine Geräte, kein Netz.
+Wer für eine Oberflächenaufgabe PipeWire oder eine Aufnahme braucht, hat die
+Grenze falsch gezogen.
 
 ## 5. Definition of Done
 
-- [ ] Tests grün (Unit, Integration, Vertrag, E2E), axe ohne Befund
-- [ ] `clippy -D warnings`, `eslint`, `tsc --noEmit` sauber
+- [ ] Tests grün (Unit, Integration, Vertrag, Oberfläche), AccessKit ohne Befund
+- [ ] `cargo fmt --all --check` und `clippy -D warnings` sauber
 - [ ] alle drei Themes geprüft (dark, light, mono)
 - [ ] Tastaturbedienung geprüft, Fokus sichtbar, Rollen und Namen gesetzt
 - [ ] Screenshot im PR (vorher/nachher bei UI-Änderungen)
@@ -104,7 +123,8 @@ Gerät, PipeWire oder eine WoW-Installation braucht, hat die Grenze falsch gezog
 - `docs/architektur.md`: Schichten, Grenzen, Datenfluss als Mermaid-Diagramm.
 - `docs/datenfluss.md`: was ein Befehl auslöst, bis das Bild steht.
 - `docs/adr/NNNN-titel.md`: getroffene Entscheidung, Alternativen, Kosten.
-- Screenshots werden **erzeugt** (Playwright), nicht von Hand abgelegt.
+- Screenshots werden **erzeugt** (`CROSSPOINT_BILDER=… cargo test -p
+  crosspoint-fenster --test oberflaeche`), nicht von Hand abgelegt.
 
 ## 8. Marke und Icons
 
@@ -140,13 +160,16 @@ Der Stil steht in `docs/marke/icons.md`; hier nur die Regeln, an die sich Code h
 
 - **Name, Zweck, Zielgruppe:** Crosspoint — 8×8-Mixer für PipeWire/JACK;
   Anwender mit einem Mischpultmodell in der Hand (Fader, Busse, Tape).
-- **Abweichende Befehle:** UI im Crate `crates/ui-gtk` (GTK4), Engine als
-  JACK-Client. Bau: `cargo build --release --features ui`. Das Flatpak baut aus
-  vorgebauten Binaries in `flatpak/prebuilt/` (nicht eingecheckt):
-  erst `cargo build --release --features ui`, dann `crosspoint` und
-  `crosspoint-engine` dorthin kopieren.
+- **Abweichende Befehle:** Oberfläche ist egui im Crate `crates/fenster`
+  (ADR 0003), kein eigenes Frontend-Paket, kein Node. Engine als JACK-Client.
+  Pakete nur Linux (ADR 0004): `packaging/linux/paket.sh` (tar.gz, AppImage),
+  Flatpak aus vorgebauten Binaries in `prebuilt/` (nicht eingecheckt), also
+  `prebuilt/` füllen und dann `flatpak-builder` statt eines Rust-Builds im
+  Container. Alles andere steht in §4.
 - **Besonderheiten:** bindgen braucht `libclang` (`dnf install clang-devel`,
   ggf. `LIBCLANG_PATH=/usr/lib64`). Keine `-devel`-Pakete für PipeWire/JACK:
-  `packaging/pkgconfig` liefert eigene `.pc`-Stümpfe. `web/index.html` ist die
-  Referenz für die Parität der GTK-Oberfläche und bleibt bis dahin im Baum.
+  `packaging/pkgconfig` liefert eigene `.pc`-Stümpfe. Filter nur an den
+  virtuellen Bussen B1–B3, Eingänge und A1–A5 tragen das Rohsignal (ADR 0002).
+  Nach Änderungen an `Cargo.lock`: `python3 packaging/flatpak/quellen.py >
+  flatpak/new-sources.json`. `web/index.html` ist die Web-Fernbedienung.
 - **Kontakt/Issues:** https://github.com/patimweb-labs/crosspoint/issues

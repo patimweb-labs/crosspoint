@@ -11,16 +11,15 @@ description = "Crosspoint: 8x8-Mixer fuer PipeWire/JACK - Engine und Oberflaeche
 # in nur eine Richtung: core -> ui -> dieses Paket.
 [dependencies]
 crosspoint = { package = "crosspoint-core", path = "crates/core" }
-# GTK-Oberflaeche, nur mit Feature `ui`. Ohne das Feature wird dieses Paket
-# gebaut wie bisher: kein GTK, keine GTK-Header, kein `gtk4` im
-# Abhaengigkeitsbaum - so baut auch die CI, die kein GTK hat.
-crosspoint-ui = { path = "crates/ui-gtk", optional = true }
+# Fenster (egui), nur mit Feature `ui`. Ohne das Feature entsteht nur die
+# kopflose Engine.
+crosspoint-fenster = { path = "crates/fenster", optional = true }
 
 [features]
 default = []
 # Ein Prozess fuer Engine und Fenster: `cargo build --features ui` baut das
 # Binary `crosspoint`. Ohne das Feature entsteht nur `crosspoint-engine`.
-ui = ["dep:crosspoint-ui"]
+ui = ["dep:crosspoint-fenster"]
 
 [[bin]]
 name = "crosspoint-engine"
@@ -32,8 +31,4 @@ path = "src/bin/crosspoint.rs"
 required-features = ["ui"]
 
 [workspace]
-members = ["crates/core", "crates/vban", "crates/tape", "crates/macros"]
-# Die GTK-Oberflaeche ist ein eigenes Paket mit eigener [workspace]-Tabelle:
-# sie laesst sich unabhaengig bauen (cargo build --manifest-path ...) und
-# bringt GTK nur dann in den Abhaengigkeitsbaum, wenn jemand sie anfasst.
-exclude = ["crates/ui-gtk"]
+members = ["crates/core", "crates/vban", "crates/tape", "crates/macros", "crates/fenster"]

@@ -15,13 +15,15 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 /// Geraete abraeumen: ein Sweep ohne Merkliste (Absturz, kill -9, doppelte Pfade).
+/// Echounterdrückung für die virtuellen Ausgänge (B1–B3).
+pub mod aec;
 pub mod aufraeumen;
 pub mod autostart;
 pub mod devices;
 pub mod dsp;
+/// Echo-Referenz: welche Ausgabegeräte spielen auf den Boxen?
+pub mod echo;
 pub mod engine;
-/// Effekt-Host (mod-host/Carla als betreute Kindprozesse).
-pub mod fx;
 pub mod http;
 pub mod inputs;
 pub mod jack;
@@ -39,12 +41,10 @@ pub mod pw;
 pub mod remote_api;
 /// Zustand beim Start wiederherstellen, Änderungen selbsttätig sichern.
 pub mod restore;
-/// Wächter über abgesteckte Geräte: Zustand melden, Zuordnung behalten, heilen.
-pub mod wache;
-// Zugabe: RNNoise nur, wenn librnnoise.so.0 per dlopen erreichbar ist.
-pub mod rnnoise;
 pub mod tape_io;
 pub mod vban_io;
+/// Wächter über abgesteckte Geräte: Zustand melden, Zuordnung behalten, heilen.
+pub mod wache;
 
 pub const STRIPS: usize = 8;
 pub const BUSES: usize = 8;

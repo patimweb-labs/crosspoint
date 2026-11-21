@@ -1,0 +1,77 @@
+{
+  "color": {
+    "$type": "color",
+    "bg": {
+      "canvas": {
+        "$value": "{color.nacht.950}"
+      },
+      "panel": {
+        "$value": "{color.nacht.900}"
+      },
+      "raised": {
+        "$value": "{color.nacht.850}"
+      },
+      "input": {
+        "$value": "{color.nacht.1000}"
+      },
+      "hover": {
+        "$value": "{color.nacht.800}"
+      },
+      "selected": {
+        "$value": "{color.nacht.700}"
+      }
+    },
+    "border": {
+      "subtle": {
+        "$value": "{color.nacht.700}"
+      },
+      "strong": {
+        "$value": "{color.nacht.600}"
+      }
+    },
+    "text": {
+      "default": {
+        "$value": "{color.zeichen}"
+      },
+      "muted": {
+        "$value": "{color.nacht.300}"
+      },
+      "faint": {
+        "$value": "{color.nacht.400}"
+      },
+      "on-accent": {
+        "$value": "{color.nacht.950}"
+      }
+    },
+    "accent": {
+      "default": {
+        "$value": "{color.bernstein.400}"
+      },
+      "hover": {
+        "$value": "{color.bernstein.300}"
+      },
+      "pressed": {
+        "$value": "{color.bernstein.500}"
+      },
+      "deep": {
+        "$value": "{color.bernstein.900}"
+      }
+    },
+    "status": {
+      "ok": {
+        "$value": "{color.gruen.400}"
+      },
+      "warn": {
+        "$value": "{color.bernstein.300}"
+      },
+      "error": {
+        "$value": "{color.rot.400}"
+      }
+    },
+    "focus": {
+      "ring": {
+        "$value": "{color.bernstein.400}"
+      }
+    }
+  }
+}

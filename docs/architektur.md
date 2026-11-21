@@ -22,7 +22,7 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
 
 ```
                      ┌──────────────────────────────────┐
-   Tastatur/Maus ───▶│  GTK4-Fenster (im Prozess)       │
+   Tastatur/Maus ───▶│  egui-Fenster (im Prozess)       │
    MIDI ────────────▶│                                  │
                      │        Arc<Params>  (Atomics)    │──▶ Audio-Thread (JACK/PipeWire)
                      │        Befehlskanal (mpsc)       │
@@ -33,10 +33,23 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
         ▼                        ▼                         ▼
   HTTP-Adapter (127.0.0.1)  OSC-Adapter (UDP)      VBAN-Adapter (UDP)
    Fernbedienung/Tests       MIDI über MIDIMonster   Netzwerk-Audio
-        │
-        ▼
-  Effekt-Adapter (mod-host / Carla) — eigener Prozess, weil Plugins abstürzen dürfen
 ```
+
+Signalweg (ADR 0002): Eingänge und Hardware-Busse tragen das Rohsignal;
+Noise Gate und Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`)
+sitzen nur an den virtuellen Bussen B1–B3. Die Echounterdrückung nimmt den
+Ton der gewählten Ausgabegeräte (`crates/core/src/echo.rs` legt deren Monitore
+auf `crosspoint:echo_ref_L/R`) und rechnet ihn aus dem Mikrofon. Der frühere
+Weg – der fertige Ausgang eines Hardware-Busses als Referenz – ist mit
+ADR 0005 entfallen: Programme, die an Crosspoint vorbei spielen, waren darin
+nicht enthalten.
+
+Fenster (ADR 0003): `crates/fenster` ist egui wie in sprechwerk –
+`modell.rs` (Summentypen), `logik.rs` (Aktionen ausführen, getestet),
+`ansichten/` (`render(modell) → Aktionen`), `bausteine.rs` (gezeichnete Fader,
+Pegel, Schalter), `thema.rs` (drei Themes aus `tokens/*.tokens.json`,
+erzeugt in `build.rs`). Oberflächentests mit `egui_kittest` bedienen das
+Fenster über AccessKit und erzeugen die Bilder in `docs/bilder/`.
 
 Vier Regeln, aus denen alles folgt:
 
@@ -78,8 +91,8 @@ Vier Regeln, aus denen alles folgt:
 
 ## Reihenfolge der Umsetzung
 
-1. **Oberfläche in den Prozess** (GTK4, `Arc<Params>`, Pegelring) — größter
-   Bruch fällt, danach ist HTTP nur noch Adapter.
+1. **Oberfläche in den Prozess** (erst GTK4, seit 2026-11-21 egui;
+   `Arc<Params>`, Pegelbank) — erledigt, HTTP ist nur noch Adapter.
 2. **Zustand zusammenführen** (`state.json`, ein Autosave, Migration).
 3. **Launcher und Startpfade einebnen** (ein Binary, ein Weg).
 4. **`exthost`-Grenze** für Effekte, danach MIDIMonster als Adapter dokumentieren.
@@ -89,33 +102,27 @@ Jeder Schritt muss einzeln lauffähig sein; nach jedem Schritt Tests grün und
 die API-Antworten unverändert. Kein Schritt darf einen neuen Adapter
 einführen, ohne dass ein alter wegfällt.
 
-## Darstellung: zwei getrennte Modelle
+## Darstellung: drei Themes, eine Dichte
 
-Oberfläche ist konfigurierbar, aber in **zwei** Modellen — sie zu vermischen
-war der klassische Fehler bei „Theme-Engines", die dann halb funktionieren:
+Seit dem Wechsel auf egui (ADR 0003) gilt AGENTS.md §2.7 wörtlich: drei
+Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
 
-| Modell | Beantwortet | Enthält | Datei |
-|---|---|---|---|
-| **Token-Satz** | „Wie sieht es aus?" | Grund, Panel, Linie, Akzent, Schrift, Gedämpft, Warnung, Schriftfamilie, drei Größen | `~/.config/crosspoint/ui.json` → `theme` |
-| **Layout** | „Wo steht was?" | Reihenfolge und Sichtbarkeit der Bereiche (Kopfzeile, Tape, Streifen, Busse, Master, Makros), Seite der Busspalte, Master-Position, Dichte, Streifenreihenfolge | dieselbe Datei → `layout` |
+- Farben, Abstände und Größen stehen in `crates/fenster/tokens/*.tokens.json`;
+  `build.rs` erzeugt daraus Konstanten. Im Code stehen nur Namen
+  (`f.accent_default`, `SIZE_FADER_BAHN`).
+- **Auch selbst gezeichnete Fader und Pegel** lesen ihre Farben aus dem Theme.
+- Die Anordnung ist fest (Kopf, Tape, Eingänge | Busse | Master, Makros); die
+  Breite der Züge folgt dem Fenster (`logik::zugbreiten`), bei Full HD passen
+  alle 17 Züge. Wählbar bleibt nur die Dichte (kompakt, normal, breit) und die
+  Zahl der Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
 
-Regeln, die daraus folgen:
+## Plattformen: nur Linux
 
-- Farben werden **zur Laufzeit in CSS gerendert** und als `GtkCssProvider`
-  geladen — ein Wechsel wirkt ohne Neustart.
-- **Auch selbst gezeichnete Fader und Pegel** lesen ihre Farben aus dem
-  Token-Satz. Ein Theme, das überall greift außer dort, wo man hinsieht, ist
-  kein Theme.
-- Das Fenster wird **aus der Layout-Beschreibung zusammengesetzt**; keine
-  fest verdrahtete Anordnung im Code. Jeder Bereich ist ein eigenes Widget,
-  das je nach Layout eingesetzt, verschoben oder ausgeblendet wird.
-- Ungültige Datei → Standard (Theme `crosspoint`, Layout `klassisch`) plus
-  Logzeile, nie ein Startfehler.
-- Der Token-Satz ist ein **Datenformat**, kein GTK-Detail: das Web-UI kann
-  dieselbe Datei später lesen, damit es nicht wieder zwei Wahrheiten gibt.
+Ausgeliefert wird als Flatpak, AppImage und tar.gz (ADR 0004) – damit ist
+jede Distribution mit PipeWire abgedeckt, ohne je Distribution ein eigenes
+Paket zu pflegen.
 
-
-## Plattformen: Linux bleibt die Zielplattform
+### Warum nicht Windows oder macOS
 
 Entschieden am 2026-10-29 nach Aufwandsmessung (`wc -l` über den Code).
 

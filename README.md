@@ -1,30 +1,35 @@
 # Crosspoint
 
-8×8-Mixer für PipeWire/JACK in Rust: 8 Streifen, 8 Busse (A1–A5 Hardware, B1–B3
-virtuell), ohne Kernelmodul. Die Infrastruktur kommt aus etablierten Crates
-(JSON: `serde_json`, HTTP/WebSocket: `tiny_http` + `tungstenite`, WAV: `hound`,
-Ring: `rtrb`, JACK: `jack`) - siehe `docs/08-refactor-bibliotheken.md`. Die Engine ist ein
-JACK-Client; die Oberfläche läuft als Web-App auf `127.0.0.1:8770` und wird als
-eigenes Fenster gestartet.
+8×8-Mixer für PipeWire/JACK in Rust: 8 Eingänge, 8 Busse (A1–A5 Hardware,
+B1–B3 virtuell), ohne Kernelmodul. Die Eingänge liefern ihr **Rohsignal**;
+Filter gibt es nur an den virtuellen Ausgängen B1–B3 – dort, wo das Signal zu
+Discord, OBS oder einer Aufnahme geht: ein **Noise Gate** und eine
+**Echounterdrückung**, die den Systemton herausrechnet, den die Boxen zurück
+ins Mikrofon spielen. Engine und Fenster (egui) laufen in einem Prozess; die
+Engine ist ein JACK-Client.
 
 ## Installation
 
-Fertige Pakete liegen unter [Releases](https://github.com/patimweb-labs/crosspoint/releases):
+Nur Linux. Fertige Pakete liegen unter [Releases](https://github.com/patimweb-labs/crosspoint/releases):
 
-| System | Paket | Befehl |
+| Weg | Datei | Befehl |
 | --- | --- | --- |
-| Linux (Flatpak) | `crosspoint-*.flatpak` | `flatpak install ./crosspoint-*.flatpak` |
-| Fedora | `crosspoint-*.rpm` | `sudo dnf install ./crosspoint-*.rpm` |
-| Debian/Ubuntu | `crosspoint-*.deb` | `sudo apt install ./crosspoint-*.deb` |
+| Flatpak (jede Distribution) | `crosspoint-*.flatpak` | `flatpak install --user ./crosspoint-*.flatpak` |
+| AppImage (jede Distribution) | `Crosspoint-*-x86_64.AppImage` | `chmod +x Crosspoint-*.AppImage && ./Crosspoint-*.AppImage` |
+| Archiv | `crosspoint-*-linux-x86_64.tar.gz` | nach `~/.local` oder `/usr/local` entpacken |
 
-Voraussetzungen: PipeWire mit `pipewire-jack` und `pactl`. Aus dem Quelltext
-bauen: siehe „Bauen und starten".
+Voraussetzung: PipeWire mit `pipewire-jack` und `pactl` (bei Fedora, Ubuntu,
+Debian, Arch und openSUSE Standard). Das Flatpak bringt beides selbst mit.
 
 ## Screenshots
 
-![Pult in der GTK-Oberfläche](docs/ui-gtk-2560x1440.png)
+![Pult im dunklen Theme](docs/bilder/pult-dark-1920.png)
 
-![Pult im hellen Theme](docs/ui-gtk-hell.png)
+![Pult im hellen Theme](docs/bilder/pult-light-1920.png)
+
+Die Bilder erzeugt der Oberflächentest (`CROSSPOINT_BILDER=$PWD/docs/bilder
+cargo test -p crosspoint-fenster --test oberflaeche`), sie werden nicht von
+Hand abgelegt.
 
 ## Daten und Datenschutz
 
@@ -36,45 +41,60 @@ keine Konten, keine Cloud-Verbindung. Konfiguration und Presets liegen unter
 ## Signalkette
 
 ```
-Streifen 1..8:  Eingang → 6-Band-EQ → Compressor → Gate → Denoiser → Gain → Pan → Routing
-Busse A1..A5 / B1..B3:  Summe → Limiter → Delay je Kanal → Trim → Gain/Mute → Ausgang
+Eingänge 1..8:  Eingang → Mono → Fader → Pan → Routing (8 Busse)        – Rohsignal
+Busse A1..A5:   Summe → Mono/Modus → Delay → Trim → Gain/Mute → Ausgang  – Rohsignal
+Busse B1..B3:   Summe → Mono/Modus → ECHO → GATE → Delay → Trim → Gain/Mute → Ausgang
 ```
 
-Herleitung und Belege der Parameternamen: `docs/02-signalmodell.md`,
-`docs/03-ghidra-app.md`, `docs/04-abgleich-original.md`. Die dort untersuchte
-Fremdsoftware wird in diesem Repo nicht als Produktname geführt; Dateinamen und
-Hashes sind reine Analysebelege.
+Ein Mikrofon auf A1 **und** B1 ergibt also das Rohsignal auf A1 (Kopfhörer,
+Aufnahme) und das bereinigte auf B1 (`CROSSPOINT-Output-B1`, z. B. für Discord).
 
-## Stand (2026-10-28)
+**ECHO** (Echounterdrückung): rechnet den Ton heraus, den die Boxen spielen und
+das Mikrofon wieder aufnimmt – das, was Discord „Echounterdrückung“ und Windows
+„Akustische Echounterdrückung“ nennen. Gerechnet wird mit AEC3 (WebRTC-Verfahren,
+`sonora`, reines Rust; Begründung und Messung in
+[ADR 0005](docs/adr/0005-echounterdrueckung-mit-aec3.md)).
 
-| Teil | Zustand |
-|---|---|
-| Parametermodell (`src/lib.rs`) | vollständig: 8 Streifen/8 Busse, EQ-Zellen, Comp, Gate, Denoiser, Pitch, Sends, Layer, Bus-Modi |
-| Echtzeit-Kern (`src/engine.rs`) | 8×8-Matrix, EQ, Comp, Gate, Denoiser, Limiter, Delay, Pegel |
-| DSP-Bausteine (`src/dsp.rs`) | RBJ-Biquads, Kompressor, Gate, Limiter, Delay |
-| Audio-I/O (`src/jack.rs`) | JACK-ABI über PipeWire, ohne `-devel`-Pakete |
-| Steuer-API + UI (`src/http.rs`, `web/`) | JSON-API, Web-Oberfläche, Presets |
-| VBAN (`crates/vban`, `src/vban_io.rs`) | Sender/Empfänger, VBAN-kompatibel in beiden Richtungen |
-| Tape (`crates/tape`, `src/tape_io.rs`) | Bandmaschine mit WAV-Mitschnitt |
-| Tests | `cargo test --release --workspace`: 189 im Hauptcrate, 94 in den path-Crates, alle grün |
+Die **Referenz** kommt vom Ausgabegerät: die Monitore der gewählten Geräte
+hängen am Mixer (`<sink>:monitor_FL/FR` → `crosspoint:echo_ref_L/R`), damit auch
+Programme erfasst werden, die an Crosspoint vorbei direkt auf das Gerät spielen
+(Chromium auf HDMI). Rechtsklick auf ECHO öffnet **ECHOUNTERDRÜCKUNG – Was
+spielt auf:** mit einem Häkchen je Ausgabegerät; mehrere gleichzeitig sind
+erlaubt (Boxen und Kopfhörer), die Auswahl steht in `echo.json` und kommt beim
+Start zurück. Ohne gewähltes Gerät passiert nichts, das Mikrofon bleibt
+unverändert.
 
-Gemessen (nicht behauptet): 1-kHz-Sinus −6 dBFS durch Streifen 1 → Bus A1 ergibt
-−6,00 dBFS; Gain −12 dB → −18,00 dBFS; Mute → Stille; Routing A1→A2 wandert;
-EQ-Boost +12 dB bei 1 kHz → exakt +12 dB.
+Kosten: rund 0,4 % eines Kerns je Kanal, 19 ms Latenz (10 ms Rahmen + 9 ms
+AEC3), keine Allokation im Audio-Callback. Spielt nichts, geht das Mikrofon
+unverändert und nur verzögert durch. Gemessen auf dem nachgestellten Pfad mit
+Nachhall und getrennten Uhren: 14 dB Echodämpfung (der frühere lineare Filter
+schaffte dort 2,4 dB), die Stimme kommt beim Doppelsprechen in ihrer Lautstärke
+durch.
+
+Häkchen **RESTECHO MIT WEGRECHNEN** (im selben Menü) schaltet die
+Rauschunterdrückung hinter der Echounterdrückung dazu: 12–13 dB mehr, dafür ein
+rauerer Mikrofonklang. Vorgabe ist aus; sie wirkt nur zusammen mit ECHO.
+
+**GATE**: schließt in Pausen (Schwelle, Tiefe, Attack, Hold, Release per
+Rechtsklick); es entscheidet nach der Echounterdrückung, also am echofreien
+Signal.
+
+Linksklick auf GATE oder ECHO schaltet, Rechtsklick öffnet die Einstellungen.
+Herleitung der Parameternamen des Originals: `docs/02-signalmodell.md`,
+`docs/03-ghidra-app.md`, `docs/04-abgleich-original.md`.
 
 ## Bauen und starten
 
-Voraussetzungen: `pipewire` (mit `pipewire-jack`), `pactl`, `cargo`. Keine
-`-devel`-Pakete nötig: `build.rs` linkt gegen die vorhandene
-`libjack.so.0` (`/usr/lib64/pipewire-0.3/jack` auf Fedora/Bazzite,
-`/usr/lib/x86_64-linux-gnu` im Freedesktop-Runtime).
+Voraussetzungen: `pipewire` (mit `pipewire-jack`), `pactl`, `cargo`, `clang`
+(bindgen). Keine `-devel`-Pakete für PipeWire/JACK nötig: `packaging/pkgconfig`
+liefert eigene `.pc`-Stümpfe; das Fenster lädt Wayland/X11 und OpenGL zur
+Laufzeit.
 
 ```bash
-cargo build --release
-./target/release/crosspoint-engine                 # UI auf http://127.0.0.1:8770/
-CROSSPOINT_A1=<pipewire-sink> ./scripts/crosspoint-wire.sh up
-cargo build --release --features ui                # natives Fenster (GTK4)
+cargo build --release --features ui                # Engine und Fenster (egui)
 ./scripts/crosspoint-launch.sh                     # Fenster mit Engine, Ende bei Fensterschluss
+./target/release/crosspoint-engine                 # nur die Engine, Web-UI auf http://127.0.0.1:8770/
+packaging/linux/paket.sh                           # dist/: tar.gz und AppImage (braucht appimagetool)
 ```
 
 `crosspoint-wire.sh up` legt `crosspoint_in_1..3` (Anwendungen spielen hinein →
@@ -96,7 +116,9 @@ die Oberfläche läuft im selben Prozess und fragt den HTTP-Adapter nicht.
 `./scripts/crosspoint-wire.sh sweep` macht dasselbe von der Kommandozeile.
 
 Der JACK-Client heißt `crosspoint`, seine Ports sind `crosspoint:strip1_L` …
-`crosspoint:busB3_R` sowie `crosspoint:vban_L/_R`.
+`crosspoint:busB3_R`, `crosspoint:echo_ref_L/_R` (Referenz der
+Echounterdrückung, hängt an den Monitoren der gewählten Ausgabegeräte) sowie
+`crosspoint:vban_L/_R`.
 
 ## Konfiguration
 
@@ -107,6 +129,7 @@ Alles liegt in `~/.config/crosspoint` (bzw. `$XDG_CONFIG_HOME/crosspoint`):
 | `preset.json` | aktueller Mischpultzustand |
 | `devices.json` | Hardware-Bus → PipeWire-Gerät |
 | `inputs.conf` | Streifen 1..5 → Aufnahmequelle |
+| `echo.json` | Ausgabegeräte, deren Ton aus dem Mikrofon gerechnet wird |
 | `macros.json` | Makro-Tasten |
 | `tape/` | Mitschnitte der Bandmaschine |
 
@@ -139,8 +162,8 @@ bemerkt so jede Änderung – aus dem Fenster, über `POST /api/set`, OSC/MIDI o
 ein Makro. 2 s nach der letzten Änderung schreibt er das komplette Bild nach
 `preset.json` (kein Lock, keine Datei-Arbeit im Audio-Callback); eine
 Faderfahrt erzeugt so genau einen Schreibvorgang. Beim Beenden wird eine noch
-offene Änderung sofort geschrieben. Gespeichert werden auch Namen, EQ-Bänder
-und die Kompressorwerte. Die VBAN-Einstellungen („SAVE CONFIG", `vban.json`)
+offene Änderung sofort geschrieben. Gespeichert werden auch Namen und die
+Filter von B1–B3. Die VBAN-Einstellungen („SAVE CONFIG", `vban.json`)
 gelten ebenfalls nach dem Neustart.
 
 `CROSSPOINT_NO_RESTORE=1` schaltet Wiederherstellen **und** Autosave ab.
@@ -152,20 +175,23 @@ wieder. Der Startbefehl ist im Flatpak
 `<repo>/scripts/crosspoint-launch.sh --minimized`. Beide starten ohne Fenster,
 nur mit Tray-Icon.
 
-**Tray:** `crosspoint --minimized` (bzw. als Rückfall `crosspoint-fenster`) meldet ein StatusNotifierItem über GDBus an
-(keine Zusatzbibliothek, `gio` kommt mit GTK) samt `com.canonical.dbusmenu`:
+**Tray:** `crosspoint --minimized` meldet ein StatusNotifierItem an (Crate
+`ksni`, reines Rust):
 
 | Menüpunkt | Wirkung |
 |---|---|
-| Fenster zeigen | Fenster einblenden |
-| Alles stumm | alle Streifen-Mutes umschalten |
+| Fenster zeigen | Fenster öffnen |
+| Alles stumm | alle Eingänge stumm schalten bzw. wieder hörbar |
 | Letztes Preset laden | gespeichertes `preset.json` anwenden |
-| Autostart ein/aus | Autostart-Datei schreiben/entfernen, Haken zeigt den Zustand |
+| Autostart | Autostart-Datei schreiben/entfernen, Haken zeigt den Zustand |
 | Beenden | Programm und Engine beenden |
 
-Wird das Fenster bei laufendem Tray geschlossen, verschwindet es nur ins Icon
-(„Beenden“ bleibt im Menü). Ohne Tray beendet das Schließen wie bisher das
-Programm.
+Mit Tray schließt der Fensterknopf nur das Fenster; Engine und Symbol laufen
+weiter, „Fenster zeigen" öffnet es neu (unter Wayland lässt sich ein Fenster
+nicht verstecken, deshalb wird es geschlossen und neu geöffnet). Ohne Tray
+beendet das Schließen das Programm. Ein zweiter Start (Menü, Launcher) startet
+keine zweite Engine, sondern holt das Fenster der laufenden Instanz
+(`POST /api/fenster`).
 
 ## Steuer-API
 
@@ -177,6 +203,9 @@ curl http://127.0.0.1:8770/api/levels    # Pegel in dB
 curl -X POST http://127.0.0.1:8770/api/preset -d '{"action":"save"}'
 curl http://127.0.0.1:8770/api/restore   # {"devices":n,"inputs":n,"preset":bool}
 curl -X POST http://127.0.0.1:8770/api/restore -d '{"preset":true,"devices":true,"inputs":false}'
+curl http://127.0.0.1:8770/api/echo     # {"geraete":[…],"ausgabegeraete":[…],"links":[…]}
+curl -X POST http://127.0.0.1:8770/api/echo \
+     -d '{"geraete":["alsa_output.pci-0000_03_00.1.hdmi-stereo"]}'
 curl http://127.0.0.1:8770/api/autostart # {"enabled":…,"path":…,"exec":…}
 curl -X POST http://127.0.0.1:8770/api/autostart -d '{"enabled":true}'
 curl http://127.0.0.1:8770/api/vban/config   # Sende-/Empfangsweg + beide Tabellen
@@ -185,10 +214,17 @@ curl -X POST http://127.0.0.1:8770/api/vban/config \
 curl -X POST http://127.0.0.1:8770/api/vban/config -d '{"action":"save"}'   # auch "load" und "reset"
 ```
 
-Parameter: `gain`, `pan`, `mute`, `solo`, `mono`, `eq`, `comp`, `gate`, `denoiser`,
-`send0..send7`, `eq<zelle>_on|type|freq|q|gain`, `comp_threshold|ratio|attack|release|knee`,
-`gate_threshold|attack|hold|release`; Busse: `gain`, `mute`, `mono`, `eq`, `limiter`,
-`trim`, `delay`. Die Engine hat keine Authentifizierung und lauscht nur auf `127.0.0.1`.
+Parameter der Eingänge: `gain`, `pan`, `mute`, `solo`, `mono`, `send0..send7`.
+Busse: `gain`, `mute`, `mono`, `mode`, `cross`, `trim`, `delay`; nur B1–B3
+(Index 5–7) zusätzlich `gate`, `gate_schwelle`, `gate_tiefe`, `gate_attack`,
+`gate_hold`, `gate_release`, `aec`. An einem Hardware-Bus antwortet
+`gate`/`aec` mit einem Fehler. Ältere Presets mit Filtern an den Eingängen oder
+mit `aec_ref` laden weiter; diese Werte werden übergangen.
+
+Welche Ausgabegeräte als Echo-Referenz dienen, steht nicht im Preset (das ist
+eine Eigenschaft des Rechners, nicht des Mischzustands), sondern in
+`echo.json`; `/api/echo` liest und schreibt die Liste.
+Die Engine hat keine Authentifizierung und lauscht nur auf `127.0.0.1`.
 
 **Anzeigenamen:** Streifen und Busse tragen auf Wunsch einen eigenen Namen. Der
 Wert ist Text, nicht Zahl; ein leerer Text setzt wieder `HW In 1`/`A1`:
@@ -204,36 +240,23 @@ In der Oberfläche genügt ein Doppelklick auf den Namen im Kanalzug. Der Name
 steht im Preset (`label` je Streifen/Bus) und kommt beim Wiederherstellen zurück.
 Erlaubt sind bis zu 24 Zeichen ohne Steuerzeichen.
 
-## Flatpak
+## Pakete
 
-Einmalig die Bauwerkzeuge (auf Bazzite ohne `flatpak-builder` im System):
-
-```bash
-flatpak install --user flathub org.flatpak.Builder
-flatpak install --system flathub org.gnome.Sdk//51
-```
-
-Das SDK muss **systemweit** liegen: `flatpak-builder` läuft selbst im Builder-Sandbox
-und fragt die SDKs über `flatpak info` in der Systeminstallation ab – ein
-`--user`-SDK ist für ihn unsichtbar (`error: org.gnome.Sdk/x86_64/51 not installed`).
-Die Runtime `org.gnome.Platform//51` bringt WebKitGTK mit, der GNOME-SDK zusätzlich
-den Rust-Toolchain unter `/usr/lib/sdk/rust-stable` (keine rust-stable-Extension nötig).
-
-Dann bauen und starten:
+`packaging/linux/paket.sh` baut tar.gz und AppImage, `flatpak/de.weppelmann.Crosspoint.yml`
+das Flatpak aus denselben, fertig gebauten Programmen (`prebuilt/`, nicht
+eingecheckt). Der Release-Workflow hängt alle drei an.
 
 ```bash
-flatpak run --command=flatpak-builder org.flatpak.Builder \
-    --user --install --force-clean --disable-rofiles-fuse \
-    build-dir flatpak/de.weppelmann.Crosspoint.yml
+cargo build --release --features ui
+mkdir -p prebuilt && cp target/release/crosspoint target/release/crosspoint-engine prebuilt/
+flatpak-builder --user --install --force-clean build-dir flatpak/de.weppelmann.Crosspoint.yml
 flatpak run de.weppelmann.Crosspoint
 ```
 
-`--disable-rofiles-fuse` ist im Builder-Flatpak nötig (kein `/dev/fuse` im Sandbox).
-Das Manifest baut ausschließlich aus diesem Repo (nur path-Abhängigkeiten, daher
-`cargo build --offline`) und installiert Engine, Startskript, Icon-Satz
-(`/app/share/icons/hicolor/<n>x<n>/apps/`) und Desktop-Eintrag
-(`/app/share/applications`). Ein zweites Modul (`fenster/`) baut
-`crosspoint-fenster`, das GTK3-Fenster mit WebKitGTK.
+Das Flatpak nutzt die Freedesktop-Runtime 25.08; sie enthält `pactl`, die
+`pw-*`-Werkzeuge und `libjack.so.0` (pipewire-jack). Die Cargo-Quellen sind in
+`flatpak/new-sources.json` eingefroren (`python3 packaging/flatpak/quellen.py >
+flatpak/new-sources.json` nach jeder Änderung an `Cargo.lock`).
 
 Finish-Args und warum sie da sind:
 
@@ -241,34 +264,24 @@ Finish-Args und warum sie da sind:
 |---|---|
 | `--socket=pulseaudio` | `pactl` legt die virtuellen Knoten (`CROSSPOINT-Input-*`, `CROSSPOINT-Output-*`) an |
 | `--filesystem=xdg-run/pipewire-0` | nativer PipeWire-Zugriff für JACK-Client und `pw-link`/`pw-dump` |
-| `--share=ipc`, `--share=network` | Steuer-API auf `127.0.0.1:8770` bleibt von außen erreichbar (VBAN, Steuerung) |
-| `--socket=wayland`, `--socket=fallback-x11` | das Fenster ist ein Wayland-Client, X11 als Rückfall |
-| `--device=dri` | WebKit zeichnet die Oberfläche beschleunigt |
-| `--socket=session-bus` | Tray-Icon (StatusNotifierItem + dbusmenu) am Sitzungsbus |
+| `--share=ipc`, `--share=network` | Steuer-API auf `127.0.0.1:8770`, VBAN, OSC |
+| `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` | das Fenster (OpenGL) |
+| `--socket=session-bus` | Tray-Icon (StatusNotifierItem) |
 | `--filesystem=~/.config/crosspoint:create` | Konfiguration/Presets |
-| `--filesystem=xdg-config/autostart:create` | Autostart-Datei in `~/.config/autostart` schreiben/entfernen |
+| `--filesystem=xdg-config/autostart:create` | Autostart-Datei schreiben/entfernen |
 
-Die Oberfläche ist im Flatpak wie auf dem Host das native Fenster `crosspoint`
-(GTK4, Engine im selben Prozess; Fenster zu heißt Engine und Geräte weg). Ein
-Browser ist dafür nicht nötig; `flatpak-spawn` und
-`--talk-name=org.freedesktop.Flatpak` sind entfallen. Auf dem Host startet
-`scripts/crosspoint-launch.sh` dieses Fenster. Mit `--minimized` startet es
-ohne Fenster, nur mit Tray-Icon (Autostart); Schließen verbirgt das Fenster
-dann in den Tray, „Beenden" im Tray-Menü beendet Engine und Programm.
-`crosspoint-fenster` (GTK3 + WebKitGTK) bleibt nur als Rückfall, wenn das
-native Fenster nicht gebaut ist.
-
-Die Engine linkt im Sandbox gegen das `libjack.so.0` des GNOME-Runtime
-(`/usr/lib/x86_64-linux-gnu/libjack.so.0`, pipewire-jack) – es ist dort
-vorhanden, ein Rückfall auf PulseAudio ist nicht nötig.
+Im AppImage schreibt der Autostart den Pfad der AppImage-Datei (`$APPIMAGE`),
+im Flatpak `flatpak run de.weppelmann.Crosspoint --minimized`.
 
 ## Grenzen (ehrlich)
 
-- **DSP-Koeffizienten sind nicht aus dem Original extrahiert.** Belegt sind
-  Parameterliste, Render-Signatur und Grenzwerte, nicht die Innenrechnung. EQ (RBJ),
-  Compressor, Gate, Limiter und Denoiser sind Standard-Implementierungen mit den
-  Original-Parametern — klanglich nah, nicht bitgleich.
-- Pitch/Formant ist im Modell vorhanden, aber **nicht** verarbeitet (kein Pitch-Shifter).
-- Bus-Mix-Modi (Upmix/Downmix/Composite) sind als Modell vorhanden, aber nicht umgesetzt.
+- **Echounterdrückung ohne Restecho-Unterdrückung:** der adaptive Filter zieht
+  das lineare Echo ab; Verzerrungen kleiner Boxen bleiben leise hörbar. Ein
+  nachgeschalteter Suppressor (wie in WebRTC) fehlt noch.
+- Die Referenz ist das, was Crosspoint an die Boxen schickt. Spielt eine
+  Anwendung an Crosspoint vorbei direkt auf die Boxen, kann ECHO sie nicht
+  herausrechnen.
+- Bus-Mix-Modi Upmix 2.1/4.1/6.1 ergeben eine Monosumme auf beiden Kanälen
+  (Busse sind stereo).
 - Keine Latenz-Optimierung: die Engine erbt die PipeWire-Quantum (hier 1024 Frames ≈ 21 ms).
 - Nicht getestet: PipeWire-Neustart im Betrieb, mehrere Instanzen, Ratenwechsel.

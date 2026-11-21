@@ -56,14 +56,35 @@ pub fn pfad() -> PathBuf {
 
 /// Startbefehl für die Autostart-Datei.
 pub fn exec() -> String {
-    if im_flatpak() {
+    let var = |n: &str| {
+        std::env::var_os(n)
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+    };
+    exec_aus(
+        im_flatpak(),
+        var("CROSSPOINT_LAUNCH"),
+        var("APPIMAGE"),
+        startskript(),
+    )
+}
+
+/// Startbefehl aus der Umgebung (rein, damit prüfbar). Vorrang: Flatpak,
+/// ausdrücklicher Pfad, AppImage, Startskript neben dem Programm.
+///
+/// Im AppImage zeigt `$APPIMAGE` auf die Datei selbst; der Pfad im
+/// eingehängten Abbild (`/tmp/.mount_…`) gilt nur für diesen Lauf.
+pub fn exec_aus(
+    flatpak: bool,
+    launch: Option<PathBuf>,
+    appimage: Option<PathBuf>,
+    skript: Option<PathBuf>,
+) -> String {
+    if flatpak {
         return format!("flatpak run {APP_ID} --minimized");
     }
-    if let Some(p) = std::env::var_os("CROSSPOINT_LAUNCH").filter(|p| !p.is_empty()) {
-        return format!("{} --minimized", PathBuf::from(p).display());
-    }
-    match startskript() {
-        Some(s) => format!("{} --minimized", s.display()),
+    match launch.or(appimage).or(skript) {
+        Some(p) => format!("{} --minimized", p.display()),
         None => "crosspoint-launch --minimized".to_string(),
     }
 }
@@ -79,6 +100,8 @@ pub fn startskript() -> Option<PathBuf> {
                 Some(d) => {
                     kandidaten.push(d.join("scripts/crosspoint-launch.sh"));
                     kandidaten.push(d.join("crosspoint-launch.sh"));
+                    // tar.gz: usr/bin/crosspoint-launch
+                    kandidaten.push(d.join("crosspoint-launch"));
                     dir = d.parent().map(Path::to_path_buf);
                 }
                 None => break,
@@ -213,6 +236,32 @@ mod tests {
                 .contains("autostart/de.weppelmann.Crosspoint.desktop"),
             "{}",
             wert.get("path").unwrap().to_json()
+        );
+    }
+
+    #[test]
+    fn exec_kennt_flatpak_appimage_und_skript() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        assert_eq!(
+            exec_aus(true, None, p("/x/C.AppImage"), None),
+            "flatpak run de.weppelmann.Crosspoint --minimized"
+        );
+        assert_eq!(
+            exec_aus(
+                false,
+                None,
+                p("/home/a/Crosspoint.AppImage"),
+                p("/repo/scripts/crosspoint-launch.sh")
+            ),
+            "/home/a/Crosspoint.AppImage --minimized"
+        );
+        assert_eq!(
+            exec_aus(false, p("/opt/launch"), p("/a.AppImage"), None),
+            "/opt/launch --minimized"
+        );
+        assert_eq!(
+            exec_aus(false, None, None, None),
+            "crosspoint-launch --minimized"
         );
     }
 

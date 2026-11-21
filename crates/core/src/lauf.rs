@@ -223,6 +223,9 @@ struct Rt {
     /// `ProcessScope` des Callbacks.
     ins: [[Option<Port<AudioIn>>; 2]; STRIPS],
     outs: [[Option<Port<AudioOut>>; 2]; BUSES],
+    /// Eingangspaar der Echo-Referenz (`echo_ref_L`/`echo_ref_R`): die Monitore
+    /// der gewaehlten Ausgabegeraete.
+    echo_ref_in: [Option<Port<AudioIn>>; 2],
     /// Ausgangspaare fuer empfangenes VBAN-Audio (`vban_L`/`vban_R`).
     vban_out: [Option<Port<AudioOut>>; 2],
     tape: Arc<TapeControl>,
@@ -324,6 +327,7 @@ impl Rt {
         let mut io = Io {
             ins: [[ptr::null(); 2]; STRIPS],
             outs: [[ptr::null_mut(); 2]; BUSES],
+            echo_ref: [ptr::null(); 2],
         };
         for s in 0..STRIPS {
             for c in 0..2 {
@@ -337,6 +341,11 @@ impl Rt {
                 if let Some(p) = self.outs[b][c].as_mut() {
                     io.outs[b][c] = p.as_mut_slice(ps).as_mut_ptr();
                 }
+            }
+        }
+        for c in 0..2 {
+            if let Some(p) = self.echo_ref_in[c].as_ref() {
+                io.echo_ref[c] = p.as_slice(ps).as_ptr();
             }
         }
         // Pegel der Eingaenge: Spitze dieses Blocks mit Halt, direkt aus den
@@ -510,11 +519,16 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
     let vban_recv_ring = Arc::new(Ring::new(16, crate::vban_io::RECV_BLOCK_FRAMES));
     let macroctl = Arc::new(MacroControl::new());
 
+    let jack = Jack::open(&konfig.client_name).map_err(|e| format!("JACK/PipeWire: {e}"))?;
+
+    // Der DSP-Zustand haengt an der Abtastrate: die Echounterdrueckung rechnet
+    // in 10-ms-Rahmen (480 Samples bei 48 kHz). Deshalb erst hier.
     let mut rt = Rt {
         params: params.clone(),
-        dsp: EngineDsp::new(2048),
+        dsp: EngineDsp::new(2048, jack.sample_rate),
         ins: std::array::from_fn(|_| [None, None]),
         outs: std::array::from_fn(|_| [None, None]),
+        echo_ref_in: [None, None],
         vban_out: [None, None],
         tape: tape.clone(),
         vban: vban.clone(),
@@ -528,8 +542,6 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         vban_len: 0,
         scratch: vec![0.0f32; 2048 * 2],
     };
-
-    let jack = Jack::open(&konfig.client_name).map_err(|e| format!("JACK/PipeWire: {e}"))?;
     params.sample_rate.store(
         (jack.sample_rate as f32).to_bits(),
         std::sync::atomic::Ordering::Relaxed,
@@ -556,6 +568,14 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
             Some(jack.port_out(&format!("bus{name}_R")).expect("Port")),
         ];
     }
+    // Referenz der Echounterdrueckung: hier haengen die Monitore der
+    // gewaehlten Ausgabegeraete (src/echo.rs). Ohne Auswahl bleibt das Paar
+    // still - die Echounterdrueckung laesst das Mikrofon dann unveraendert.
+    rt.echo_ref_in = [
+        Some(jack.port_in("echo_ref_L").expect("Port")),
+        Some(jack.port_in("echo_ref_R").expect("Port")),
+    ];
+
     // Zusatz-Ausgaenge fuer empfangenes VBAN-Audio. Sie werden wie ein
     // Hardware-Eingang per pw-link auf einen Streifen gelegt, z. B.
     //   pw-link crosspoint:vban_L crosspoint:strip1_L
@@ -580,6 +600,7 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
     for name in BUS_NAMES {
         println!("  bus{name}_L / bus{name}_R");
     }
+    println!("  echo_ref_L / echo_ref_R (Referenz der Echounterdrueckung)");
     println!("  vban_L / vban_R (VBAN-Eingang, /api/vban/recv)");
     println!("\nVerdrahtung: scripts/crosspoint-wire.sh up\n");
 
@@ -659,9 +680,6 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
     // OSC-Eingang: `/strip/<n>/<param>` und `/bus/<n>/<param>` landen ueber
     // dieselbe Funktion wie `/api/set` in den Parametern (fuer MIDIMonster).
     let osc_halt = crate::osc::spawn(params.clone());
-    // Effekt-Host: mod-host/Carla als betreuter Kindprozess (fehlt er, nur
-    // eine Logzeile, die Engine laeuft weiter).
-    crate::fx::spawn(params.clone());
 
     // Jetzt stehen die Busports im Graphen: gemerkte Zuordnungen anwenden.
     if crate::restore::deaktiviert() {
@@ -672,6 +690,13 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
             *letzte = ergebnis;
         }
     }
+    // Echo-Referenz: die Monitore der gewaehlten Ausgabegeraete auf
+    // `echo_ref_L/R` legen. Nach dem Wiederherstellen, weil dort erst die
+    // Busse auf ihre Geraete gelegt werden.
+    if !crate::restore::deaktiviert() {
+        crate::echo::beim_start();
+    }
+
     // Ab hier haelt der Autosave das Preset aktuell (2 s nach der letzten
     // Aenderung, im eigenen Thread).
     crate::restore::spawn_autosave(params.clone(), preset_pfad.clone());
@@ -696,6 +721,13 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
             // laufender Aufpasser die Geraete nach dem Schliessen wieder
             // anlegen - die Sperre in `wire` und [`ABBAU`] schliessen das.
             let mut letzte_pruefung = Instant::now();
+            // Warum die Engine endet, steht im Protokoll – sonst sieht ein
+            // Fenster, das „von selbst“ zugeht, aus wie ein Absturz.
+            let signal_melden = || {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    eprintln!("Signal SIGINT/SIGTERM empfangen - beende");
+                }
+            };
             while !SHUTDOWN.load(Ordering::SeqCst) && !ende_w.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(250));
                 // Nach dem Schlafen erneut pruefen: in den 250 ms kann der
@@ -725,6 +757,7 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
                     }
                 }
             }
+            signal_melden();
             ende_w.store(true, Ordering::SeqCst);
         });
     }
