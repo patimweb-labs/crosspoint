@@ -831,7 +831,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crosspoint"
-version = "0.5.2"
+version = "1.0.0"
 dependencies = [
  "crosspoint-core",
  "crosspoint-fenster",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "crosspoint-core"
-version = "0.5.2"
+version = "1.0.0"
 dependencies = [
  "hound",
  "jack",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "crosspoint-fenster"
-version = "0.5.2"
+version = "1.0.0"
 dependencies = [
  "crosspoint-core",
  "eframe",
@@ -2042,7 +2042,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "macros"
-version = "0.5.2"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3480,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "tape"
-version = "0.5.2"
+version = "1.0.0"
 dependencies = [
  "hound",
 ]
@@ -3791,7 +3791,7 @@ dependencies = [
 
 [[package]]
 name = "vban"
-version = "0.5.2"
+version = "1.0.0"
 
 [[package]]
 name = "vello_common"

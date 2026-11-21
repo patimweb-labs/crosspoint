@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/patimweb-labs/crosspoint/compare/v0.5.2...v1.0.0) (2026-11-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* Rohsignal, Filter an B1–B3, Fenster in egui, Pakete Flatpak/AppImage ([#8](https://github.com/patimweb-labs/crosspoint/issues/8))
+
+### Features
+
+* Rohsignal, Filter an B1–B3, Fenster in egui, Pakete Flatpak/AppImage ([#8](https://github.com/patimweb-labs/crosspoint/issues/8)) ([bf41821](https://github.com/patimweb-labs/crosspoint/commit/bf41821a8506a9c5df92ffc03ef226d5dc7c1a63))
+
 ## [0.5.2](https://github.com/patimweb-labs/crosspoint/compare/v0.5.1...v0.5.2) (2026-11-16)
 
 
