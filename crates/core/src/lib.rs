@@ -21,6 +21,8 @@ pub mod aufraeumen;
 pub mod autostart;
 pub mod devices;
 pub mod dsp;
+/// Echo-Referenz: welche Ausgabegeräte spielen auf den Boxen?
+pub mod echo;
 pub mod engine;
 pub mod http;
 pub mod inputs;

@@ -690,6 +690,13 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
             *letzte = ergebnis;
         }
     }
+    // Echo-Referenz: die Monitore der gewaehlten Ausgabegeraete auf
+    // `echo_ref_L/R` legen. Nach dem Wiederherstellen, weil dort erst die
+    // Busse auf ihre Geraete gelegt werden.
+    if !crate::restore::deaktiviert() {
+        crate::echo::beim_start();
+    }
+
     // Ab hier haelt der Autosave das Preset aktuell (2 s nach der letzten
     // Aenderung, im eigenen Thread).
     crate::restore::spawn_autosave(params.clone(), preset_pfad.clone());

@@ -456,6 +456,39 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             };
             reply("200 OK", "application/json", body.as_bytes())
         }
+        // Echo-Referenz: welche Ausgabegeräte spielen auf den Boxen?
+        ("GET", p) if p.starts_with("/api/echo") => {
+            let body = crate::echo::status_json(&PipeWire);
+            reply("200 OK", "application/json", body.as_bytes())
+        }
+        ("POST", p) if p.starts_with("/api/echo") => {
+            let v = json::parse(body).unwrap_or(Value::Null);
+            // Angenommen wird `{"geraete":["<node.name>", …]}`; `null` oder
+            // eine fehlende Liste hebt die Auswahl auf.
+            let geraete: Vec<String> = v
+                .get("geraete")
+                .and_then(|x| match x {
+                    Value::Arr(a) => Some(a.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Value::Str(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                    _ => None,
+                })
+                .collect();
+            let out = match crate::echo::setzen(&PipeWire, &geraete) {
+                Ok(fehler) => {
+                    for e in fehler {
+                        eprintln!("Echo-Referenz: {e}");
+                    }
+                    crate::echo::status_json(&PipeWire)
+                }
+                Err(e) => format!("{{\"error\":{}}}", json::quote(&e)),
+            };
+            reply("200 OK", "application/json", out.as_bytes())
+        }
         ("GET", p) if p.starts_with("/api/restore") => {
             let body = match restore.lock() {
                 Ok(e) => e.to_json(),
@@ -983,11 +1016,27 @@ mod tests {
         assert_eq!(f.get("gate"), Some(&Value::Bool(true)));
         assert_eq!(f.get("gate_schwelle").and_then(|x| x.as_f64()), Some(-38.0));
         assert_eq!(f.get("aec"), Some(&Value::Bool(true)));
-        assert_eq!(f.get("aec_ref").and_then(|x| x.as_f64()), Some(1.0));
+        // `aec_ref` aus alten Presets wird übergangen: die Referenz kommt
+        // jetzt vom Ausgabegerät (siehe src/echo.rs).
+        assert!(f.get("aec_ref").is_none(), "{f:?}");
         // Rundreise: das eigene Bild wieder einspielen ändert nichts.
         let vorher = bild.to_json();
         apply_preset(&z.params, &bild);
         assert_eq!(z.params.to_json().to_json(), vorher);
+    }
+
+    #[test]
+    fn echo_referenz_hat_einen_endpunkt() {
+        // `GET /api/echo` meldet Auswahl und Ausgabegeraete. Ohne PipeWire
+        // bleibt die Liste leer und `error` sagt warum – der Endpunkt
+        // antwortet trotzdem.
+        let z = zustand();
+        let a = route(&z, "GET", "/api/echo", "");
+        assert_eq!(a.status, 200);
+        let wert = crate::json::parse(&text(&a)).unwrap();
+        assert!(wert.get("geraete").is_some(), "{}", text(&a));
+        assert!(wert.get("ausgabegeraete").is_some(), "{}", text(&a));
+        assert!(wert.get("error").is_some(), "{}", text(&a));
     }
 
     #[test]
