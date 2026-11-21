@@ -111,6 +111,12 @@ Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
   `build.rs` erzeugt daraus Konstanten. Im Code stehen nur Namen
   (`f.accent_default`, `SIZE_FADER_BAHN`).
 - **Auch selbst gezeichnete Fader und Pegel** lesen ihre Farben aus dem Theme.
+- **Icons sind Dateien, keine Glyphen.** `crates/fenster/icons/*.svg` sind eine
+  kuratierte Auswahl aus Lucide (ISC, Beilage `LUCIDE-LICENSE.txt`), in
+  `bausteine::Icon` eingebettet und über `tint` mit der Textfarbe eingefärbt.
+  Ein Icon steht **vor** dem Wort, nie statt seiner: der Name bleibt der
+  zugängliche Name des Knopfs. Die Schrift (IBM Plex Mono) hat keine
+  geometrischen Formen; statt Ersatzzeichen zu setzen, wird gezeichnet.
 - Die Anordnung ist fest (Kopf, Tape, Eingänge | Busse | Master, Makros); die
   Breite der Züge folgt dem Fenster (`logik::zugbreiten`), bei Full HD passen
   alle 17 Züge. Wählbar bleibt nur die Dichte (kompakt, normal, breit) und die
