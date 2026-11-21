@@ -142,7 +142,7 @@ fn main() {
     let n = 48_000 * 10;
     let r: Vec<f32> = (0..n).map(|i| quelle[i % quelle.len()] * 0.25).collect();
 
-    println!("{:26} {:>12}", "Echopfad", "Echodämpfung");
+    println!("{:26} {:>12} {:>12}", "Echopfad", "AEC3", "AEC3 + NS");
     for (name, nachhall, versatz, begrenzung) in [
         ("1 linear", false, false, false),
         ("2 + Nachhall", true, false, false),
@@ -150,15 +150,21 @@ fn main() {
         ("4 + Begrenzung", true, true, true),
     ] {
         let mik = pfad(&r, nachhall, versatz, begrenzung);
-        let mut aec = Box::new(Echounterdruecker::neu(48_000));
-        let d = aec.verzoegerung();
-        let aus: Vec<f32> = (0..n).map(|i| aec.process(mik[i], r[i])).collect();
-        let von = 4 * 48_000;
-        let bis = 8 * 48_000;
-        println!(
-            "{name:26} {:>+9.1} dB",
-            db(&mik[von..bis]) - db(&aus[von + d..bis + d])
-        );
+        let mut zeile = String::new();
+        for ns in [false, true] {
+            let mut aec = Box::new(Echounterdruecker::neu(48_000));
+            // `set_ns` allokiert einmal – gehört deshalb vor die Messung.
+            aec.set_ns(ns);
+            let d = aec.verzoegerung();
+            let aus: Vec<f32> = (0..n).map(|i| aec.process(mik[i], r[i])).collect();
+            let von = 4 * 48_000;
+            let bis = 8 * 48_000;
+            zeile.push_str(&format!(
+                " {:>+9.1} dB",
+                db(&mik[von..bis]) - db(&aus[von + d..bis + d])
+            ));
+        }
+        println!("{name:26}{zeile}");
     }
 
     // Allokationen im laufenden Betrieb: Puffer sind angelegt, `process` darf

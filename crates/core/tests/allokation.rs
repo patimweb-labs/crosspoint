@@ -48,11 +48,16 @@ fn process_allokiert_nichts() {
     const BLOCK: usize = 1024;
 
     let p = std::sync::Arc::new(Params::new(48000.0, BLOCK as u32));
-    // Alles an, was Puffer brauchen koennte: Gate und Echounterdrückung an
-    // allen virtuellen Bussen, Mikro (Streifen 1) und Systemton (Streifen 6)
-    // auf A1 und B1..B3.
+    // Alles an, was Puffer brauchen koennte: Gate, Echounterdrückung und
+    // Rauschunterdrückung an allen virtuellen Bussen, Mikro (Streifen 1) und
+    // Systemton (Streifen 6) auf A1 und B1..B3.
     for bus in 5..8 {
-        for (k, v) in [("gate", 1.0), ("gate_schwelle", -45.0), ("aec", 1.0)] {
+        for (k, v) in [
+            ("gate", 1.0),
+            ("gate_schwelle", -45.0),
+            ("aec", 1.0),
+            ("aec_ns", 1.0),
+        ] {
             assert!(p.set("bus", bus, k, v), "Parameter {k} an Bus {bus}");
         }
         assert!(p.set("strip", 0, &format!("send{bus}"), 1.0));
@@ -107,7 +112,9 @@ fn process_allokiert_nichts() {
         }
     }
 
-    // Ein Block zum Aufwaermen (Koeffizienten, Rauschschaetzung startet).
+    // Ein Block zum Aufwaermen (Koeffizienten, Rauschschaetzung startet). Hier
+    // schaltet `reconfigure` auch die Rauschunterdrückung ein – das allokiert
+    // einmal und gehört deshalb vor das Messfenster.
     dsp.process(&p, &io, BLOCK);
 
     let vorher = ALLOCS.load(Ordering::Relaxed);
@@ -119,7 +126,7 @@ fn process_allokiert_nichts() {
     let bytes_nachher = BYTES.load(Ordering::Relaxed);
 
     println!(
-        "ALLOC: {} Aufrufe und {} Bytes in vier Bloecken ({} Frames) mit Gate+AEC an B1..B3",
+        "ALLOC: {} Aufrufe und {} Bytes in vier Bloecken ({} Frames) mit Gate+AEC+NS an B1..B3",
         nachher - vorher,
         bytes_nachher - bytes_vorher,
         4 * BLOCK

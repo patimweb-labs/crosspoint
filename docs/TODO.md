@@ -37,14 +37,16 @@ Offen:
       und auf `echo_ref_L/R` legen). Offene Fragen: welche Streams sind
       stabil benannt, wie wird die Auswahl gespeichert, was passiert bei
       einem Stream-Neustart.
-- [ ] **Restecho-Unterdrückung** feiner abstimmen: `sonora` bringt eine
-      Rauschunterdrückung mit (`noise_suppression`), die in der Messung 12 dB
-      mehr bringt, aber am Mikrofonklang dreht. Als Schalter je Bus denkbar
-      (nicht in dieser Runde, siehe ADR 0005).
+- [x] **Restecho-Unterdrückung als Schalter je Bus**: `aec_ns` an B1–B3,
+      Häkchen „RESTECHO MIT WEGRECHNEN“ im ECHO-Menü, Vorgabe aus. Messung:
+      +12–13 dB auf allen Pfaden (`echo_verfahren`), im eingeschwungenen
+      Zustand weiter 0 Allokationen im Callback. Offen bleibt die Abnahme am
+      echten Mikrofon: ob der rauere Klang bei Sprache akzeptabel ist, lässt
+      sich nur mit Aufnahme beurteilen.
 - [ ] Echounterdrückung mit echten Boxen und Mikrofon abhören: die
       Entscheidung stützt sich auf den nachgebauten Pfad und die frühere
       Feldmessung (1,5 dB gegen 30 dB), nicht auf eine eigene Aufnahme mit
-      AEC3 im Raum.
+      AEC3 im Raum. Der Restecho-Schalter gehört in diese Abnahme.
 - [ ] Flatpak einmal vollständig mit `flatpak-builder` bauen (lokal fehlt
       `org.freedesktop.Sdk//25.08`; die CI baut es).
 - [ ] AppImage lokal bauen und auf einer zweiten Distribution starten.

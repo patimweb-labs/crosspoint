@@ -277,8 +277,11 @@ fn filter_knoepfe(
     if gate.secondary_clicked() {
         a.push(Aktion::Aufklappen(Some(Aufklapp::Gate(bus))));
     }
-    let echo = knopf(ui, rechts, "ECHO", fw.aec, Art::Akzent)
-        .on_hover_text("PC-Ton aus dem Mikro herausrechnen (Echounterdrückung)");
+    let echo = knopf(ui, rechts, "ECHO", fw.aec, Art::Akzent).on_hover_text(if fw.aec_ns {
+        "PC-Ton aus dem Mikro herausrechnen (Echounterdrückung + Restecho)"
+    } else {
+        "PC-Ton aus dem Mikro herausrechnen (Echounterdrückung)"
+    });
     if echo.clicked() {
         a.push(setzen(ziel, "aec", schalter_wert(!fw.aec)));
     }
@@ -363,21 +366,8 @@ fn filter_menue(
                                 .size(thema::FONT_SIZE_SM),
                         );
                     }
-                    // Das Kästchen muss man sehen: die Vorgabe des Themes
-                    // (bg_raised auf bg_panel) verschwindet im Menü, und mit
-                    // der Vorgabegröße wäre es ein Punkt neben dem Text.
                     ui.scope(|ui| {
-                        ui.spacing_mut().icon_width = thema::SIZE_CONTROL_SM;
-                        ui.spacing_mut().icon_width_inner = thema::SIZE_CONTROL_SM;
-                        let w = &mut ui.visuals_mut().widgets;
-                        for zustand in [&mut w.inactive, &mut w.hovered, &mut w.active] {
-                            zustand.bg_fill = f.bg_input;
-                            zustand.weak_bg_fill = f.bg_input;
-                            zustand.bg_stroke =
-                                egui::Stroke::new(thema::SIZE_BORDER, f.border_strong);
-                        }
-                        w.active.bg_fill = f.bg_selected;
-                        w.active.bg_stroke = egui::Stroke::new(thema::SIZE_FOCUS, f.focus_ring);
+                        kaestchen_aussehen(ui, f);
                         for eintrag in senken {
                             let an = gewaehlt.contains(&eintrag.name);
                             let mut wert = an;
@@ -403,6 +393,29 @@ fn filter_menue(
                         )
                         .size(thema::FONT_SIZE_SM),
                     );
+                    ui.separator();
+                    ui.scope(|ui| {
+                        kaestchen_aussehen(ui, f);
+                        let mut ns = fw.aec_ns;
+                        if ui
+                            .add(egui::Checkbox::new(
+                                &mut ns,
+                                bausteine::text(f, "RESTECHO MIT WEGRECHNEN", false, false),
+                            ))
+                            .on_hover_text(
+                                "Rauschunterdrückung hinter der Echounterdrückung: nimmt den \
+                                 Rest mit, den AEC3 stehen lässt (~12 dB). Macht den \
+                                 Mikrofonklang rauer.",
+                            )
+                            .changed()
+                        {
+                            a.push(setzen(ziel, "aec_ns", schalter_wert(ns)));
+                        }
+                    });
+                    ui.label(
+                        bausteine::text(f, "Nur zusammen mit ECHO wirksam.", false, true)
+                            .size(thema::FONT_SIZE_SM),
+                    );
                 }
                 Aufklapp::TrimDelay => {}
             }
@@ -410,6 +423,22 @@ fn filter_menue(
     if !offen {
         a.push(Aktion::Aufklappen(None));
     }
+}
+
+/// Aussehen der Kästchen im ECHO-Menü: die Vorgabe des Themes (bg_raised auf
+/// bg_panel) verschwindet im Menü, und mit der Vorgabegröße wäre das Kästchen
+/// ein Punkt neben dem Text.
+fn kaestchen_aussehen(ui: &mut Ui, f: &Farben) {
+    ui.spacing_mut().icon_width = thema::SIZE_CONTROL_SM;
+    ui.spacing_mut().icon_width_inner = thema::SIZE_CONTROL_SM;
+    let w = &mut ui.visuals_mut().widgets;
+    for zustand in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+        zustand.bg_fill = f.bg_input;
+        zustand.weak_bg_fill = f.bg_input;
+        zustand.bg_stroke = egui::Stroke::new(thema::SIZE_BORDER, f.border_strong);
+    }
+    w.active.bg_fill = f.bg_selected;
+    w.active.bg_stroke = egui::Stroke::new(thema::SIZE_FOCUS, f.focus_ring);
 }
 
 /// Ausgabegeräte für das Echo-Menü: alle Sinks aus dem Bestand, dazu die

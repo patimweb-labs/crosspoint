@@ -30,8 +30,24 @@
 //! virtuellen Bussen) und – für `sonora` allein – in
 //! `crates/core/examples/echo_verfahren.rs`.
 
-use sonora::config::EchoCanceller;
+use sonora::config::{EchoCanceller, NoiseSuppression};
 use sonora::{AudioProcessing, Config, StreamConfig};
+
+/// Was `sonora` rechnen soll. `ns` schaltet die Rauschunterdrückung nach der
+/// Echounterdrückung an – sie nimmt auch den Restecho mit, den AEC3 stehen
+/// lässt (WebRTC: 6/12/18 dB je Stufe, hier „Moderate"), dreht aber am
+/// Mikrofonklang.
+fn konfiguration(ns: bool) -> Config {
+    Config {
+        echo_canceller: Some(EchoCanceller::default()),
+        noise_suppression: if ns {
+            Some(NoiseSuppression::default())
+        } else {
+            None
+        },
+        ..Default::default()
+    }
+}
 
 /// Länge eines Rahmens, den AEC3 verarbeitet: 10 ms.
 pub const RAHMEN_MS: u32 = 10;
@@ -80,6 +96,8 @@ pub struct Echounterdruecker {
     bruecke_laenge: usize,
     /// So viele Rahmen war die Referenz am Stück still.
     still_seit: u32,
+    /// Läuft die Rauschunterdrückung mit (`aec_ns`)?
+    ns: bool,
 }
 
 impl Echounterdruecker {
@@ -91,14 +109,11 @@ impl Echounterdruecker {
     pub fn neu(abtastrate: u32) -> Echounterdruecker {
         let rahmen = (abtastrate as usize / 1000) * RAHMEN_MS as usize;
         let rahmen = rahmen.clamp(80, RAHMEN_MAX);
+        // Die Rauschunterdrückung bleibt zunächst aus: ECHO soll den
+        // Systemton herausrechnen, nicht am Mikrofonklang drehen. Sie lässt
+        // sich mit [`Echounterdruecker::set_ns`] zuschalten.
         let mut apm = AudioProcessing::builder()
-            .config(Config {
-                echo_canceller: Some(EchoCanceller::default()),
-                // Die Rauschunterdrückung bleibt aus: ECHO soll den Systemton
-                // herausrechnen, nicht am Mikrofonklang drehen.
-                noise_suppression: None,
-                ..Default::default()
-            })
+            .config(konfiguration(false))
             .capture_config(StreamConfig::new(abtastrate, 1))
             .render_config(StreamConfig::new(abtastrate, 1))
             .build();
@@ -122,6 +137,7 @@ impl Echounterdruecker {
             // Am Anfang läuft nichts: erst wenn die Referenz laut wird,
             // rechnet AEC3 mit.
             still_seit: STILL_RAHMEN,
+            ns: false,
         };
         e.bruecke_laenge = e.rahmen + AEC3_VERZOEGERUNG;
         e
@@ -131,6 +147,21 @@ impl Echounterdruecker {
     /// 10 ms) und die Verzögerung von AEC3 selbst (gemessen 19 ms zusammen).
     pub fn verzoegerung(&self) -> usize {
         self.rahmen + AEC3_VERZOEGERUNG
+    }
+
+    /// Rauschunterdrückung zu- oder abschalten (`aec_ns`).
+    ///
+    /// **Keine Echtzeit-Operation:** beim Umschalten baut `sonora` den
+    /// Rauschunterdrücker einmal neu – das allokiert. Danach ist `process`
+    /// wieder frei von Allokationen (`tests/allokation.rs`). Aufgerufen wird
+    /// das aus [`crate::engine::EngineDsp::reconfigure`], und nur wenn sich der
+    /// Schalter gegenüber dem letzten Block geändert hat.
+    pub fn set_ns(&mut self, an: bool) {
+        if an == self.ns {
+            return;
+        }
+        self.apm.apply_config(konfiguration(an));
+        self.ns = an;
     }
 
     /// Länge der Brücke in Samples (= [`Echounterdruecker::verzoegerung`]).

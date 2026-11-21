@@ -66,9 +66,14 @@ unverändert.
 
 Kosten: rund 0,4 % eines Kerns je Kanal, 19 ms Latenz (10 ms Rahmen + 9 ms
 AEC3), keine Allokation im Audio-Callback. Spielt nichts, geht das Mikrofon
-unverändert und nur verzögert durch. Gemessen: 21 dB Echodämpfung bei getrennten
-Uhren von Ausgabe- und Aufnahmegerät (der frühere lineare Filter schaffte dort
-2,4 dB), die Stimme kommt beim Doppelsprechen in ihrer Lautstärke durch.
+unverändert und nur verzögert durch. Gemessen auf dem nachgestellten Pfad mit
+Nachhall und getrennten Uhren: 14 dB Echodämpfung (der frühere lineare Filter
+schaffte dort 2,4 dB), die Stimme kommt beim Doppelsprechen in ihrer Lautstärke
+durch.
+
+Häkchen **RESTECHO MIT WEGRECHNEN** (im selben Menü) schaltet die
+Rauschunterdrückung hinter der Echounterdrückung dazu: 12–13 dB mehr, dafür ein
+rauerer Mikrofonklang. Vorgabe ist aus; sie wirkt nur zusammen mit ECHO.
 
 **GATE**: schließt in Pausen (Schwelle, Tiefe, Attack, Hold, Release per
 Rechtsklick); es entscheidet nach der Echounterdrückung, also am echofreien

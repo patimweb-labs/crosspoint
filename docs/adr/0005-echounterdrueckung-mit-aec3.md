@@ -28,10 +28,17 @@ Referenz, Rauschen im Mikrofon. Gemessen im eingeschwungenen Zustand (4–8 s).
 
 | Echopfad | eigener Filter (PBFDAF) | sonora AEC3 | AEC3 + NS |
 |---|---|---|---|
-| linear | +28,6 dB | +37,3 dB | +49,6 dB |
-| + Nachhall | +28,6 dB | +23,6 dB | +35,9 dB |
-| + Taktversatz 50 ppm | **+2,4 dB** | +21,3 dB | +33,6 dB |
-| + Begrenzung (kleiner Lautsprecher) | +2,4 dB | +21,1 dB | +33,4 dB |
+| linear | +28,6 dB | +44,1 dB | +56,6 dB |
+| + Nachhall | +28,6 dB | +19,6 dB | +32,1 dB |
+| + Taktversatz 50 ppm | **+2,4 dB** | +14,3 dB | +26,7 dB |
+| + Begrenzung (kleiner Lautsprecher) | +2,4 dB | +14,2 dB | +26,7 dB |
+
+Reproduzierbar: `cargo run --release -p crosspoint-core --example
+echo_verfahren`. Die Zahlen der ersten Runde (`+21,3 dB` bei Taktversatz) stammen
+aus einem Zwischenstand des Umbaus und sind hier durch einen frischen Lauf
+ersetzt. Die Entscheidung trägt in beiden Fällen – 2,4 dB gegen 14 dB, nicht 21
+dB. Der Aufschlag der Rauschunterdrückung ist über alle Pfade gleich: **+12 bis
++13 dB**.
 
 Der Sprung liegt am **Taktversatz**: schon 50 ppm (getrennte Quarzuhren, im
 echten Betrieb der Normalfall) verschieben das Echo um 2,4 ms pro Sekunde. Ein
@@ -56,6 +63,9 @@ Weitere Messungen (alle mit `sonora` 0.3, 48 kHz, mono):
   `process_capture_f32` ergeben 0 Allokationen, und
   `crates/core/tests/allokation.rs` ist mit Echounterdrückung an allen
   virtuellen Bussen grün.
+* **Rauschunterdrückung (NS)**: hinter der Echounterdrückung zugeschaltet
+  bringt sie 12–13 dB mehr (Zeile `AEC3 + NS` oben), kostet aber Mikrofonklang
+  – deshalb Schalter je Bus, Vorgabe aus (Entscheidung 5).
 * **Doppelsprechen**: mit einer echten Sprachaufnahme über einem Rausch-Echo
   kommt die Stimme beim Doppelsprechen in ihrer eigenen Lautstärke durch
   (±5 dB), während das Echo um 43 dB gesenkt wird.
@@ -85,13 +95,21 @@ Weitere Messungen (alle mit `sonora` 0.3, 48 kHz, mono):
    „ECHOUNTERDRÜCKUNG – Was spielt auf:“ mit einem Häkchen je Ausgabegerät
    (Mehrfachauswahl). Anzeige und Schreiben laufen über
    `logik::ausfuehren`, die Auswahl steht im Kern, nicht in der Darstellung.
+5. **Rauschunterdrückung als Schalter, nicht als Vorgabe.** `aec_ns` je
+   virtuellem Bus (Häkchen „RESTECHO MIT WEGRECHNEN“ im selben Menü), Vorgabe
+   aus. Sie sitzt **hinter** der Echounterdrückung und räumt auf, was AEC3
+   stehen lässt; wer den natürlichen Mikrofonklang will, lässt sie aus. Sie
+   wirkt nur zusammen mit `aec`. Umschalten ist keine Echtzeit-Operation:
+   `sonora` baut den Rauschunterdrücker dabei einmal neu (Allokation), im
+   eingeschwungenen Zustand allokiert `process` nichts (`tests/allokation.rs`
+   läuft mit NS an allen virtuellen Bussen).
 
 ## Alternativen
 
 | Alternative | Warum nicht |
 |---|---|
 | Eigener linearer Filter (ADR 0002) | 2,4 dB bei getrennten Uhren – im Raum nicht hörbar als Verbesserung |
-| `sonora` mit Rauschunterdrückung (AEC3+NS) | gewinnt in der Messung 12 dB, frisst aber am Mikrofonklang; ECHO soll herausrechnen, nicht aufräumen. Abschaltbar nachrüstbar (`noise_suppression`). |
+| `sonora` mit Rauschunterdrückung (AEC3+NS) als Vorgabe | gewinnt 12 dB, frisst aber am Mikrofonklang; ECHO soll herausrechnen, nicht aufräumen. Deshalb Schalter (Entscheidung 5), nicht Vorgabe. |
 | PipeWire `module-echo-cancel` benutzen | außerhalb des Modells, ein zusätzlicher Knoten je Gerät, Referenz und Schalter nicht im Mixer; genau das soll Crosspoint ersetzen |
 | AEC3 selbst schreiben | Wochen Arbeit für ein Ergebnis, das schlechter wäre als eine gepflegte Übersetzung |
 

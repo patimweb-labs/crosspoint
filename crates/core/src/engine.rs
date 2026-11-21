@@ -75,6 +75,9 @@ pub struct AusgangsFilter {
     pub gate: GateParam,
     /// Echounterdrückung an (`aec`).
     pub aec: AtomicBool,
+    /// Rauschunterdrückung hinter der Echounterdrückung an (`aec_ns`) – nimmt
+    /// den Restecho mit, dreht aber am Mikrofonklang. Nur mit `aec` wirksam.
+    pub aec_ns: AtomicBool,
 }
 
 impl AusgangsFilter {
@@ -82,6 +85,7 @@ impl AusgangsFilter {
         AusgangsFilter {
             gate: GateParam::new(),
             aec: AtomicBool::new(false),
+            aec_ns: AtomicBool::new(false),
         }
     }
 
@@ -95,6 +99,7 @@ impl AusgangsFilter {
             "gate_hold" => fset(&g.hold, v.clamp(0.0, 2000.0)),
             "gate_release" => fset(&g.release, v.clamp(1.0, 5000.0)),
             "aec" => self.aec.store(v != 0.0, Relaxed),
+            "aec_ns" => self.aec_ns.store(v != 0.0, Relaxed),
             // `aec_ref` (bis ADR 0002: welcher Hardware-Bus auf den Boxen
             // liegt) gibt es nicht mehr: die Referenz kommt jetzt vom
             // Ausgabegerät. Alte Presets laden weiter, der Wert wird
@@ -116,6 +121,7 @@ impl AusgangsFilter {
             ("gate_hold", Value::num(fget(&g.hold) as f64)),
             ("gate_release", Value::num(fget(&g.release) as f64)),
             ("aec", Value::Bool(self.aec.load(Relaxed))),
+            ("aec_ns", Value::Bool(self.aec_ns.load(Relaxed))),
         ])
     }
 }
@@ -133,12 +139,13 @@ pub fn filter_get(f: &AusgangsFilter, param: &str) -> Option<f32> {
         "gate_hold" => fget(&g.hold),
         "gate_release" => fget(&g.release),
         "aec" => schalter(&f.aec),
+        "aec_ns" => schalter(&f.aec_ns),
         _ => return None,
     })
 }
 
 /// Namen der Filterparameter (für Presets, OSC und Oberfläche).
-pub const FILTER_PARAMS: [&str; 7] = [
+pub const FILTER_PARAMS: [&str; 8] = [
     "gate",
     "gate_schwelle",
     "gate_tiefe",
@@ -146,6 +153,7 @@ pub const FILTER_PARAMS: [&str; 7] = [
     "gate_hold",
     "gate_release",
     "aec",
+    "aec_ns",
 ];
 
 pub struct StripParam {
@@ -524,6 +532,8 @@ struct FilterDsp {
     /// War die Echounterdrückung im vorigen Block an? Beim Einschalten wird
     /// sie zurückgesetzt, damit kein alter Raum nachwirkt.
     aec_war_an: bool,
+    /// War die Rauschunterdrückung im vorigen Block an (`aec_ns`)?
+    ns_war_an: bool,
 }
 
 /// DSP-Zustand, ausschließlich vom Audio-Thread benutzt.
@@ -551,6 +561,7 @@ impl EngineDsp {
                         Echounterdruecker::neu(abtastrate),
                     ],
                     aec_war_an: false,
+                    ns_war_an: false,
                 })
                 .collect(),
             blocks: 0,
@@ -578,6 +589,13 @@ impl EngineDsp {
                 f.aec.iter_mut().for_each(Echounterdruecker::reset);
             }
             f.aec_war_an = an;
+            // Nur bei Änderung umschalten: `set_ns` baut den Rauschunterdrücker
+            // einmal neu und allokiert dabei (siehe `Echounterdruecker::set_ns`).
+            let ns = fp.aec_ns.load(Relaxed);
+            if ns != f.ns_war_an {
+                f.aec.iter_mut().for_each(|a| a.set_ns(ns));
+                f.ns_war_an = ns;
+            }
         }
     }
 
@@ -1159,6 +1177,63 @@ mod tests {
             "R war {}",
             buf.out(5, 1)
         );
+    }
+
+    #[test]
+    fn ausschlag_am_bus_zeigt_das_gefilterte_signal() {
+        // Der Pegel eines Busses wird **nach** den Filtern geschrieben (siehe
+        // `process`: `peak_b` nach AEC, Gate, Delay, Trim, Gain). Deshalb
+        // fällt der Ausschlag in der Oberfläche, sobald ein Filter greift –
+        // während der Streifen (Rohsignal) unverändert bleibt.
+        let p = params();
+        let mut dsp = dsp_neu();
+        p.set("strip", 0, "send0", 0.0);
+        p.set("strip", 0, "send5", 1.0);
+        let mut buf = Buf::new(0.05, 64);
+        for _ in 0..40 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        let offen = fget(&p.buses[5].level);
+        let streifen = fget(&p.strips[0].level);
+        assert!(offen > 0.04, "B1 ohne Filter war {offen}");
+
+        // Gate zu: der Ausschlag am Bus fällt, der am Streifen nicht.
+        p.set("bus", 5, "gate", 1.0);
+        p.set("bus", 5, "gate_schwelle", -10.0);
+        p.set("bus", 5, "gate_tiefe", 60.0);
+        for _ in 0..200 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        let zu = fget(&p.buses[5].level);
+        let streifen_danach = fget(&p.strips[0].level);
+        assert!(zu < offen * 0.01, "B1 mit Gate war {zu}, offen {offen}");
+        assert!(
+            (streifen_danach - streifen).abs() < 1e-3,
+            "Streifen 1 war {streifen}, danach {streifen_danach}"
+        );
+    }
+
+    #[test]
+    fn restecho_schalter_haengt_an_den_virtuellen_bussen() {
+        // `aec_ns` ist ein Zusatz zu `aec`: nur an B1–B3, nie an A1–A5, und es
+        // steht im Zustand (also im Preset und in `/api/state`).
+        let p = params();
+        for bi in 0..ERSTER_VIRTUELLER {
+            assert!(
+                !p.set("bus", bi, "aec_ns", 1.0),
+                "A{} nahm aec_ns an",
+                bi + 1
+            );
+        }
+        assert!(p.set("bus", 5, "aec_ns", 1.0));
+        let f = p.buses[5].filter.as_ref().unwrap();
+        assert_eq!(filter_get(f, "aec_ns"), Some(1.0));
+        assert!(f.aec_ns.load(Relaxed));
+        let json = p.to_json();
+        let text = json.to_json();
+        assert!(text.contains("aec_ns"), "aec_ns fehlt im Zustand");
     }
 
     #[test]

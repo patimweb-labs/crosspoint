@@ -478,6 +478,8 @@ pub struct FilterWerte {
     pub gate_hold: f32,
     pub gate_release: f32,
     pub aec: bool,
+    /// Rauschunterdrückung hinter der Echounterdrückung (`aec_ns`).
+    pub aec_ns: bool,
 }
 
 pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
@@ -490,6 +492,7 @@ pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
         gate_hold: fget(&g.hold),
         gate_release: fget(&g.release),
         aec: an(&f.aec),
+        aec_ns: an(&f.aec_ns),
     }
 }
 

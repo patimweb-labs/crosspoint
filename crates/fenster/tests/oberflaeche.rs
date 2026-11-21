@@ -185,7 +185,7 @@ fn hand_ueber_klickbarem_pfeil_sonst() {
 #[test]
 fn echo_menue_waehlt_ausgabegeraete_aus() {
     use crosspoint_fenster::modell::{Aktion, Aufklapp};
-    let (f, _) = beispiel(Thema::Dunkel);
+    let (f, p) = beispiel(Thema::Dunkel);
     let mut h = harness(f, (1920.0, 1080.0));
     h.run_steps(4);
     // Rechtsklick auf ECHO oeffnet die Auswahl (nur an B1..B3).
@@ -219,6 +219,18 @@ fn echo_menue_waehlt_ausgabegeraete_aus() {
     assert!(h.query_by_label("ECHOUNTERDRÜCKUNG").is_some());
     // Und der Titel der Aktion bleibt die Summe in `Aufklapp`.
     assert_eq!(h.state().o.offen, Some(Aufklapp::Echo(5)));
+    // Der Restecho-Schalter steht im selben Menü und schreibt `aec_ns` an den
+    // Bus – er ist ein Zusatz zu ECHO, kein eigener Filter.
+    assert!(
+        !crosspoint_fenster::logik::filter_werte(p.buses[5].filter.as_ref().unwrap()).aec_ns,
+        "aec_ns war ab Werk an"
+    );
+    h.get_by_label("RESTECHO MIT WEGRECHNEN").click();
+    h.run_steps(3);
+    assert!(
+        crosspoint_fenster::logik::filter_werte(p.buses[5].filter.as_ref().unwrap()).aec_ns,
+        "aec_ns wurde nicht gesetzt"
+    );
     let _ = Aktion::Aufklappen(None);
 }
 
