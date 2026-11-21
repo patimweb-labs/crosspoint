@@ -1017,3 +1017,33 @@ fn filter_karten_haben_buendige_spalten() {
         );
     }
 }
+
+/// An und Aus sind an jedem Filtersschalter ablesbar: im Beispiel sind nur
+/// ECHO und GATE an, also melden genau diese beiden `selected` und alle
+/// anderen nicht. (`WidgetInfo::selected` landet in AccessKit als `toggled`;
+/// gefüllt wird der Schalter nach demselben Wert.)
+#[test]
+fn filter_schalter_melden_an_und_aus() {
+    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::NodeT;
+    let (mut f, _) = beispiel(Thema::Dunkel);
+    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(5))));
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(6);
+    for name in [
+        "LC", "ECHO", "NR", "GATE", "COMP", "AGC", "DUCK", "PTT", "LIMITER",
+    ] {
+        let erwartet = if matches!(name, "ECHO" | "GATE") {
+            Toggled::True
+        } else {
+            Toggled::False
+        };
+        let knoten = h.get_by_label(name);
+        assert_eq!(
+            NodeT::accesskit_node(&knoten).toggled(),
+            Some(erwartet),
+            "{name}"
+        );
+    }
+}

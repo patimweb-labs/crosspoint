@@ -53,7 +53,11 @@ Rahmen:
   die Karte. Zeile und Zellen setzen dazu `set_min_size`/`set_min_width` – ohne
   das schrumpft `allocate_ui_with_layout` auf den Inhalt, und jede Karte bekäme
   ihre eigene Spalte.
-* Der An/Aus-Schalter sitzt oben rechts und ist in jeder Karte gleich groß.
+* Der An/Aus-Schalter sitzt oben rechts und ist in jeder Karte gleich groß. An
+  ist eine Akzentfläche, Aus ein Grund mit Linie und gedämpfter Schrift – wie
+  die übrigen Schalter im Pult. Denselben Stand trägt `WidgetInfo::selected`
+  (in AccessKit `toggled`), und die Kartenüberschrift ist bei „aus“ gedämpft.
+  Die Bilder in `docs/bilder` zeigen beides nebeneinander.
 
 ### 3. Die ECHO-Auswahl bietet nur lokale Ausgabegeräte
 
