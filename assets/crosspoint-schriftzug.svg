@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="866.25" height="100" viewBox="0 0 866.25 100">
+  <title>Crosspoint Wortmarke</title>
+  <!-- Nur die Buchstaben, weiss: das Fenster faerbt sie mit der Textfarbe
+       ein. Pfade, keine Schrift (ADR 0008). -->
+  <g fill="#FFFFFF" fill-rule="nonzero">
+    <path transform="translate(0 0)" d="M0 78 A22 22 0 0 0 22 100 L71.25 100 L71.25 80 L26 80 A6 6 0 0 1 20 74 L20 26 A6 6 0 0 1 26 20 L71.25 20 L71.25 0 L22 0 A22 22 0 0 0 0 22 Z"/>
+    <path transform="translate(90 0)" d="M0 0 L20 0 L20 100 L0 100 Z M0 65 L56 65 A24 24 0 0 0 80 41 L80 24 A24 24 0 0 0 56 0 L0 0 Z M20 26 A6 6 0 0 1 26 20 L52 20 A8 8 0 0 1 60 28 L60 37 A8 8 0 0 1 52 45 L26 45 A6 6 0 0 1 20 39 Z M36 65 L57.5 65 L80 100 L59 100 Z"/>
+    <path transform="translate(187.5 0)" d="M0 76 A24 24 0 0 0 24 100 L56 100 A24 24 0 0 0 80 76 L80 24 A24 24 0 0 0 56 0 L24 0 A24 24 0 0 0 0 24 Z M20 30 A10 10 0 0 1 30 20 L50 20 A10 10 0 0 1 60 30 L60 70 A10 10 0 0 1 50 80 L30 80 A10 10 0 0 1 20 70 Z"/>
+    <path transform="translate(285 0)" d="M71.25 0 L22 0 A22 22 0 0 0 0 22 L0 38 A20 20 0 0 0 20 58 L38.25 58 A13 13 0 0 1 51.25 71 L51.25 73 A7 7 0 0 1 44.25 80 L10 80 A10 10 0 0 0 0 90 L0 100 L31.25 100 A20 20 0 0 0 51.25 80 L51.25 64 A24 24 0 0 0 27.25 40 L26 40 A6 6 0 0 1 20 34 L20 26 A6 6 0 0 1 26 20 L71.25 20 Z"/>
+    <path transform="translate(371.25 0)" d="M71.25 0 L22 0 A22 22 0 0 0 0 22 L0 38 A20 20 0 0 0 20 58 L38.25 58 A13 13 0 0 1 51.25 71 L51.25 73 A7 7 0 0 1 44.25 80 L10 80 A10 10 0 0 0 0 90 L0 100 L31.25 100 A20 20 0 0 0 51.25 80 L51.25 64 A24 24 0 0 0 27.25 40 L26 40 A6 6 0 0 1 20 34 L20 26 A6 6 0 0 1 26 20 L71.25 20 Z"/>
+    <path transform="translate(460 0)" d="M0 0 L20 0 L20 100 L0 100 Z M0 65 L54.75 65 A24 24 0 0 0 78.75 41 L78.75 24 A24 24 0 0 0 54.75 0 L0 0 Z M20 26 A6 6 0 0 1 26 20 L50.75 20 A8 8 0 0 1 58.75 28 L58.75 37 A8 8 0 0 1 50.75 45 L26 45 A6 6 0 0 1 20 39 Z"/>
+    <path transform="translate(556.25 0)" d="M0 76 A24 24 0 0 0 24 100 L56 100 A24 24 0 0 0 80 76 L80 24 A24 24 0 0 0 56 0 L24 0 A24 24 0 0 0 0 24 Z M20 30 A10 10 0 0 1 30 20 L50 20 A10 10 0 0 1 60 30 L60 70 A10 10 0 0 1 50 80 L30 80 A10 10 0 0 1 20 70 Z"/>
+    <path transform="translate(656.25 0)" d="M0 0 L20 0 L20 100 L0 100 Z"/>
+    <path transform="translate(696.25 0)" d="M0 0 L20 0 L20 100 L0 100 Z M62.5 0 L82.5 0 L82.5 100 L62.5 100 Z M0 0 L22 0 L82.5 73 L82.5 100 L60 100 L0 27 Z"/>
+    <path transform="translate(793.75 0)" d="M0 0 L72.5 0 L72.5 20 L46.25 20 L46.25 100 L26.25 100 L26.25 20 L0 20 Z"/>
+  </g>
+</svg>

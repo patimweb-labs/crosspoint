@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Crosspoint (hell)</title>
+  <!-- Crosspoint-Zeichen, 1:1 aus der Vorlage ausgemessen -->
+  <!-- (CROSSPOINT Tech-Logo-Showcase.png, ADR 0008). -->
+  <!-- PNGs und die installierten Icons: packaging/icons/erzeugen.sh -->
+  <defs>
+    <radialGradient id="glut">
+      <stop offset="0" stop-color="#FEBD31" stop-opacity="0.55"/>
+      <stop offset="0.4" stop-color="#FEBD31" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#FEBD31" stop-opacity="0"/>
+    </radialGradient>
+    <rect id="punkt" width="36" height="36" rx="12"/>
+  </defs>
+  <g id="kachel">
+    <rect x="1.5" y="1.5" width="509" height="509" rx="81" fill="#E6E5E5"/>
+    <rect x="1.5" y="1.5" width="509" height="509" rx="81" fill="none" stroke="#B9B8B4" stroke-width="3"/>
+  </g>
+  <g id="matrix" fill="#14181D">
+    <use href="#punkt" x="70" y="70"/>
+    <use href="#punkt" x="126" y="70"/>
+    <use href="#punkt" x="182" y="70"/>
+    <use href="#punkt" x="294" y="70"/>
+    <use href="#punkt" x="350" y="70"/>
+    <use href="#punkt" x="406" y="70"/>
+    <use href="#punkt" x="70" y="126"/>
+    <use href="#punkt" x="126" y="126"/>
+    <use href="#punkt" x="182" y="126"/>
+    <use href="#punkt" x="294" y="126"/>
+    <use href="#punkt" x="350" y="126"/>
+    <use href="#punkt" x="406" y="126"/>
+    <use href="#punkt" x="70" y="182"/>
+    <use href="#punkt" x="126" y="182"/>
+    <use href="#punkt" x="182" y="182"/>
+    <use href="#punkt" x="294" y="182"/>
+    <use href="#punkt" x="350" y="182"/>
+    <use href="#punkt" x="406" y="182"/>
+    <use href="#punkt" x="70" y="294"/>
+    <use href="#punkt" x="126" y="294"/>
+    <use href="#punkt" x="182" y="294"/>
+    <use href="#punkt" x="294" y="294"/>
+    <use href="#punkt" x="350" y="294"/>
+    <use href="#punkt" x="406" y="294"/>
+    <use href="#punkt" x="70" y="350"/>
+    <use href="#punkt" x="126" y="350"/>
+    <use href="#punkt" x="182" y="350"/>
+    <use href="#punkt" x="294" y="350"/>
+    <use href="#punkt" x="350" y="350"/>
+    <use href="#punkt" x="406" y="350"/>
+    <use href="#punkt" x="70" y="406"/>
+    <use href="#punkt" x="126" y="406"/>
+    <use href="#punkt" x="182" y="406"/>
+    <use href="#punkt" x="294" y="406"/>
+    <use href="#punkt" x="350" y="406"/>
+    <use href="#punkt" x="406" y="406"/>
+  </g>
+  <g id="kreuz" fill="#14181D">
+    <rect x="88" y="248" width="336" height="16"/>
+    <rect x="248" y="88" width="16" height="336"/>
+    <rect x="66" y="234" width="44" height="44" rx="13"/>
+    <rect x="402" y="234" width="44" height="44" rx="13"/>
+    <rect x="234" y="66" width="44" height="44" rx="13"/>
+    <rect x="234" y="402" width="44" height="44" rx="13"/>
+  </g>
+  <g id="punkt">
+    <circle cx="256" cy="256" r="54" fill="url(#glut)"/>
+    <rect x="236" y="236" width="40" height="40" rx="12" fill="#FEBD31"/>
+  </g>
+</svg>
