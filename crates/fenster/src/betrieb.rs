@@ -175,6 +175,7 @@ pub fn starten(app_id: &str, a: Args) {
         if zeigen {
             let mut o = Oberflaeche::default();
             konfig::Datei::laden(&konfig::pfad()).anwenden(&mut o);
+            o.echo_geraete = crosspoint::echo::auswahl();
             if let Some(t) = a.theme.as_deref() {
                 o.thema = Thema::aus_name(t);
             }

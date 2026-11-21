@@ -227,7 +227,9 @@ impl Default for Oberflaeche {
             vban: None,
             midi: None,
             autostart: false,
-            echo_geraete: crosspoint::echo::auswahl(),
+            // Leer; das Programm lädt die Auswahl beim Start (betrieb.rs),
+            // Tests setzen sie selbst – kein Dateizugriff im Standardwert.
+            echo_geraete: Vec::new(),
         }
     }
 }
