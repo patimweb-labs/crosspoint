@@ -238,7 +238,15 @@ pub fn status_json_mit(zugriff: &dyn Zugriff, pfad: &Path) -> String {
     let auswahl = auswahl_mit(pfad);
     let graph = zugriff.graph();
     let (senken, fehler) = match &graph {
-        Ok(g) => (crate::devices::sinks(g, false), Value::Null),
+        Ok(g) => (
+            // Die eigenen virtuellen Geräte taugen nicht als Referenz: sie
+            // tragen das, was Crosspoint gerade ausgibt (Rückkopplung).
+            crate::devices::sinks(g, false)
+                .into_iter()
+                .filter(|s| !crate::inputs::ist_eigen(&s.name))
+                .collect(),
+            Value::Null,
+        ),
         Err(e) => (Vec::new(), Value::str(e.clone())),
     };
 
@@ -449,6 +457,23 @@ mod tests {
         assert_eq!(gewaehlt[0].get("vorhanden"), Some(&Value::Bool(true)));
         assert_eq!(gewaehlt[1].get("vorhanden"), Some(&Value::Bool(false)));
         let _ = std::fs::remove_file(&pfad);
+    }
+
+    #[test]
+    fn eigene_geraete_sind_kein_ausgabegeraet() {
+        // `crosspoint_in_*` u. Ä. tragen das, was Crosspoint selbst ausgibt –
+        // als Referenz ergäbe das eine Rückkopplung und bleibt außen vor.
+        let pfad = tmp("eigen");
+        let zugriff = zugriff();
+        let text = status_json_mit(&zugriff, &pfad);
+        let wert = crate::json::parse(&text).unwrap();
+        let liste = wert.get("ausgabegeraete").unwrap().as_arr().unwrap();
+        assert!(
+            liste
+                .iter()
+                .all(|e| e.get("name") != Some(&Value::str("crosspoint_in_1"))),
+            "{text}"
+        );
     }
 
     #[test]
