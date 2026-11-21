@@ -51,12 +51,10 @@ jobs:
           RUST_BACKTRACE=1 cargo test --release --locked --workspace -- --test-threads=1
       - name: Release-Build
         run: cargo build --release --locked
-      # Die native Oberflaeche braucht GTK4-Header; auf dem Runner per apt.
-      # Ohne diesen Schritt enthielte das Flatpak-Paket eine veraltete Oberflaeche.
+      # Das Fenster (egui) laedt Wayland/X11 und OpenGL zur Laufzeit; zum
+      # Bauen genuegen die Pakete oben.
       - name: Oberflaeche bauen (Feature ui)
-        run: |
-          sudo apt-get install -y -qq libgtk-4-dev
-          cargo build --release --locked --features ui --bin crosspoint
+        run: cargo build --release --locked --features ui --bin crosspoint
       # Der Flatpak-Job baut im Container ohne Rust; er bekommt das Binary hier.
       - uses: actions/upload-artifact@v4
         with:

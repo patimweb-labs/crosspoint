@@ -8,9 +8,11 @@
   <description>
     <p>
       Crosspoint is an audio mixer for Linux. Eight input strips are routed to
-      eight buses through a crosspoint matrix, with per-strip EQ, compressor,
-      gate and denoiser, per-bus limiter, multi-band limiting, recording and
-      VBAN streaming over the local network.
+      eight buses through a crosspoint matrix. Every input reaches the hardware
+      buses as its raw signal; the three virtual outputs add a noise gate and
+      echo cancellation that removes the system sound your speakers feed back
+      into the microphone. Recording and VBAN streaming over the local network
+      are built in.
     </p>
     <p>
       Devices and routing are handled by PipeWire; the mixer runs as a JACK

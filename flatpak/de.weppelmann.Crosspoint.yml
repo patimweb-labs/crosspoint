@@ -1,121 +1,86 @@
 # Crosspoint als Flatpak.
 #
-# Baut direkt aus diesem Repo (nur path-Abhaengigkeiten, daher --offline) und
-# bringt Icon, Desktop-Eintrag und die Skripte mit. Die Engine laeuft im
-# Sandbox als JACK-Client gegen das PipeWire des Hosts. Die Oberflaeche zeigt
-# crosspoint-fenster: ein GTK3-Fenster mit WebKitGTK, das dieselbe Seite
-# (web/index.html, von der Engine auf 127.0.0.1:8770 ausgeliefert) anzeigt.
-# Ein Browser wird dafuer nicht mehr gebraucht - weder im Sandbox noch auf dem
-# Host; flatpak-spawn und der Flatpak-Socket des Hosts entfallen.
+# Das Fenster ist egui (crates/fenster): es braucht nur, was jede Runtime hat
+# (Wayland/X11, EGL/GL), keine GNOME-Bibliotheken. Darum die Freedesktop-
+# Runtime; sie bringt auch pactl, pw-link, pw-dump, pw-cli und libjack
+# (pipewire-jack) mit, die Engine und crosspoint-wire.sh benutzen.
 #
-# WebKitGTK kommt mit org.gnome.Platform//51 (libwebkit2gtk-4.1), die
-# Entwicklungspakete mit org.gnome.Sdk//51. Den Rust-Toolchain bringt der
-# Die Rust-Extension MUSS deklariert sein: ohne sie liegt kein cargo im Build
-# ("cargo: command not found"), auch wenn das SDK lokal eines mitbringt.
-# org.gnome.Sdk.Extension.rust-stable//51 existiert auf Flathub.
+# Gebaut wird hier nichts: `crosspoint` und `crosspoint-engine` kommen fertig
+# aus dem CI (cargo build --release --features ui) und liegen in prebuilt/
+# (nicht eingecheckt). Lokal:
+#   cargo build --release --features ui
+#   mkdir -p prebuilt && cp target/release/crosspoint target/release/crosspoint-engine prebuilt/
+#   flatpak-builder --user --force-clean build-dir flatpak/de.weppelmann.Crosspoint.yml
 app-id: de.weppelmann.Crosspoint
-runtime: org.gnome.Platform
-runtime-version: '51'
-sdk: org.gnome.Sdk
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
 command: crosspoint
 
 finish-args:
-  # Audio: PulseAudio-Socket des Hosts (PipeWire-Pulse) fuer pactl-Null-Sinks
+  # Audio: PulseAudio-Socket des Hosts (PipeWire-Pulse) für pactl-Null-Sinks
   - --socket=pulseaudio
   # Nativer PipeWire-Zugriff (pw-link, pw-dump, JACK-Client)
   - --filesystem=xdg-run/pipewire-0
   - --share=ipc
-  # Netzwerk-Namespace des Hosts: Engine und WebView laufen zwar im selben
-  # Sandbox, aber so bleibt 127.0.0.1:8770 auch von aussen erreichbar (z. B.
-  # fuer die Steuer-API und den VBAN-Empfang).
+  # Steuer-API (127.0.0.1:8770), OSC und VBAN
   - --share=network
-  # Fenster: Wayland bevorzugt, X11 als Rueckfall; dri fuer die Darstellung
-  # der WebView (sonst zeichnet WebKit nur in Software).
+  # Fenster: Wayland bevorzugt, X11 als Rückfall; dri für OpenGL
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
-  # Tray-Icon: StatusNotifierItem samt dbusmenu auf dem Sitzungsbus. Ohne
-  # diesen Socket kann das Fenster weder ein Icon anmelden noch den
-  # StatusNotifierWatcher des Hosts erreichen.
+  # Tray-Icon: StatusNotifierItem auf dem Sitzungsbus
   - --socket=session-bus
   # Konfiguration (~/.config/crosspoint) darf angelegt werden
   - --filesystem=~/.config/crosspoint:create
-  # Autostart-Eintrag (~/.config/autostart/de.weppelmann.Crosspoint.desktop)
-  # schreiben und wieder entfernen - POST /api/autostart.
+  # Autostart-Eintrag schreiben und wieder entfernen
   - --filesystem=xdg-config/autostart:create
 
-# Kein Rust im Flatpak-Build: die Engine wird im CI-Job "Test" gebaut und hier
-# als fertiges Binary eingesetzt (prebuilt/crosspoint-engine). Die GNOME-Runtime
-# bringt keine rust-Extension mit, und Rust im Container nachzuinstallieren
-# waere ein eigener Fehlerherd.
-#
-# Die Cargo-Abhaengigkeiten der Engine sind trotzdem eingefroren: der erste
-# Modul unten laedt `flatpak/new-sources.json` (erzeugt mit
-# flatpak-cargo-generator.py aus flatpak-builder-tools aus Cargo.lock) als
-# Quellen. Damit prueft flatpak-builder beim Bau jede Pruefsumme; fehlt ein
-# Paket, bricht der Bau ab. Ein Rust-Bau im Sandkasten wuerde dieselben
-# Verzeichnisse als `[source.vendored-sources] directory = "vendor"` benutzen.
 modules:
-  # Eingefrorene Cargo-Quellen: nur Pruefung, nichts wird installiert.
-  # (101 Pakete, Stand: siehe flatpak/new-sources.json; entpackt nach
-  #  cargo/vendor/<name>-<version>, wie `cargo vendor` es erwartet.)
+  # Eingefrorene Cargo-Quellen: flatpak-builder lädt jedes Paket aus
+  # Cargo.lock und prüft seine Prüfsumme; fehlt eines, bricht der Bau ab.
+  # Erzeugt mit packaging/flatpak/quellen.py (Format wie
+  # flatpak-cargo-generator). Installiert wird nichts.
   - name: cargo-quellen
     buildsystem: simple
     build-commands:
       - |
-        # `set -e`: ein fehlendes Paket muss den Bau abbrechen, nicht nur eine
-        # Zeile im Log hinterlassen.
         set -eu
-        # Je Paket stehen zwei Eintraege in der Liste (Archiv + Pruefsummen-
-        # Datei); gezaehlt werden die Archive, je eines pro Verzeichnis.
         anzahl=$(grep -c '"type": "archive"' new-sources.json)
         gefunden=$(ls -d cargo/vendor/*/ | wc -l)
         echo "Cargo-Quellen: $gefunden von $anzahl eingefrorenen Paketen entpackt"
         test "$anzahl" -gt 0
         test "$gefunden" -eq "$anzahl"
-        echo "Vendored-Sources: $(ls -d cargo/vendor)"
     sources:
-      # Als Quellenliste: flatpak-builder laedt jede Datei, prueft die
-      # Pruefsumme und entpackt sie nach cargo/vendor/<name>-<version>.
       - new-sources.json
-      # Zusaetzlich als Datei, damit der Zaehlschritt unten die Liste selbst
-      # lesen kann (eine Quellenliste wird nicht in das Bauverzeichnis kopiert).
       - type: file
         path: new-sources.json
-
 
   - name: crosspoint
     buildsystem: simple
     build-commands:
-      # Die Datei-Quelle landet unter ihrem Basisnamen im Build-Verzeichnis.
-      - install -Dm755 crosspoint-engine /app/bin/crosspoint-engine
       - install -Dm755 crosspoint /app/bin/crosspoint
-      - install -Dm755 scripts/crosspoint-start.sh /app/bin/crosspoint-start
+      - install -Dm755 crosspoint-engine /app/bin/crosspoint-engine
+      # Die Engine sucht crosspoint-wire.sh neben ihrem Programm.
       - install -Dm755 scripts/crosspoint-wire.sh /app/bin/crosspoint-wire.sh
-      # Der Desktop-Eintrag des Repos startet auf dem Host den Launcher
-      # (Exec=crosspoint-launch). Im Flatpak zeigt er auf das eigene Fenster.
       - |
-        # Zielverzeichnis muss existieren, sonst scheitert die Umleitung
-        # ("No such file or directory") bevor install ueberhaupt laeuft.
         mkdir -p /app/share/applications
-        sed 's|^Exec=.*|Exec=crosspoint|' data/de.weppelmann.Crosspoint.desktop \
+        sed 's|^Exec=.*|Exec=crosspoint|' packaging/linux/de.weppelmann.Crosspoint.desktop \
           > /app/share/applications/de.weppelmann.Crosspoint.desktop
         chmod 644 /app/share/applications/de.weppelmann.Crosspoint.desktop
-      - install -Dm644 packaging/linux/de.weppelmann.Crosspoint.metainfo.xml \
+      - install -Dm644 packaging/linux/de.weppelmann.Crosspoint.metainfo.xml
           /app/share/metainfo/de.weppelmann.Crosspoint.metainfo.xml
       - |
         for n in 16 32 48 64 128 256 512; do
           install -Dm644 "data/icons/hicolor/${n}x${n}/apps/de.weppelmann.Crosspoint.png" \
             "/app/share/icons/hicolor/${n}x${n}/apps/de.weppelmann.Crosspoint.png"
         done
+      - install -Dm644 crates/fenster/schriften/OFL.txt /app/share/doc/crosspoint/IBM-Plex-OFL.txt
     sources:
       - type: file
-        path: ../prebuilt/crosspoint-engine
-      # Die native Oberflaeche (GTK4, Feature 'ui'): im GNOME-SDK gebaut,
-      # weil nur dort die Header liegen. Startet Engine und Fenster im EINEN
-      # Prozess.
-      - type: file
         path: ../prebuilt/crosspoint
+      - type: file
+        path: ../prebuilt/crosspoint-engine
       - type: dir
         path: ..
         skip:
@@ -124,16 +89,4 @@ modules:
           - target
           - build-dir
           - flatpak
-          - crates/macros/target
-          - crates/tape/target
-          - crates/vban/target
-
-  # Das Fenster selbst: WebKitGTK zeichnet die Oberflaeche, kein Browser.
-  - name: fenster
-    buildsystem: simple
-    build-commands:
-      - cc fenster.c -o crosspoint-fenster $(pkg-config --cflags --libs webkit2gtk-4.1)
-      - install -Dm755 crosspoint-fenster /app/bin/crosspoint-fenster
-    sources:
-      - type: file
-        path: ../fenster/fenster.c
+          - dist
