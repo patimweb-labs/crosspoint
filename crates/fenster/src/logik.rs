@@ -468,7 +468,8 @@ pub fn zug_werte(p: &Params, ziel: Ziel, master_bus: usize) -> ZugWerte {
     }
 }
 
-/// Filterstand eines virtuellen Busses.
+/// Filterstand eines virtuellen Busses – alles, was das FILTER-Modal zeigt
+/// und die Lämpchenreihe am Knopf zusammenfasst.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FilterWerte {
     pub gate: bool,
@@ -477,13 +478,71 @@ pub struct FilterWerte {
     pub gate_attack: f32,
     pub gate_hold: f32,
     pub gate_release: f32,
+    /// Low-Cut (Hochpass) an und seine Grenze in Hz.
+    pub lc: bool,
+    pub lc_freq: f32,
     pub aec: bool,
-    /// Rauschunterdrückung hinter der Echounterdrückung (`aec_ns`).
-    pub aec_ns: bool,
+    /// Rauschunterdrückung und ihre Stufe (0..3).
+    pub nr: bool,
+    pub nr_stufe: u32,
+    pub comp: bool,
+    pub comp_schwelle: f32,
+    pub comp_ratio: f32,
+    pub comp_attack: f32,
+    pub comp_release: f32,
+    pub comp_makeup: f32,
+    pub limiter: bool,
+    pub limiter_decke: f32,
+    pub agc: bool,
+    pub agc_ziel: f32,
+    pub duck: bool,
+    pub duck_ziel: usize,
+    pub duck_tiefe: f32,
+    pub duck_schwelle: f32,
+    pub duck_attack: f32,
+    pub duck_release: f32,
+    pub ptt: bool,
+    pub ptt_offen: bool,
+}
+
+/// Die acht Lämpchen am FILTER-Knopf: Kürzel und ob der Filter an ist.
+pub const LAEMPCHEN: [&str; 8] = ["LC", "ECHO", "NR", "GATE", "COMP", "AGC", "DUCK", "PTT"];
+
+impl FilterWerte {
+    /// Stand der acht Filter, in der Reihenfolge der Signalkette.
+    pub fn laempchen(&self) -> [(&'static str, bool); 8] {
+        [
+            (LAEMPCHEN[0], self.lc),
+            (LAEMPCHEN[1], self.aec),
+            (LAEMPCHEN[2], self.nr),
+            (LAEMPCHEN[3], self.gate),
+            (LAEMPCHEN[4], self.comp),
+            (LAEMPCHEN[5], self.agc),
+            (LAEMPCHEN[6], self.duck),
+            (LAEMPCHEN[7], self.ptt),
+        ]
+    }
+
+    /// Ist irgendein Filter an? (Füllt den FILTER-Knopf.)
+    pub fn irgendwas_an(&self) -> bool {
+        self.laempchen().iter().any(|(_, an)| *an)
+    }
+
+    /// „LC an · ECHO aus · …“ für Tooltip und Screenreader.
+    pub fn stand(&self) -> String {
+        let teile: Vec<String> = self
+            .laempchen()
+            .iter()
+            .map(|(k, an)| format!("{k} {}", if *an { "an" } else { "aus" }))
+            .collect();
+        teile.join(" · ")
+    }
 }
 
 pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
     let g = &f.gate;
+    let c = &f.comp;
+    let d = &f.duck;
     FilterWerte {
         gate: an(&g.on),
         gate_schwelle: fget(&g.threshold),
@@ -491,8 +550,38 @@ pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
         gate_attack: fget(&g.attack),
         gate_hold: fget(&g.hold),
         gate_release: fget(&g.release),
+        lc: an(&f.lc.on),
+        lc_freq: fget(&f.lc.freq),
         aec: an(&f.aec),
-        aec_ns: an(&f.aec_ns),
+        nr: an(&f.nr.on),
+        nr_stufe: f.nr.stufe.load(Relaxed),
+        comp: an(&c.on),
+        comp_schwelle: fget(&c.schwelle),
+        comp_ratio: fget(&c.ratio),
+        comp_attack: fget(&c.attack),
+        comp_release: fget(&c.release),
+        comp_makeup: fget(&c.makeup),
+        limiter: an(&c.limiter),
+        limiter_decke: fget(&c.decke),
+        agc: an(&f.agc.on),
+        agc_ziel: fget(&f.agc.ziel),
+        duck: an(&d.on),
+        duck_ziel: d.ziel.load(Relaxed) as usize,
+        duck_tiefe: fget(&d.tiefe),
+        duck_schwelle: fget(&d.schwelle),
+        duck_attack: fget(&d.attack),
+        duck_release: fget(&d.release),
+        ptt: an(&f.ptt.on),
+        ptt_offen: an(&f.ptt.offen),
+    }
+}
+
+/// Pegel der Bus-Summe **vor** den Filtern (linear) und der Bus-Pegel
+/// **nachher** (aus `Params`, wie die Pegelanzeige im Pult).
+pub fn filter_pegel(p: &Params, bus: usize) -> (f32, f32) {
+    match p.buses.get(bus) {
+        Some(b) => (fget(&b.roh), fget(&b.level)),
+        None => (0.0, 0.0),
     }
 }
 

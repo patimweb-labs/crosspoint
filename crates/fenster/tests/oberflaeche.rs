@@ -135,17 +135,25 @@ fn mute_und_routing_schreiben_in_den_kern() {
     // Full HD: alles muss ohne Scrollen erreichbar sein (B3 ganz rechts).
     let mut h = harness(f, (1920.0, 1080.0));
     h.run_steps(4);
-    // Kein Kanal hat noch Filterknöpfe; GATE/ECHO gibt es nur an B1..B3.
+    // Kein Kanal hat Filterknöpfe; FILTER gibt es nur an B1..B3, die alten
+    // Popups für GATE und ECHO nicht mehr.
     assert!(h.query_by_label("EQ").is_none());
     assert!(h.query_by_label("NR").is_none());
-    assert_eq!(h.get_all_by_label("GATE").count(), 3);
-    assert_eq!(h.get_all_by_label("ECHO").count(), 3);
+    assert!(h.query_by_label("GATE").is_none());
+    assert!(h.query_by_label("ECHO").is_none());
+    assert_eq!(h.get_all_by_label("FILTER").count(), 3);
     // Erstes M = Kanal 1.
     h.get_all_by_label("M").next().expect("M").click();
     h.run_steps(2);
     assert!(params.strips[0].mute.load(Relaxed));
-    // Erstes GATE = B1 (schon an) → aus.
-    h.get_all_by_label("GATE").next().expect("GATE").click();
+    // FILTER an B1 öffnet das Modal; dort schaltet das Kürzel GATE den Filter.
+    h.get_all_by_label("FILTER").next().expect("FILTER").click();
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("FILTER · B1 Discord").is_some(),
+        "Modal fehlt"
+    );
+    h.get_by_label("GATE").click();
     h.run_steps(2);
     let gates: Vec<bool> = (5..8)
         .map(|b| {
@@ -174,7 +182,7 @@ fn hand_ueber_klickbarem_pfeil_sonst() {
         h.run_steps(2);
         h.output().platform_output.cursor_icon
     };
-    for name in ["M", "GATE", "PRESETS", "A1"] {
+    for name in ["M", "FILTER", "PRESETS", "A1"] {
         h.get_all_by_label(name).next().expect(name).hover();
         assert_eq!(zeiger(&mut h), egui::CursorIcon::PointingHand, "{name}");
     }
@@ -183,21 +191,21 @@ fn hand_ueber_klickbarem_pfeil_sonst() {
 }
 
 #[test]
-fn echo_menue_waehlt_ausgabegeraete_aus() {
+fn filter_modal_waehlt_echo_geraete_und_schaltet_filter() {
+    use crosspoint_fenster::logik::filter_werte;
     use crosspoint_fenster::modell::{Aktion, Aufklapp};
     let (f, p) = beispiel(Thema::Dunkel);
-    let mut h = harness(f, (1920.0, 1080.0));
+    let mut h = harness(f, (1920.0, 1800.0));
     h.run_steps(4);
-    // Rechtsklick auf ECHO oeffnet die Auswahl (nur an B1..B3).
-    h.get_all_by_label("ECHO")
+    // Rechtsklick auf FILTER öffnet dasselbe Modal wie der Linksklick.
+    h.get_all_by_label("FILTER")
         .next()
-        .expect("ECHO")
+        .expect("FILTER")
         .click_secondary();
     h.run_steps(3);
-    assert!(
-        h.query_by_label("ECHOUNTERDRÜCKUNG").is_some(),
-        "Menütitel fehlt"
-    );
+    assert_eq!(h.state().o.offen, Some(Aufklapp::Filter(5)));
+    assert!(h.query_by_label("FILTER · B1 Discord").is_some());
+    assert!(h.query_by_label("ECHO · ECHOUNTERDRÜCKUNG").is_some());
     assert!(h.query_by_label("Was spielt auf:").is_some());
     assert!(
         h.query_by_label("Lautsprecher").is_some(),
@@ -210,28 +218,42 @@ fn echo_menue_waehlt_ausgabegeraete_aus() {
         h.state().o.echo_geraete,
         vec!["alsa_output.pci-0000_00_1f.3.analog-stereo".to_string()]
     );
-    // Noch einmal klicken nimmt es wieder heraus; die anderen bleiben.
-    let mut h = h;
-    h.get_by_label("Lautsprecher").click();
-    h.run_steps(3);
-    assert!(h.state().o.echo_geraete.is_empty());
-    // Das Menü bleibt offen (kein Schließen beim Ankreuzen).
-    assert!(h.query_by_label("ECHOUNTERDRÜCKUNG").is_some());
-    // Und der Titel der Aktion bleibt die Summe in `Aufklapp`.
-    assert_eq!(h.state().o.offen, Some(Aufklapp::Echo(5)));
-    // Der Restecho-Schalter steht im selben Menü und schreibt `aec_ns` an den
-    // Bus – er ist ein Zusatz zu ECHO, kein eigener Filter.
-    assert!(
-        !crosspoint_fenster::logik::filter_werte(p.buses[5].filter.as_ref().unwrap()).aec_ns,
-        "aec_ns war ab Werk an"
-    );
-    h.get_by_label("RESTECHO MIT WEGRECHNEN").click();
-    h.run_steps(3);
-    assert!(
-        crosspoint_fenster::logik::filter_werte(p.buses[5].filter.as_ref().unwrap()).aec_ns,
-        "aec_ns wurde nicht gesetzt"
-    );
+    // Das Modal bleibt offen (kein Schließen beim Ankreuzen).
+    assert!(h.query_by_label("FILTER · B1 Discord").is_some());
+
+    // Jeder Filter hat einen eigenen Schalter, der im Kern landet.
+    assert!(!filter_werte(p.buses[5].filter.as_ref().unwrap()).nr);
+    h.get_by_label("NR").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).nr);
+    h.get_by_label("LC").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).lc);
+    h.get_by_label("COMP").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).comp);
+    h.get_by_label("LIMITER").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).limiter);
+    h.get_by_label("AGC").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).agc);
+    h.get_by_label("DUCK").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).duck);
+    h.get_by_label("PTT").click();
+    h.run_steps(2);
+    assert!(filter_werte(p.buses[5].filter.as_ref().unwrap()).ptt);
+    // Das Gate war an (Beispielmodell) → jetzt aus.
+    h.get_by_label("GATE").click();
+    h.run_steps(2);
+    assert!(!filter_werte(p.buses[5].filter.as_ref().unwrap()).gate);
+    // Die Lämpchenreihe am Zug nennt den Stand (sie schaltet nicht).
     let _ = Aktion::Aufklappen(None);
+    // Escape schließt das Modal.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().o.offen, None, "Escape schließt nicht");
 }
 
 #[test]
@@ -274,18 +296,34 @@ fn bilder_in_allen_themes() {
                     .unwrap();
             }
         }
-        // Das ECHO-Menü ist neu: ein Bild je Theme, damit man es im PR sieht.
-        let (mut f, _) = beispiel(thema);
+        // Das FILTER-Modal ist neu: ein Bild je Theme, damit man es im PR
+        // sieht (und die Lämpchenreihe am Zug mit).
+        let (mut f, params) = beispiel(thema);
+        // Ein paar Filter an, damit die Lämpchen und Karten etwas zeigen.
+        for (k, v) in [
+            ("lc", 1.0),
+            ("nr", 1.0),
+            ("comp", 1.0),
+            ("limiter", 1.0),
+            ("agc", 1.0),
+            ("duck", 1.0),
+            ("ptt", 1.0),
+        ] {
+            params.set("bus", 5, k, v);
+        }
+        // Pegel vor und nach den Filtern (schreibt sonst der Audio-Thread).
+        params.buses[5].roh.store(0.4f32.to_bits(), Relaxed);
+        params.buses[5].level.store(0.12f32.to_bits(), Relaxed);
         f.ausfuehren(crosspoint_fenster::modell::Aktion::Aufklappen(Some(
-            crosspoint_fenster::modell::Aufklapp::Echo(5),
+            crosspoint_fenster::modell::Aufklapp::Filter(5),
         )));
         let mut h = harness(f, (1920.0, 1080.0));
         h.run_steps(6);
-        assert!(h.query_by_label("ECHOUNTERDRÜCKUNG").is_some());
+        assert!(h.query_by_label("FILTER · B1 Discord").is_some());
         if let Some(ziel) = &ziel {
             let bild = h.render().expect("zeichnen (wgpu)");
             std::fs::create_dir_all(ziel).unwrap();
-            bild.save(ziel.join(format!("echo-menu-{}.png", thema.name())))
+            bild.save(ziel.join(format!("filter-modal-{}.png", thema.name())))
                 .unwrap();
         }
         // Der Darstellung-Dialog zeigt Sonne, Mond und Kontrast — ein Bild

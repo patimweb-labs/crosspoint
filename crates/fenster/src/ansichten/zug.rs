@@ -24,6 +24,8 @@ const REIHE: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_1;
 const ZUORDNUNG: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_2;
 /// Höhe des Zugkopfs.
 const KOPF: f32 = thema::SPACE_6 + thema::SPACE_2;
+/// Höhe der Lämpchenreihe am FILTER-Knopf: vier Zeilen à zwei Kürzel.
+pub const LAEMPCHEN: f32 = 4.0 * (thema::FONT_SIZE_SM + thema::SPACE_1);
 
 fn setzen(ziel: Ziel, param: &str, wert: f32) -> Aktion {
     Aktion::Setzen {
@@ -94,8 +96,11 @@ fn inhalt(
     let werte = logik::zug_werte(&k.params, ziel, o.master_bus);
     let filter = logik::filter_von(&k.params, ziel, o.master_bus);
     let reihen = 2.0;
-    let mut unten = r.bottom() - pad - reihen * (REIHE + pad);
+    // Die Filterbusse tragen unter den zwei Knopfreihen noch die Lämpchen.
+    let lampen_h = if filter.is_some() { LAEMPCHEN } else { 0.0 };
+    let mut unten = r.bottom() - pad - reihen * (REIHE + pad) - lampen_h;
     let schalter_y = unten;
+    let lampen_y = schalter_y + reihen * (REIHE + pad);
     let mut pan_y = None;
     let mut zuordnung_y = None;
     if let Ziel::Kanal(_) = ziel {
@@ -175,7 +180,7 @@ fn inhalt(
             Vec2::new(w, REIHE),
         )
     };
-    let mut knopf = |ui: &mut Ui, rb: Rect, text: &str, an: bool, art: Art| {
+    let knopf = |ui: &mut Ui, rb: Rect, text: &str, an: bool, art: Art| {
         ui.scope_builder(UiBuilder::new().max_rect(rb), |ui| {
             bausteine::schalter(ui, f, text, an, art, rb.size())
         })
@@ -200,12 +205,11 @@ fn inhalt(
                 a.push(setzen(ziel, "mono", schalter_wert(!werte.mono)));
             }
             if let Some(fw) = filter {
-                filter_knoepfe(
+                filter_knopf(
                     ui,
                     f,
-                    &mut knopf,
-                    platz(1, 0, 2),
-                    platz(1, 1, 2),
+                    platz(1, 0, 1),
+                    Rect::from_min_size(Pos2::new(links, lampen_y), Vec2::new(breite, LAEMPCHEN)),
                     ziel,
                     o,
                     fw,
@@ -229,12 +233,14 @@ fn inhalt(
             });
             match filter {
                 Some(fw) => {
-                    filter_knoepfe(
+                    filter_knopf(
                         ui,
                         f,
-                        &mut knopf,
-                        platz(1, 0, 2),
-                        platz(1, 1, 2),
+                        platz(1, 0, 1),
+                        Rect::from_min_size(
+                            Pos2::new(links, lampen_y),
+                            Vec2::new(breite, LAEMPCHEN),
+                        ),
                         ziel,
                         o,
                         fw,
@@ -254,219 +260,50 @@ fn inhalt(
     }
 }
 
+/// FILTER-Knopf und Lämpchenreihe eines virtuellen Busses.
+///
+/// Links- wie Rechtsklick öffnen das FILTER-Modal; dort stehen Schalter und
+/// Regler. Der Knopf selbst schaltet nichts – er zeigt nur, ob etwas an ist.
 #[allow(clippy::too_many_arguments)]
-fn filter_knoepfe(
+fn filter_knopf(
     ui: &mut Ui,
     f: &Farben,
-    knopf: &mut impl FnMut(&mut Ui, Rect, &str, bool, Art) -> egui::Response,
-    links: Rect,
-    rechts: Rect,
+    knopf: Rect,
+    lampen: Rect,
     ziel: Ziel,
     o: &Oberflaeche,
     fw: FilterWerte,
     a: &mut Vec<Aktion>,
 ) {
     let bus = logik::bus_von(ziel, o.master_bus).unwrap_or(ERSTER_VIRTUELLER);
-    let gate = knopf(ui, links, "GATE", fw.gate, Art::Akzent).on_hover_text(format!(
-        "Noise Gate · {:.0} dBFS · Rechtsklick: Einstellungen",
-        fw.gate_schwelle
-    ));
-    if gate.clicked() {
-        a.push(setzen(ziel, "gate", schalter_wert(!fw.gate)));
+    let stand = fw.stand();
+    let antwort = ui
+        .scope_builder(UiBuilder::new().max_rect(knopf), |ui| {
+            bausteine::schalter_icon(
+                ui,
+                f,
+                Some(bausteine::Icon::Regler),
+                "FILTER",
+                fw.irgendwas_an(),
+                Art::Akzent,
+                knopf.size(),
+            )
+        })
+        .inner
+        .on_hover_text(format!("Filter von {} · {stand}", BUS_NAMES[bus]));
+    if antwort.clicked() || antwort.secondary_clicked() {
+        a.push(Aktion::Aufklappen(Some(Aufklapp::Filter(bus))));
     }
-    if gate.secondary_clicked() {
-        a.push(Aktion::Aufklappen(Some(Aufklapp::Gate(bus))));
-    }
-    let echo = knopf(ui, rechts, "ECHO", fw.aec, Art::Akzent).on_hover_text(if fw.aec_ns {
-        "PC-Ton aus dem Mikro herausrechnen (Echounterdrückung + Restecho)"
-    } else {
-        "PC-Ton aus dem Mikro herausrechnen (Echounterdrückung)"
+    ui.scope_builder(UiBuilder::new().max_rect(lampen), |ui| {
+        bausteine::laempchen(
+            ui,
+            f,
+            lampen.size(),
+            BUS_NAMES[bus],
+            &fw.laempchen(),
+            &stand,
+        );
     });
-    if echo.clicked() {
-        a.push(setzen(ziel, "aec", schalter_wert(!fw.aec)));
-    }
-    if echo.secondary_clicked() {
-        a.push(Aktion::Aufklappen(Some(Aufklapp::Echo(bus))));
-    }
-    // Die Menüs hängen am Knopf, die Werte kommen aus dem Modell.
-    filter_menue(f, &gate, Aufklapp::Gate(bus), o, fw, a);
-    filter_menue(f, &echo, Aufklapp::Echo(bus), o, fw, a);
-}
-
-/// Einstellungen von Gate bzw. Echounterdrückung als Popup am Knopf.
-fn filter_menue(
-    f: &Farben,
-    knopf: &egui::Response,
-    was: Aufklapp,
-    o: &Oberflaeche,
-    fw: FilterWerte,
-    a: &mut Vec<Aktion>,
-) {
-    let mut offen = o.offen == Some(was);
-    if !offen {
-        return;
-    }
-    let ziel = match was {
-        Aufklapp::Gate(b) | Aufklapp::Echo(b) => Ziel::Bus(b),
-        Aufklapp::TrimDelay => return,
-    };
-    egui::Popup::from_response(knopf)
-        .open_bool(&mut offen)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            ui.set_min_width(thema::SPACE_6 * 7.0);
-            match was {
-                Aufklapp::Gate(_) => {
-                    ui.label(bausteine::text(
-                        f,
-                        "GATE · STILLE UNTER DER SCHWELLE",
-                        false,
-                        true,
-                    ));
-                    for (titel, param, von, bis, wert, einheit) in [
-                        (
-                            "Schwelle",
-                            "gate_schwelle",
-                            -80.0,
-                            -10.0,
-                            fw.gate_schwelle,
-                            "dBFS",
-                        ),
-                        ("Tiefe", "gate_tiefe", 0.0, 80.0, fw.gate_tiefe, "dB"),
-                        ("Attack", "gate_attack", 0.5, 100.0, fw.gate_attack, "ms"),
-                        ("Hold", "gate_hold", 0.0, 500.0, fw.gate_hold, "ms"),
-                        (
-                            "Release",
-                            "gate_release",
-                            10.0,
-                            2000.0,
-                            fw.gate_release,
-                            "ms",
-                        ),
-                    ] {
-                        let mut w = wert;
-                        ui.label(bausteine::text(f, titel, false, false));
-                        let r = ui.add(
-                            egui::Slider::new(&mut w, von..=bis)
-                                .suffix(format!(" {einheit}"))
-                                .fixed_decimals(0),
-                        );
-                        if r.changed() {
-                            a.push(setzen(ziel, param, w));
-                        }
-                    }
-                }
-                Aufklapp::Echo(_) => {
-                    ui.label(bausteine::text(f, "ECHOUNTERDRÜCKUNG", false, true));
-                    ui.label(bausteine::text(f, "Was spielt auf:", false, false));
-                    let (senken, gewaehlt) = ausgabegeraete(o);
-                    if senken.is_empty() {
-                        ui.label(
-                            bausteine::text(f, "Kein Ausgabegerät gefunden.", false, true)
-                                .size(thema::FONT_SIZE_SM),
-                        );
-                    }
-                    ui.scope(|ui| {
-                        kaestchen_aussehen(ui, f);
-                        for eintrag in senken {
-                            let an = gewaehlt.contains(&eintrag.name);
-                            let mut wert = an;
-                            let text = geraete::eintrag_text(&eintrag.anzeige, eintrag.fehlt);
-                            // Lautsprecher je Gerät: dieselbe Liste, aber mit
-                            // dem Zeichen, das den Ausgang meint.
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = thema::SPACE_2;
-                                bausteine::icon(ui, bausteine::Icon::Lautsprecher, f.text_muted);
-                                if ui
-                                    .add(egui::Checkbox::new(&mut wert, text))
-                                    .on_hover_text(&eintrag.name)
-                                    .changed()
-                                {
-                                    a.push(Aktion::EchoGeraet {
-                                        name: eintrag.name.clone(),
-                                        an: wert,
-                                    });
-                                }
-                            });
-                        }
-                    });
-                    ui.label(
-                        bausteine::text(
-                            f,
-                            "Der Ton dieser Geräte wird aus dem Mikrofon gerechnet.",
-                            false,
-                            true,
-                        )
-                        .size(thema::FONT_SIZE_SM),
-                    );
-                    ui.separator();
-                    ui.scope(|ui| {
-                        kaestchen_aussehen(ui, f);
-                        let mut ns = fw.aec_ns;
-                        if ui
-                            .add(egui::Checkbox::new(
-                                &mut ns,
-                                bausteine::text(f, "RESTECHO MIT WEGRECHNEN", false, false),
-                            ))
-                            .on_hover_text(
-                                "Rauschunterdrückung hinter der Echounterdrückung: nimmt den \
-                                 Rest mit, den AEC3 stehen lässt (~12 dB). Macht den \
-                                 Mikrofonklang rauer.",
-                            )
-                            .changed()
-                        {
-                            a.push(setzen(ziel, "aec_ns", schalter_wert(ns)));
-                        }
-                    });
-                    ui.label(
-                        bausteine::text(f, "Nur zusammen mit ECHO wirksam.", false, true)
-                            .size(thema::FONT_SIZE_SM),
-                    );
-                }
-                Aufklapp::TrimDelay => {}
-            }
-        });
-    if !offen {
-        a.push(Aktion::Aufklappen(None));
-    }
-}
-
-/// Aussehen der Kästchen im ECHO-Menü: die Vorgabe des Themes (bg_raised auf
-/// bg_panel) verschwindet im Menü, und mit der Vorgabegröße wäre das Kästchen
-/// ein Punkt neben dem Text.
-fn kaestchen_aussehen(ui: &mut Ui, f: &Farben) {
-    ui.spacing_mut().icon_width = thema::SIZE_CONTROL_SM;
-    ui.spacing_mut().icon_width_inner = thema::SIZE_CONTROL_SM;
-    let w = &mut ui.visuals_mut().widgets;
-    for zustand in [&mut w.inactive, &mut w.hovered, &mut w.active] {
-        zustand.bg_fill = f.bg_input;
-        zustand.weak_bg_fill = f.bg_input;
-        zustand.bg_stroke = egui::Stroke::new(thema::SIZE_BORDER, f.border_strong);
-    }
-    w.active.bg_fill = f.bg_selected;
-    w.active.bg_stroke = egui::Stroke::new(thema::SIZE_FOCUS, f.focus_ring);
-}
-
-/// Ausgabegeräte für das Echo-Menü: alle Sinks aus dem Bestand, dazu die
-/// gemerkten, die gerade fehlen. Zurück kommt (Liste, Auswahl).
-fn ausgabegeraete(o: &Oberflaeche) -> (Vec<geraete::Eintrag>, Vec<String>) {
-    let bestand = match &o.geraete {
-        crate::modell::Geraete::Fertig(b) => Some(b.as_ref()),
-        crate::modell::Geraete::Laedt => None,
-    };
-    let mut liste = bestand.map(|b| b.senken.clone()).unwrap_or_default();
-    // Gemerkte Geräte, die gerade nicht im Graphen stehen, bleiben sichtbar.
-    for name in &o.echo_geraete {
-        if liste.iter().any(|e| e.name == *name) {
-            continue;
-        }
-        liste.push(geraete::Eintrag {
-            name: name.clone(),
-            anzeige: geraete::kurzname(name),
-            fehlt: true,
-        });
-    }
-    (liste, o.echo_geraete.clone())
 }
 
 /// Trim/Delay des Master-Busses.

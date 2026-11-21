@@ -6,6 +6,7 @@
 //! die direkt im Modell bearbeitet und per Aktion übernommen werden.
 
 pub mod dialoge;
+pub mod filter;
 pub mod kopf;
 pub mod makros;
 pub mod zug;
@@ -54,9 +55,10 @@ pub fn pult(
             let hoehe = ui
                 .available_height()
                 // Untergrenze: ein Fader, an dem alle Skalenzahlen lesbar
-                // stehen, plus alle Knöpfe. Darüber wächst der Fader mit dem
-                // Fenster, darunter scrollt das Pult (in beide Richtungen).
-                .max(thema::SIZE_FADER_HOEHE + thema::SPACE_6 * 8.0);
+                // stehen, plus alle Knöpfe und die Lämpchenreihe der
+                // Filterbusse. Darüber wächst der Fader mit dem Fenster,
+                // darunter scrollt das Pult (in beide Richtungen).
+                .max(thema::SIZE_FADER_HOEHE + thema::SPACE_6 * 8.0 + zug::LAEMPCHEN);
             let luecken = 2.0 * GRUPPE + 16.0 * thema::SPACE_1;
             let (kanal, bus) = logik::zugbreiten(o.dichte, ui.available_width(), luecken);
             let gesamt = 8.0 * kanal + 9.0 * bus + luecken;
@@ -93,5 +95,6 @@ pub fn pult(
                 });
         });
     dialoge::dialog(&ctx, f, o, k, &mut a);
+    filter::modal(&ctx, f, o, k, &mut a);
     a
 }

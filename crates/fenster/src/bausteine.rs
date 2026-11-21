@@ -390,6 +390,20 @@ pub fn schalter(
     art: Art,
     groesse: Vec2,
 ) -> Response {
+    schalter_icon(ui, f, None, text, an, art, groesse)
+}
+
+/// Wie [`schalter`], aber mit einem Icon vor dem Wort (`FILTER`). Das Wort
+/// bleibt der zugängliche Name, das Icon ist nur das Bild dazu.
+pub fn schalter_icon(
+    ui: &mut Ui,
+    f: &Farben,
+    icon: Option<Icon>,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(groesse, Sense::click());
     response.widget_info(|| WidgetInfo::selected(egui::Role::CheckBox, true, an, text));
     let (flaeche, linie, schrift) = if an {
@@ -403,7 +417,7 @@ pub fn schalter(
     } else {
         (f.bg_canvas, f.border_subtle, f.text_muted)
     };
-    let p = ui.painter();
+    let p = ui.painter().clone();
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
     p.rect_filled(rect, ecke, flaeche);
     p.rect_stroke(
@@ -412,13 +426,40 @@ pub fn schalter(
         Stroke::new(thema::SIZE_BORDER, linie),
         StrokeKind::Inside,
     );
-    p.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        fett(thema::FONT_SIZE_SM),
-        schrift,
-    );
+    match icon {
+        None => {
+            p.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                text,
+                fett(thema::FONT_SIZE_SM),
+                schrift,
+            );
+        }
+        Some(icon) => {
+            let font = fett(thema::FONT_SIZE_SM);
+            let galley = p.layout_no_wrap(text.to_string(), font, schrift);
+            let kante = thema::FONT_SIZE_SM * 0.8;
+            let luecke = thema::SPACE_1;
+            let gesamt = kante + luecke + galley.size().x;
+            let links = rect.center().x - gesamt * 0.5;
+            icon.bild(kante, schrift).paint_at(
+                ui,
+                Rect::from_center_size(
+                    Pos2::new(links + kante * 0.5, rect.center().y),
+                    Vec2::splat(kante),
+                ),
+            );
+            p.galley(
+                Pos2::new(
+                    links + kante + luecke,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+                schrift,
+            );
+        }
+    }
     if response.has_focus() {
         p.rect_stroke(
             rect.expand(1.0),
@@ -428,6 +469,44 @@ pub fn schalter(
         );
     }
     response
+}
+
+/// Lämpchenreihe: die acht Filter eines virtuellen Busses als Kürzel, an in
+/// der Akzentfarbe, aus in der gedämpften. Nur Anzeige – geschaltet wird im
+/// FILTER-Modal; der zugängliche Name nennt den Bus, der Tooltip den Stand.
+pub fn laempchen(
+    ui: &mut Ui,
+    f: &Farben,
+    groesse: Vec2,
+    bus: &str,
+    stand: &[(&'static str, bool); 8],
+    zusammenfassung: &str,
+) {
+    let (rect, response) = ui.allocate_exact_size(groesse, Sense::hover());
+    response.widget_info(|| {
+        WidgetInfo::labeled(egui::Role::Label, true, format!("Filteranzeige {bus}"))
+    });
+    let p = ui.painter().clone();
+    // Zwei Kürzel je Zeile: „GATE COMP“ passt in die Zugbreite, drei nicht.
+    let spalten = 2.0;
+    let zelle = Vec2::new(rect.width() / spalten, rect.height() / 4.0);
+    for (i, (kurz, an)) in stand.iter().enumerate() {
+        let (spalte, zeile) = (i as f32 % spalten, (i / 2) as f32);
+        let mitte = Pos2::new(
+            rect.left() + (spalte + 0.5) * zelle.x,
+            rect.top() + (zeile + 0.5) * zelle.y,
+        );
+        p.text(
+            mitte,
+            Align2::CENTER_CENTER,
+            *kurz,
+            fett(thema::FONT_SIZE_SM),
+            if *an { f.accent_default } else { f.text_faint },
+        );
+    }
+    if !zusammenfassung.is_empty() {
+        response.on_hover_text(zusammenfassung);
+    }
 }
 
 // ----------------------------------------------------------------- Icons ----

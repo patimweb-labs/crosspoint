@@ -82,15 +82,17 @@ impl Dialog {
     }
 }
 
-/// Aufgeklapptes Menü an einem Zug.
+/// Was gerade aufgeklappt ist: ein Menü am Zug oder das FILTER-Modal.
+///
+/// Der Zustand steht hier (nicht in der Ansicht), damit er sich als
+/// [`Aktion::Aufklappen`] über `logik::ausfuehren` setzen lässt – auch von
+/// außen (Start mit `--dialog`, Tests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Aufklapp {
-    /// Noise Gate eines virtuellen Busses.
-    Gate(usize),
-    /// Echounterdrückung eines virtuellen Busses.
-    Echo(usize),
-    /// Trim und Delay des Master-Busses.
+    /// Trim und Delay des Master-Busses (Popup am Knopf).
     TrimDelay,
+    /// Modal „FILTER“ eines virtuellen Busses (B1–B3).
+    Filter(usize),
 }
 
 /// Laufende Umbenennung eines Zugs.
