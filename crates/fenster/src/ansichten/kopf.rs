@@ -22,6 +22,7 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                 ui.available_width(),
                 thema::SIZE_CONTROL_MD + thema::SPACE_3,
             );
+            let teile = crate::logik::kopf_teile(zeile.x);
             ui.allocate_ui_with_layout(
                 zeile,
                 egui::Layout::left_to_right(egui::Align::Center),
@@ -39,30 +40,42 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                         f.accent_default,
                         f.accent_default,
                     );
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(bausteine::text(f, "8×8 DIGITAL MIXER", true, false));
-                        ui.label(bausteine::text(f, "8 x 8 · PIPEWIRE / JACK", false, true));
-                    });
-                    let sr = f32::from_bits(k.params.sample_rate.load(Relaxed));
-                    let block = k.params.block.load(Relaxed);
-                    bausteine::chip(ui, f, "SR", &format!("{:.1} kHz", sr / 1000.0));
-                    bausteine::chip(ui, f, "BLK", &format!("{block}"));
-                    bausteine::chip(
-                        ui,
-                        f,
-                        "RATE",
-                        &format!("{:.1} ms", block as f32 / sr.max(1.0) * 1000.0),
-                    );
-                    match &o.meldung {
-                        Meldung::Keine => {}
-                        Meldung::Hinweis(t) => {
-                            ui.label(bausteine::text(f, t, false, true));
+                    if teile.untertitel {
+                        ui.separator();
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.label(bausteine::text(f, "8×8 DIGITAL MIXER", true, false));
+                            ui.label(bausteine::text(f, "8 x 8 · PIPEWIRE / JACK", false, true));
+                        });
+                    }
+                    if teile.kennzahlen {
+                        let sr = f32::from_bits(k.params.sample_rate.load(Relaxed));
+                        let block = k.params.block.load(Relaxed);
+                        bausteine::chip(ui, f, "SR", &format!("{:.1} kHz", sr / 1000.0));
+                        bausteine::chip(ui, f, "BLK", &format!("{block}"));
+                        bausteine::chip(
+                            ui,
+                            f,
+                            "RATE",
+                            &format!("{:.1} ms", block as f32 / sr.max(1.0) * 1000.0),
+                        );
+                    }
+                    // Die Meldung nimmt nur den Platz, der neben den Knöpfen
+                    // rechts frei bleibt, und wird sonst gekürzt.
+                    let text = match &o.meldung {
+                        Meldung::Hinweis(t) if teile.meldung => {
+                            Some(bausteine::text(f, t, false, true))
                         }
-                        Meldung::Fehler(t) => {
-                            ui.label(bausteine::text(f, t, false, false).color(f.status_warn));
+                        Meldung::Fehler(t) if teile.meldung => {
+                            Some(bausteine::text(f, t, false, false).color(f.status_warn))
                         }
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        let frei = (ui.available_width() - thema::SPACE_6 * 19.0).max(0.0);
+                        ui.allocate_ui(egui::Vec2::new(frei, zeile.y), |ui| {
+                            ui.add(egui::Label::new(text).truncate());
+                        });
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for d in [

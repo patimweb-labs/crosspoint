@@ -664,11 +664,14 @@ fn geraetewahl(ui: &mut Ui, f: &Farben, r: Rect, ziel: Ziel, o: &Oberflaeche, a:
     };
     ui.scope_builder(UiBuilder::new().max_rect(r), |ui| {
         egui::ComboBox::from_id_salt(("geraet", ziel))
-            .width(r.width() - thema::SPACE_2)
+            // Volle Zugbreite; der Name wird nur so weit gekürzt, dass er
+            // neben dem Pfeil Platz hat.
+            .width(r.width())
+            .wrap_mode(egui::TextWrapMode::Truncate)
             .selected_text(
                 RichText::new(crate::fmt::kurz(
                     &anzeige,
-                    ((r.width() - thema::SPACE_6) / (thema::FONT_SIZE_SM * 0.6)).max(3.0) as usize,
+                    ((r.width() - thema::SPACE_5) / (thema::FONT_SIZE_SM * 0.6)).max(3.0) as usize,
                 ))
                 .size(thema::FONT_SIZE_SM)
                 .color(farbe),

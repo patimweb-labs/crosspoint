@@ -525,9 +525,29 @@ pub const BUS_ANTEIL: f32 = 0.82;
 /// Züge passen, nie schmaler als die Dichte vorgibt (dann scrollt das Pult).
 pub fn zugbreiten(d: Dichte, verfuegbar: f32, luecken: f32) -> (f32, f32) {
     let einheiten = crosspoint::STRIPS as f32 + (BUSES + 1) as f32 * BUS_ANTEIL;
-    let mindest = zug_breite(d);
-    let kanal = ((verfuegbar - luecken) / einheiten).clamp(mindest, mindest * 1.4);
+    // Bevorzugt ist die Breite der Dichte; reicht der Platz nicht, werden die
+    // Züge bis „kompakt“ schmaler, erst dann scrollt das Pult.
+    let bevorzugt = zug_breite(d);
+    let mindest = bevorzugt.min(zug_breite(Dichte::Kompakt));
+    let kanal = ((verfuegbar - luecken) / einheiten).clamp(mindest, bevorzugt.max(mindest) * 1.4);
     (kanal, kanal * BUS_ANTEIL)
+}
+
+/// Was die Kopfleiste bei einer Breite zeigt; Marke, Status und Knöpfe
+/// stehen immer da, Zusatzangaben fallen bei wenig Platz zuerst weg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KopfTeile {
+    pub meldung: bool,
+    pub untertitel: bool,
+    pub kennzahlen: bool,
+}
+
+pub fn kopf_teile(breite: f32) -> KopfTeile {
+    KopfTeile {
+        meldung: breite >= 1000.0,
+        untertitel: breite >= 1250.0,
+        kennzahlen: breite >= 1500.0,
+    }
 }
 
 /// Skala der Fader: (dB, Beschriftung).
@@ -888,16 +908,28 @@ mod tests {
         assert_eq!(fader_ziehen(0.0, 500.0, 500.0, 0.0), -60.0);
         assert_eq!(fader_ziehen(0.0, 1.0, 500.0, 0.0), 0.0);
         assert!(zug_breite(Dichte::Kompakt) < zug_breite(Dichte::Breit));
+        assert_eq!(
+            kopf_teile(900.0),
+            KopfTeile {
+                meldung: false,
+                untertitel: false,
+                kennzahlen: false
+            }
+        );
+        assert!(kopf_teile(1920.0).kennzahlen);
         let (k, b) = zugbreiten(Dichte::Normal, 2540.0, 100.0);
         assert!(8.0 * k + 9.0 * b <= 2440.5, "passt nicht: {k} {b}");
         // Full HD: alle 17 Züge ohne Scrollen.
         let (k, b) = zugbreiten(Dichte::Normal, 1900.0, 100.0);
         assert!(8.0 * k + 9.0 * b <= 1800.5, "1920 px scrollt: {k} {b}");
+        // Schmaler: erst bis „kompakt“ schrumpfen, dann scrollen.
+        let (k, _) = zugbreiten(Dichte::Normal, 1600.0, 100.0);
+        assert!(k < zug_breite(Dichte::Normal) && k >= zug_breite(Dichte::Kompakt));
         let (k, _) = zugbreiten(Dichte::Normal, 800.0, 100.0);
         assert_eq!(
             k,
-            zug_breite(Dichte::Normal),
-            "zu schmal: Mindestbreite, Pult scrollt"
+            zug_breite(Dichte::Kompakt),
+            "Untergrenze kompakt, Pult scrollt"
         );
     }
 }

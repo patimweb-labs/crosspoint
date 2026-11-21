@@ -258,7 +258,7 @@ fn dialoge_kommen_mit_inhalt() {
 fn bilder_in_allen_themes() {
     let ziel = std::env::var_os("CROSSPOINT_BILDER").map(PathBuf::from);
     for thema in Thema::ALLE {
-        for (breite, hoehe) in [(2560.0, 1440.0), (1920.0, 1080.0)] {
+        for (breite, hoehe) in [(2560.0, 1440.0), (1920.0, 1080.0), (1280.0, 720.0)] {
             let (f, _) = beispiel(thema);
             let mut h = harness(f, (breite, hoehe));
             h.run_steps(6);

@@ -53,12 +53,17 @@ pub fn pult(
         .show(ui, |ui| {
             let hoehe = ui
                 .available_height()
+                // Untergrenze: ein Fader, an dem alle Skalenzahlen lesbar
+                // stehen, plus alle Knöpfe. Darüber wächst der Fader mit dem
+                // Fenster, darunter scrollt das Pult (in beide Richtungen).
                 .max(thema::SIZE_FADER_HOEHE + thema::SPACE_6 * 8.0);
             let luecken = 2.0 * GRUPPE + 16.0 * thema::SPACE_1;
             let (kanal, bus) = logik::zugbreiten(o.dichte, ui.available_width(), luecken);
             let gesamt = 8.0 * kanal + 9.0 * bus + luecken;
-            egui::ScrollArea::horizontal()
-                .auto_shrink([false, true])
+            // Beide Richtungen: bei kleinem Fenster wird gescrollt, nie
+            // abgeschnitten.
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let (rect, _) =
                         ui.allocate_exact_size(Vec2::new(gesamt, hoehe), egui::Sense::hover());
