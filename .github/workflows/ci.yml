@@ -91,7 +91,15 @@ jobs:
         with:
           name: engine
           path: prebuilt
-      - run: chmod +x prebuilt/crosspoint-engine
+      # Das Manifest braucht beide Programme in `prebuilt/` (das Flatpak baut
+      # kein cargo): `crosspoint` mit Fenster und `crosspoint-engine`.
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui
+          path: prebuilt
+      - run: |
+          chmod +x prebuilt/crosspoint prebuilt/crosspoint-engine
+          ls -l prebuilt
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: crosspoint-ci.flatpak
