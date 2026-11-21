@@ -18,14 +18,9 @@ use crate::logik::{self, FilterWerte, Kern};
 use crate::modell::{Aktion, Aufklapp, Geraete, Oberflaeche, Pegel, Ziel};
 use crate::thema::{self, Farben};
 
-/// Höhe einer Schalterreihe.
-const REIHE: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_1;
-/// Höhe einer Zuordnungsreihe (A1..A4, A5..B3).
-const ZUORDNUNG: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_2;
-/// Höhe des Zugkopfs.
-const KOPF: f32 = thema::SPACE_6 + thema::SPACE_2;
-/// Höhe der Lämpchenreihe am FILTER-Knopf: eine Zeile Anfangsbuchstaben.
-pub const LAEMPCHEN: f32 = thema::FONT_SIZE_SM + thema::SPACE_2;
+/// Höhe der Lämpchenreihe am FILTER-Knopf (eine Zeile Anfangsbuchstaben);
+/// das Maß steht in [`logik`], weil die Mindestgröße damit rechnet.
+pub const LAEMPCHEN: f32 = logik::ZUG_LAEMPCHEN;
 
 fn setzen(ziel: Ziel, param: &str, wert: f32) -> Aktion {
     Aktion::Setzen {
@@ -73,45 +68,37 @@ fn inhalt(
     k: &Kern,
     a: &mut Vec<Aktion>,
 ) {
-    let pad = thema::SPACE_1;
+    let pad = logik::ZUG_RAND;
     let breite = r.width() - 2.0 * pad;
     let links = r.left() + pad;
+    let ist_kanal = matches!(ziel, Ziel::Kanal(_));
+    let werte = logik::zug_werte(&k.params, ziel, o.master_bus);
+    let filter = logik::filter_von(&k.params, ziel, o.master_bus);
+    // Was über und unter dem Fader steht, steht in `logik::ZugMass` – dieselbe
+    // Rechnung ergibt die Mindestgröße des Fensters.
+    let mass = logik::ZugMass::fuer(filter.is_some(), ist_kanal);
     let mut y = r.top() + pad;
 
     // Gerätewahl (Hardware-Kanäle und -Busse); sonst bleibt die Zeile frei,
     // damit alle Köpfe auf einer Höhe stehen.
-    let geraet = Rect::from_min_size(
-        Pos2::new(links, y),
-        Vec2::new(breite, thema::SIZE_CONTROL_SM),
-    );
+    let geraet = Rect::from_min_size(Pos2::new(links, y), Vec2::new(breite, logik::ZUG_GERAET));
     geraetewahl(ui, f, geraet, ziel, o, a);
-    y += thema::SIZE_CONTROL_SM + pad;
+    y += logik::ZUG_GERAET + pad;
 
     // Kopf
-    let kopf = Rect::from_min_size(Pos2::new(r.left(), y), Vec2::new(r.width(), KOPF));
+    let kopf = Rect::from_min_size(
+        Pos2::new(r.left(), y),
+        Vec2::new(r.width(), logik::ZUG_KOPF),
+    );
     zugkopf(ui, f, kopf, ziel, o, k, a);
-    y += KOPF + pad;
+    y += logik::ZUG_KOPF + pad;
 
-    // Untere Reihen
-    let werte = logik::zug_werte(&k.params, ziel, o.master_bus);
-    let filter = logik::filter_von(&k.params, ziel, o.master_bus);
-    let reihen = 2.0;
-    // Die Filterbusse tragen unter den zwei Knopfreihen noch die Lämpchen.
-    let lampen_h = if filter.is_some() { LAEMPCHEN } else { 0.0 };
-    let mut unten = r.bottom() - pad - reihen * (REIHE + pad) - lampen_h;
-    let schalter_y = unten;
-    let lampen_y = schalter_y + reihen * (REIHE + pad);
-    let mut pan_y = None;
-    let mut zuordnung_y = None;
-    if let Ziel::Kanal(_) = ziel {
-        unten -= 2.0 * (ZUORDNUNG + pad);
-        zuordnung_y = Some(unten);
-        unten -= thema::SIZE_PAN + thema::SPACE_5 + pad;
-        pan_y = Some(unten);
-    }
-
-    // Fader
-    let fader = Rect::from_min_max(Pos2::new(links, y), Pos2::new(links + breite, unten - pad));
+    // Fader: der Rest der Höhe, oben und unten von den festen Zeilen begrenzt.
+    let fader = Rect::from_min_size(
+        Pos2::new(links, y),
+        Vec2::new(breite, mass.fader(r.height())),
+    );
+    y = fader.bottom();
     let idx = Pegel::index(ziel);
     let name = logik::name(ziel, o, k);
     ui.scope_builder(UiBuilder::new().max_rect(fader), |ui| {
@@ -128,6 +115,25 @@ fn inhalt(
             a.push(setzen(ziel, "gain", neu));
         }
     });
+
+    // Pan und Zuordnung gibt es nur am Kanal; danach folgen bei allen Zügen
+    // die Schalterreihen und beim Filterbus die Lämpchenzeile.
+    let pan_y = if ist_kanal {
+        let oben = y;
+        y += thema::SIZE_PAN + thema::SPACE_5 + pad;
+        Some(oben)
+    } else {
+        None
+    };
+    let zuordnung_y = if ist_kanal {
+        let oben = y;
+        y += 2.0 * (logik::ZUG_ZUORDNUNG + pad);
+        Some(oben)
+    } else {
+        None
+    };
+    let schalter_y = y;
+    let lampen_y = schalter_y + 2.0 * (logik::ZUG_REIHE + pad);
 
     if let (Some(py), Some(pan)) = (pan_y, werte.pan) {
         let rp = Rect::from_min_size(
@@ -149,9 +155,9 @@ fn inhalt(
             let rb = Rect::from_min_size(
                 Pos2::new(
                     links + spalte as f32 * (w + pad),
-                    zy + reihe as f32 * (ZUORDNUNG + pad),
+                    zy + reihe as f32 * (logik::ZUG_ZUORDNUNG + pad),
                 ),
-                Vec2::new(w, ZUORDNUNG),
+                Vec2::new(w, logik::ZUG_ZUORDNUNG),
             );
             let an = crate::state::send_an(&k.params, kanal, bus);
             ui.scope_builder(UiBuilder::new().max_rect(rb), |ui| {
@@ -175,9 +181,9 @@ fn inhalt(
         Rect::from_min_size(
             Pos2::new(
                 links + spalte as f32 * (halb + pad),
-                schalter_y + reihe as f32 * (REIHE + pad),
+                schalter_y + reihe as f32 * (logik::ZUG_REIHE + pad),
             ),
-            Vec2::new(w, REIHE),
+            Vec2::new(w, logik::ZUG_REIHE),
         )
     };
     let knopf = |ui: &mut Ui, rb: Rect, text: &str, an: bool, art: Art| {

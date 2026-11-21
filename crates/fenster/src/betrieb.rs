@@ -255,7 +255,9 @@ fn fenster_laufen(
             .with_app_id(app_id)
             .with_icon(Arc::new(symbol()))
             .with_inner_size([a.breite, a.hoehe])
-            .with_min_inner_size([720.0, 480.0]),
+            // Kein Scrollen (ADR 0007): die Mindestgröße kommt aus den Maßen
+            // des Pults (`logik`), nicht aus einer geratenen Zahl.
+            .with_min_inner_size(crate::logik::mindestfenster()),
         // Erlaubt einen zweiten Lauf im selben Prozess (Tray → Fenster).
         run_and_return: true,
         ..Default::default()

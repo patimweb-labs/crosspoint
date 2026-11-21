@@ -215,9 +215,6 @@
       },
       "knopf": {
         "$value": "26px"
-      },
-      "hoehe": {
-        "$value": "240px"
       }
     },
     "pegel": {
@@ -226,14 +223,8 @@
       }
     },
     "zug": {
-      "breite": {
-        "$value": "116px"
-      },
       "kompakt": {
         "$value": "100px"
-      },
-      "breit": {
-        "$value": "150px"
       }
     },
     "pan": {

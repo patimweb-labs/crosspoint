@@ -64,9 +64,17 @@ pub fn fader(
     let pad = thema::SPACE_1;
     let wert_h = thema::FONT_SIZE_SM + thema::SPACE_1;
     let top = rect.top() + pad + thema::SPACE_2;
-    let len = (rect.height() - pad * 2.0 - thema::SPACE_2 - wert_h - thema::SPACE_2).max(20.0);
+    let len = logik::fader_laenge(rect.height());
     let bahn = thema::SIZE_FADER_BAHN;
-    let x_bahn = rect.center().x - bahn * 0.5 - thema::SPACE_1;
+    // Von rechts: Pegelsäule, Bahn, Skalenstrich, Zahlen – die Bahn sitzt so
+    // weit rechts, dass die Skala links den ganzen Platz bekommt. Schmale
+    // Züge (Busse) verlieren so keine Zahlen.
+    let meter_w = thema::SIZE_PEGEL_BREITE;
+    let meter = Rect::from_min_size(
+        Pos2::new(rect.right() - pad - meter_w, top),
+        Vec2::new(meter_w, len),
+    );
+    let x_bahn = meter.left() - thema::SPACE_1 - bahn;
 
     // Bedienung
     let mut neu = None;
@@ -131,19 +139,15 @@ pub fn fader(
         p.rect_filled(fuellung, ecke, f.accent_deep);
     }
 
-    // Skala
+    // Skala: alle neun Zahlen, nie ausgedünnt. Reicht die Breite nicht für die
+    // kleine Schrift, wird sie kleiner (`logik::fader_skala_schrift`).
     let skala_rechts = x_bahn - thema::SPACE_1;
-    let platz = skala_rechts - rect.left() - thema::SPACE_2;
-    // Schmale Züge (Busse): die Skala wird kleiner gesetzt statt wegzufallen,
-    // höchstens bis 3/4 der kleinen Schrift (wie in der GTK-Oberfläche).
-    let fs = thema::FONT_SIZE_SM;
-    let fs_skala = (platz / 1.9).min(fs);
-    let breit_genug = fs_skala >= fs * 0.75;
+    let fs = logik::fader_skala_schrift(rect.width());
     for (db, text) in SKALA {
         let y = top + (1.0 - fader_pos(db)) * len;
         let haupt = db == 0.0;
         let farbe = if haupt { f.text_default } else { f.text_muted };
-        let strich = if haupt { 5.0 } else { 3.0 };
+        let strich = if haupt { logik::SKALA_STRICH } else { 3.0 };
         p.line_segment(
             [
                 Pos2::new(skala_rechts, y),
@@ -154,23 +158,16 @@ pub fn fader(
                 alpha(farbe, if haupt { 0.9 } else { 0.55 }),
             ),
         );
-        if breit_genug {
-            p.text(
-                Pos2::new(skala_rechts - thema::SPACE_1, y),
-                Align2::RIGHT_CENTER,
-                text,
-                mono(fs_skala),
-                alpha(farbe, if haupt { 0.95 } else { 0.6 }),
-            );
-        }
+        p.text(
+            Pos2::new(skala_rechts - thema::SPACE_1, y),
+            Align2::RIGHT_CENTER,
+            text,
+            mono(fs),
+            alpha(farbe, if haupt { 0.95 } else { 0.6 }),
+        );
     }
 
     // Pegel rechts
-    let meter_w = thema::SIZE_PEGEL_BREITE;
-    let meter = Rect::from_min_size(
-        Pos2::new(rect.right() - pad - meter_w - thema::SPACE_1, top),
-        Vec2::new(meter_w, len),
-    );
     pegelsaeule(&p, f, meter, pegel_db, spitze_db);
 
     // Griff
@@ -215,7 +212,13 @@ pub fn fader(
             Vec2::new(feld_w, wert_h),
         );
         p.rect_filled(feld, ecke, alpha(f.bg_canvas, 0.85));
-        p.text(feld.center(), Align2::CENTER_CENTER, text, mono(fs), farbe);
+        p.text(
+            feld.center(),
+            Align2::CENTER_CENTER,
+            text,
+            mono(thema::FONT_SIZE_SM),
+            farbe,
+        );
     }
     if response.has_focus() {
         p.rect_stroke(

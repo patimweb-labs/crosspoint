@@ -4,7 +4,7 @@ use egui::{RichText, Ui};
 
 use crate::bausteine;
 use crate::logik::{self, Kern};
-use crate::modell::{Aktion, Dialog, Dichte, Oberflaeche};
+use crate::modell::{Aktion, Dialog, Oberflaeche};
 use crate::thema::{self, Farben, Thema};
 
 pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a: &mut Vec<Aktion>) {
@@ -17,7 +17,7 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
             "Audio übers Netz senden und empfangen",
         ),
         Dialog::Midi => (thema::SPACE_6 * 26.0, "MIDIMonster übersetzt MIDI nach OSC"),
-        Dialog::Darstellung => (thema::SPACE_6 * 12.0, "Theme, Dichte, Makros, Autostart"),
+        Dialog::Darstellung => (thema::SPACE_6 * 12.0, "Theme, Makros, Autostart"),
     };
     egui::Window::new(
         RichText::new(d.titel()).font(egui::FontId::new(thema::FONT_SIZE_MD, thema::fett())),
@@ -49,30 +49,50 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
     }
 }
 
-fn presets(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut Vec<Aktion>) {
+fn presets(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, k: &Kern, a: &mut Vec<Aktion>) {
     let liste = logik::presets(&k.preset_ordner);
-    egui::ScrollArea::vertical()
-        .max_height(thema::SPACE_6 * 9.0)
-        .show(ui, |ui| {
-            if liste.is_empty() {
-                ui.label(bausteine::text(
-                    f,
-                    "noch kein Preset gespeichert",
-                    false,
-                    true,
-                ));
+    let seiten = logik::preset_seiten(liste.len());
+    let seite = o.preset_seite.min(seiten - 1);
+    // Feste Zahl von Zeilen je Seite statt Scrollen: das Fenster bleibt so
+    // hoch wie der Dialog (ADR 0007).
+    for (name, pfad) in liste
+        .iter()
+        .skip(seite * logik::PRESET_ZEILEN)
+        .take(logik::PRESET_ZEILEN)
+    {
+        ui.horizontal(|ui| {
+            ui.label(bausteine::text(f, name, false, false));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if bausteine::kopfknopf(ui, f, "LADEN", None).clicked() {
+                    a.push(Aktion::PresetLaden(pfad.clone()));
+                }
+            });
+        });
+    }
+    if liste.is_empty() {
+        ui.label(bausteine::text(
+            f,
+            "noch kein Preset gespeichert",
+            false,
+            true,
+        ));
+    }
+    if seiten > 1 {
+        ui.horizontal(|ui| {
+            if bausteine::kopfknopf(ui, f, "<< ZURÜCK", None).clicked() {
+                a.push(Aktion::PresetSeite(logik::blaettern(seite, seiten, false)));
             }
-            for (name, pfad) in liste {
-                ui.horizontal(|ui| {
-                    ui.label(bausteine::text(f, &name, false, false));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if bausteine::kopfknopf(ui, f, "LADEN", None).clicked() {
-                            a.push(Aktion::PresetLaden(pfad.clone()));
-                        }
-                    });
-                });
+            ui.label(bausteine::text(
+                f,
+                &format!("SEITE {}/{seiten}", seite + 1),
+                false,
+                true,
+            ));
+            if bausteine::kopfknopf(ui, f, "WEITER >>", None).clicked() {
+                a.push(Aktion::PresetSeite(logik::blaettern(seite, seiten, true)));
             }
         });
+    }
     ui.label(bausteine::text(
         f,
         &format!("Ordner: {}", k.preset_ordner.display()),
@@ -226,49 +246,56 @@ fn midi(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>) {
         ));
     });
     ui.separator();
-    egui::ScrollArea::vertical()
-        .max_height(thema::SPACE_6 * 11.0)
-        .show(ui, |ui| {
-            egui::Grid::new("midi_zeilen").striped(true).show(ui, |ui| {
-                for z in m.karte.seite(m.seite) {
-                    ui.label(bausteine::text(f, &z.titel, false, false));
-                    ui.label(bausteine::text(f, &z.ziel, false, true));
-                    ui.label(bausteine::text(
-                        f,
-                        &z.cc
-                            .map(|c| format!("CC {c}"))
-                            .unwrap_or_else(|| "—".into()),
-                        false,
-                        true,
-                    ));
-                    let lernt = m.lernt.as_deref() == Some(z.ziel.as_str());
-                    let (text, an) = if lernt {
-                        ("WARTET …", Some(f.status_warn))
-                    } else if z.cc.is_some() {
-                        ("LÖSEN", None)
-                    } else {
-                        ("LEARN", None)
-                    };
-                    if bausteine::kopfknopf(ui, f, text, an).clicked() {
-                        a.push(Aktion::MidiLernen(z.ziel.clone()));
-                    }
-                    ui.end_row();
-                }
-            });
-        });
+    // Ein Blatt je Seite: so viele Zeilen, wie im kleinsten Fenster Platz
+    // haben – kein Scrollen (ADR 0007).
+    egui::Grid::new("midi_zeilen").striped(true).show(ui, |ui| {
+        for z in m.karte.blatt(m.seite, m.blatt) {
+            ui.label(bausteine::text(f, &z.titel, false, false));
+            ui.label(bausteine::text(f, &z.ziel, false, true));
+            ui.label(bausteine::text(
+                f,
+                &z.cc
+                    .map(|c| format!("CC {c}"))
+                    .unwrap_or_else(|| "—".into()),
+                false,
+                true,
+            ));
+            let lernt = m.lernt.as_deref() == Some(z.ziel.as_str());
+            let (text, an) = if lernt {
+                ("WARTET …", Some(f.status_warn))
+            } else if z.cc.is_some() {
+                ("LÖSEN", None)
+            } else {
+                ("LEARN", None)
+            };
+            if bausteine::kopfknopf(ui, f, text, an).clicked() {
+                a.push(Aktion::MidiLernen(z.ziel.clone()));
+            }
+            ui.end_row();
+        }
+    });
     ui.horizontal(|ui| {
-        let n = crate::midimonster::SEITEN;
-        if bausteine::kopfknopf(ui, f, "<< PREV. PAGE", None).clicked() {
-            a.push(Aktion::MidiSeite((m.seite + n - 1) % n));
+        let n = crate::midimonster::seiten_blaetter(m.seite);
+        if bausteine::kopfknopf(ui, f, "<< ZURÜCK", None).clicked() {
+            let (seite, blatt) = logik::midi_blaettern(m.seite, m.blatt, false);
+            a.push(Aktion::MidiSeite(seite));
+            a.push(Aktion::MidiBlatt(blatt));
         }
         ui.label(bausteine::text(
             f,
-            &format!("Page {}/{n}", m.seite + 1),
+            &format!(
+                "SEITE {}/{} · BLATT {}/{n}",
+                m.seite + 1,
+                crate::midimonster::SEITEN,
+                m.blatt + 1
+            ),
             false,
             true,
         ));
-        if bausteine::kopfknopf(ui, f, "NEXT PAGE >>", None).clicked() {
-            a.push(Aktion::MidiSeite(m.seite + 1));
+        if bausteine::kopfknopf(ui, f, "WEITER >>", None).clicked() {
+            let (seite, blatt) = logik::midi_blaettern(m.seite, m.blatt, true);
+            a.push(Aktion::MidiSeite(seite));
+            a.push(Aktion::MidiBlatt(blatt));
         }
     });
     if !m.status.is_empty() {
@@ -289,14 +316,6 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
             .frame_when_inactive(gewaehlt);
             if ui.add(knopf).clicked() {
                 a.push(Aktion::Thema(t));
-            }
-        }
-    });
-    ui.label(bausteine::text(f, "DICHTE", true, false));
-    ui.horizontal(|ui| {
-        for d in Dichte::ALLE {
-            if ui.selectable_label(o.dichte == d, d.name()).clicked() {
-                a.push(Aktion::Dichte(d));
             }
         }
     });

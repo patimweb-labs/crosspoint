@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 pub const SEITEN: usize = 6;
 /// CC-Nummern der Zusatzzeilen "Control Change n".
 pub const FREIE_CCS: usize = 56;
+/// Zeilen je Blatt im Dialog: mehr passen im kleinsten Fenster nicht hin,
+/// ohne zu scrollen (ADR 0007).
+pub const BLATT_ZEILEN: usize = 10;
 
 /// Ein Ziel mit optionaler CC-Bindung.
 #[derive(Clone, Debug, PartialEq)]
@@ -115,6 +118,11 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
     z
 }
 
+/// Blätter einer Seite (mindestens eins).
+pub fn seiten_blaetter(seite: usize) -> usize {
+    seiten_ziele(seite).len().div_ceil(BLATT_ZEILEN).max(1)
+}
+
 impl Karte {
     /// Leere Karte mit den Zielen der ersten Seite.
     pub fn leer() -> Karte {
@@ -147,6 +155,13 @@ impl Karte {
             }
         }
         self.zeilen = neu;
+    }
+
+    /// Die Zeilen eines Blatts der Seite, mit den gebundenen CCs.
+    pub fn blatt(&self, seite: usize, blatt: usize) -> Vec<Zeile> {
+        let zeilen = self.seite(seite);
+        let von = blatt.min(seiten_blaetter(seite) - 1) * BLATT_ZEILEN;
+        zeilen[von..(von + BLATT_ZEILEN).min(zeilen.len())].to_vec()
     }
 
     /// Ziele einer Seite mit den aktuell gebundenen CCs.

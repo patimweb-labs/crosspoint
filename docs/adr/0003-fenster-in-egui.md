@@ -42,6 +42,7 @@ sprechwerk“ – und „am Ende genauso gut aussehend“.
 ## Kosten
 
 - Frei anordenbare Layouts und eigene Themes der GTK-Fassung entfallen; es
-  bleiben drei Themes und drei Dichten.
+  bleiben drei Themes. Die Dichte der Züge entfällt später mit dem Scrollen
+  ([ADR 0007](0007-pult-ohne-scrollleisten.md)).
 - Die Web-Oberfläche (`web/index.html`) bleibt als Fernbedienung, nicht mehr
   als Paritätsreferenz.

@@ -158,9 +158,8 @@ pub fn anwenden(ctx: &egui::Context, thema: Thema) {
     s.interact_size.y = SIZE_CONTROL_SM;
     s.window_margin = egui::Margin::same(SPACE_4 as i8);
     s.menu_margin = egui::Margin::same(SPACE_1 as i8);
-    // Feste Scrollbalken: sichtbar, sobald das Pult nicht ins Fenster passt,
-    // statt nur beim Darüberfahren zu erscheinen.
-    s.scroll = egui::style::ScrollStyle::solid();
+    // Keine Scrollbalken im Pult (ADR 0007); Aufklapplisten bleiben schmal.
+    s.scroll = egui::style::ScrollStyle::thin();
 
     style.text_styles = [
         (TextStyle::Small, FontId::monospace(FONT_SIZE_SM)),

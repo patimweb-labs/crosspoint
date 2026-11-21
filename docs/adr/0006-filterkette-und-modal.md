@@ -105,7 +105,7 @@ wird der Bus auf 0 gesetzt. Steuerbar über HTTP/OSC (`/bus/<n>/ptt`,
 
 ### 4. Oberfläche: FILTER-Knopf + Modal
 
-Acht Knöpfe passen nicht in eine Zugbreite (95 px bei normaler Dichte), und
+Acht Knöpfe passen nicht in eine Zugbreite (rund 95 px für einen Bus), und
 Fehlbedienung fällt in einer Reihe Lämpchen schneller auf als in acht Popups.
 Deshalb:
 

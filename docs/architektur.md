@@ -105,7 +105,7 @@ Jeder Schritt muss einzeln lauffähig sein; nach jedem Schritt Tests grün und
 die API-Antworten unverändert. Kein Schritt darf einen neuen Adapter
 einführen, ohne dass ein alter wegfällt.
 
-## Darstellung: drei Themes, eine Dichte
+## Darstellung: drei Themes, feste Anordnung
 
 Seit dem Wechsel auf egui (ADR 0003) gilt AGENTS.md §2.7 wörtlich: drei
 Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
@@ -121,9 +121,13 @@ Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
   zugängliche Name des Knopfs. Die Schrift (IBM Plex Mono) hat keine
   geometrischen Formen; statt Ersatzzeichen zu setzen, wird gezeichnet.
 - Die Anordnung ist fest (Kopf, Tape, Eingänge | Busse | Master, Makros); die
-  Breite der Züge folgt dem Fenster (`logik::zugbreiten`), bei Full HD passen
-  alle 17 Züge. Wählbar bleibt nur die Dichte (kompakt, normal, breit) und die
-  Zahl der Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
+  17 Züge füllen die Fläche zwischen Kopf- und Makroleiste genau
+  (`logik::zugbreiten`). **Es scrollt nichts** (ADR 0007): Statt einer
+  Scrollleiste hat das Fenster eine Mindestgröße, die aus den Maßen des Pults
+  gerechnet wird (`logik::mindestfenster`, 1642 × 660). Alle neun
+  Skalenzahlen stehen immer da; reicht die Höhe nicht für die Makrofelder,
+  zeigt die Leiste nur ihre Kopfzeile. Wählbar bleiben Theme und Zahl der
+  Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
 
 ## Plattformen: nur Linux
 

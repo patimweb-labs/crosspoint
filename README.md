@@ -35,6 +35,12 @@ Die Bilder erzeugt der Oberflächentest (`CROSSPOINT_BILDER=$PWD/docs/bilder
 cargo test -p crosspoint-fenster --test oberflaeche`), sie werden nicht von
 Hand abgelegt.
 
+Das Pult **scrollt nicht**: alle 17 Züge mit allen neun Skalenzahlen (+12 …
+−60) stehen immer vollständig da. Damit nichts abgeschnitten wird, hat das
+Fenster eine Mindestgröße von 1642 × 660 Pixeln, die aus den Maßen des Pults
+gerechnet wird ([ADR 0007](docs/adr/0007-pult-ohne-scrollleisten.md)); die
+Makrofelder klappen bei knapper Höhe von selbst auf ihre Kopfzeile zusammen.
+
 ## Daten und Datenschutz
 
 Crosspoint arbeitet ausschließlich lokal. Die Steuer-API hört auf

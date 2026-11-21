@@ -53,19 +53,26 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
     let mut schliessen = false;
     let antwort = egui::Modal::new(egui::Id::unique(("filter-modal", bus)))
         .frame(
-            bausteine::rahmen(f, f.bg_panel).inner_margin(egui::Margin::same(thema::SPACE_4 as i8)),
+            bausteine::rahmen(f, f.bg_panel).inner_margin(egui::Margin::same(thema::SPACE_3 as i8)),
         )
         .show(ctx, |ui| {
-            ui.set_width(thema::SPACE_6 * 22.0);
-            // Regler und Beschriftung in einer Spalte: gleiche Breite in jeder
-            // Zeile, damit die Karten untereinander bündig stehen.
-            ui.spacing_mut().slider_width = thema::SPACE_6 * 8.0;
+            ui.set_width(MODAL_BREITE);
+            // Drei Spalten: der Platz reicht auch im kleinsten Fenster
+            // (logik::mindestfenster), also braucht nichts zu scrollen. Dafür
+            // sind die Zeilen im Modal eine Stufe enger als im Pult.
+            ui.spacing_mut().slider_width = thema::SPACE_6 * 5.0;
+            ui.spacing_mut().interact_size.y = thema::SPACE_5;
+            // Kopfzeile: Titel, Pegel vor und nach den Filtern, Schließen –
+            // alles in einer Zeile, damit die Karten im kleinsten Fenster
+            // Platz haben.
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(format!("FILTER · {} {}", BUS_NAMES[bus], name))
                         .font(egui::FontId::new(thema::FONT_SIZE_MD, thema::fett()))
                         .color(f.text_default),
                 );
+                ui.separator();
+                pegel(ui, f, k, bus);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if bausteine::kopfknopf_icon(
                         ui,
@@ -80,73 +87,82 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
                     }
                 });
             });
-            ui.label(
-                bausteine::text(
-                    f,
-                    "Nur dieser virtuelle Bus wird gefiltert. Eingänge und A1–A5 \
-                     tragen das Rohsignal.",
-                    false,
-                    true,
-                )
-                .size(thema::FONT_SIZE_SM),
-            );
+            // Was das Modal zeigt und in welcher Reihenfolge – eine Zeile,
+            // damit die Karten auch im kleinsten Fenster Platz haben.
+            ui.label(bausteine::text(f, KETTE, false, true).size(thema::FONT_SIZE_SM));
             ui.separator();
-            pegel(ui, f, k, bus);
-            ui.separator();
-            // So hoch wie das Fenster es zulässt: bei 1080 px passt die ganze
-            // Kette, im kleinen Fenster wird gescrollt (nie abgeschnitten).
-            // Feste Höhe statt „so hoch wie der Inhalt“: ein Scrollbereich, der
-            // seine Höhe aus der Größe des Modals nimmt, und ein Modal, das
-            // seine Größe aus dem Inhalt nimmt, wachsen sonst Bild für Bild.
-            let platz =
-                (ctx.content_rect().height() - thema::SPACE_6 * 8.0).max(thema::SPACE_6 * 6.0);
-            egui::ScrollArea::vertical()
-                .max_height(platz)
-                .min_scrolled_height(platz)
-                .show(ui, |ui| {
-                    kette(ui, f, o, bus, ziel, fw, a);
-                });
-            ui.separator();
-            ui.label(
-                bausteine::text(
-                    f,
-                    "Reihenfolge: LC → ECHO → NR → GATE → COMP → AGC → Limiter \
-                     → DUCK → PTT → Delay/Trim/Gain",
-                    false,
-                    true,
-                )
-                .size(thema::FONT_SIZE_SM),
-            );
+            // Spalte für Spalte in der Reihenfolge der Signalkette; die
+            // Karten sind so verteilt, dass keine Spalte überläuft.
+            let karten = Karten {
+                f,
+                o,
+                bus,
+                ziel,
+                fw,
+            };
+            ui.columns(3, |spalten| {
+                for (i, (von, bis)) in SPALTEN.iter().enumerate() {
+                    a.extend(kette(&mut spalten[i], &karten, *von, *bis));
+                }
+            });
         });
     if antwort.should_close() || schliessen {
         a.push(Aktion::Aufklappen(None));
     }
 }
 
-/// Pegel vor und nach den Filtern („roh“ = Summe am Bus-Eingang).
+/// Unter dem Titel: was gefiltert wird und in welcher Reihenfolge.
+const KETTE: &str = "Eingänge und A1–A5 tragen das Rohsignal · Kette: LC · ECHO · NR · GATE \
+· COMP · AGC · LIMITER · DUCK · PTT";
+
+/// Breite des Modals: drei Spalten nebeneinander, jede breit genug für eine
+/// Reglerzeile (Beschriftung, Schieber, Wert).
+const MODAL_BREITE: f32 = thema::SPACE_6 * 36.0;
+
+/// Welche Karten in welcher Spalte stehen (Index in der Signalkette): links
+/// die Eingriffe vorn, in der Mitte Gate und Kompressor, rechts die Regler
+/// hinten. So bleibt jede Spalte ungefähr gleich hoch.
+const SPALTEN: [(usize, usize); 3] = [(0, 3), (3, 5), (5, 8)];
+
+/// Pegel vor und nach den Filtern („roh“ = Summe am Bus-Eingang), beide in
+/// einer Zeile.
 fn pegel(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize) {
     let (roh, nachher) = logik::filter_pegel(&k.params, bus);
-    for (titel, linear) in [("ROH", roh), ("NACHHER", nachher)] {
-        let db = crate::fmt::lin_to_db(linear);
-        ui.horizontal(|ui| {
+    ui.horizontal(|ui| {
+        for (titel, linear) in [("ROH", roh), ("NACHHER", nachher)] {
+            let db = crate::fmt::lin_to_db(linear);
             ui.label(bausteine::text(f, titel, true, true));
             bausteine::segmentleiste(ui, f, db, 24);
             ui.label(bausteine::text(f, &crate::fmt::db_text(db), false, false));
-        });
-    }
+        }
+    });
 }
 
-/// Die acht Karten in der Reihenfolge der Signalkette.
-#[allow(clippy::too_many_arguments)]
-fn kette(
-    ui: &mut Ui,
-    f: &Farben,
-    o: &Oberflaeche,
+/// Was alle Karten brauchen: Farben, Bestand und der Bus mit seinen Werten.
+struct Karten<'a> {
+    f: &'a Farben,
+    o: &'a Oberflaeche,
     bus: usize,
     ziel: Ziel,
     fw: logik::FilterWerte,
-    a: &mut Vec<Aktion>,
-) {
+}
+
+/// Die acht Karten in der Reihenfolge der Signalkette. Als Tabelle, damit
+/// die Spalten des Modals nur Bereiche daraus zeigen ("[`SPALTEN`]").
+const KARTEN: [fn(&mut Ui, &Karten) -> Vec<Aktion>; 8] = [lc, echo, nr, gate, comp, agc, duck, ptt];
+
+/// Eine Spalte des Modals: die Karten `von..bis` untereinander.
+fn kette(ui: &mut Ui, karten: &Karten, von: usize, bis: usize) -> Vec<Aktion> {
+    let mut a = Vec::new();
+    for karte in &KARTEN[von..bis.min(KARTEN.len())] {
+        a.extend(karte(ui, karten));
+    }
+    a
+}
+
+fn lc(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw) = (k.f, k.ziel, k.fw);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -162,6 +178,12 @@ fn kette(
             );
         },
     ));
+    a
+}
+
+fn echo(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw, o) = (k.f, k.ziel, k.fw, k.o);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -192,6 +214,12 @@ fn kette(
             );
         },
     ));
+    a
+}
+
+fn nr(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw) = (k.f, k.ziel, k.fw);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -213,6 +241,12 @@ fn kette(
             });
         },
     ));
+    a
+}
+
+fn gate(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw) = (k.f, k.ziel, k.fw);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -290,6 +324,12 @@ fn kette(
             );
         },
     ));
+    a
+}
+
+fn comp(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw) = (k.f, k.ziel, k.fw);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -387,6 +427,12 @@ fn kette(
             });
         },
     ));
+    a
+}
+
+fn agc(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw) = (k.f, k.ziel, k.fw);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -412,6 +458,12 @@ fn kette(
             );
         },
     ));
+    a
+}
+
+fn duck(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw, bus) = (k.f, k.ziel, k.fw, k.bus);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -492,6 +544,12 @@ fn kette(
             );
         },
     ));
+    a
+}
+
+fn ptt(ui: &mut Ui, k: &Karten) -> Vec<Aktion> {
+    let (f, ziel, fw) = (k.f, k.ziel, k.fw);
+    let mut a = Vec::new();
     a.extend(karte(
         ui,
         f,
@@ -521,6 +579,7 @@ fn kette(
             });
         },
     ));
+    a
 }
 
 /// Eine Filterkarte: Titel mit Schalter, Kurzbeschreibung, Regler.
@@ -541,6 +600,9 @@ fn karte(
     bausteine::rahmen(f, f.bg_raised)
         .inner_margin(egui::Margin::same(thema::SPACE_2 as i8))
         .show(ui, |ui| {
+            // Alle Karten einer Spalte sind gleich breit, damit die Kanten
+            // untereinander stehen.
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(format!("{kurz} · {titel}"))
@@ -557,7 +619,7 @@ fn karte(
             ui.label(bausteine::text(f, beschreibung, false, true).size(thema::FONT_SIZE_SM));
             inhalt(ui, &mut vec);
         });
-    ui.add_space(thema::SPACE_2);
+    ui.add_space(thema::SPACE_1);
     if let Some(an) = schalter {
         vec.push(setzen(ziel, param, schalter_wert(an)));
     }

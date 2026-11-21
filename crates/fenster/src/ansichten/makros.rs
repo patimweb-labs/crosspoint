@@ -9,10 +9,15 @@ use crate::logik;
 use crate::modell::{Aktion, Oberflaeche};
 use crate::thema::{self, Farben};
 
-/// Kante eines Makrofelds.
-const FELD: f32 = thema::SPACE_6 * 3.0;
-
 pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut Vec<Aktion>) {
+    // Bei knapper Höhe zeigt die Leiste nur ihre Kopfzeile, damit dem Pult
+    // seine Mindesthöhe bleibt (der gespeicherte Wunsch bleibt unberührt).
+    let eingeklappt = logik::makros_eingeklappt(
+        o.makros_eingeklappt,
+        ui.ctx().content_rect().height(),
+        o.makro_anzahl,
+    );
+    let erzwungen = eingeklappt && !o.makros_eingeklappt;
     bausteine::rahmen(f, f.bg_panel)
         .inner_margin(egui::Margin::same(thema::SPACE_2 as i8))
         .show(ui, |ui| {
@@ -51,17 +56,21 @@ pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut 
                     true,
                 ));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (icon, text) = if o.makros_eingeklappt {
+                    let (icon, text) = if eingeklappt {
                         (bausteine::Icon::PfeilRechts, "AUFKLAPPEN")
                     } else {
                         (bausteine::Icon::PfeilRunter, "EINKLAPPEN")
                     };
-                    if bausteine::kopfknopf_icon(ui, f, icon, text, None).clicked() {
+                    let antwort = bausteine::kopfknopf_icon(ui, f, icon, text, None);
+                    if erzwungen {
+                        antwort
+                            .on_hover_text("Fenster höher ziehen: für die Felder ist kein Platz");
+                    } else if antwort.clicked() {
                         a.push(Aktion::MakrosEinklappen(!o.makros_eingeklappt));
                     }
                 });
             });
-            if o.makros_eingeklappt {
+            if eingeklappt {
                 return;
             }
             ui.add_space(thema::SPACE_1);
@@ -85,7 +94,7 @@ pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut 
 }
 
 fn feld(ui: &mut Ui, f: &Farben, nr: usize, an: bool) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(FELD), egui::Sense::click());
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(logik::MAKRO_FELD), egui::Sense::click());
     let name = format!("MACRO {}", nr + 1);
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
     let (flaeche, linie, schrift, unter) = if an {
