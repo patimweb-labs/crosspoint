@@ -24,8 +24,8 @@ const REIHE: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_1;
 const ZUORDNUNG: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_2;
 /// Höhe des Zugkopfs.
 const KOPF: f32 = thema::SPACE_6 + thema::SPACE_2;
-/// Höhe der Lämpchenreihe am FILTER-Knopf: vier Zeilen à zwei Kürzel.
-pub const LAEMPCHEN: f32 = 4.0 * (thema::FONT_SIZE_SM + thema::SPACE_1);
+/// Höhe der Lämpchenreihe am FILTER-Knopf: eine Zeile Anfangsbuchstaben.
+pub const LAEMPCHEN: f32 = thema::FONT_SIZE_SM + thema::SPACE_2;
 
 fn setzen(ziel: Ziel, param: &str, wert: f32) -> Aktion {
     Aktion::Setzen {

@@ -505,6 +505,12 @@ pub struct FilterWerte {
     pub ptt_offen: bool,
 }
 
+/// Buchstabe eines Filters in der Lämpchenzeile: der erste; die Anfänge
+/// sind alle verschieden (L E N G C A D P), der Test hält das fest.
+pub fn filter_buchstabe(kuerzel: &str) -> char {
+    kuerzel.chars().next().unwrap_or('?')
+}
+
 /// Die acht Lämpchen am FILTER-Knopf: Kürzel und ob der Filter an ist.
 pub const LAEMPCHEN: [&str; 8] = ["LC", "ECHO", "NR", "GATE", "COMP", "AGC", "DUCK", "PTT"];
 
@@ -997,6 +1003,9 @@ mod tests {
         assert_eq!(fader_ziehen(0.0, 500.0, 500.0, 0.0), -60.0);
         assert_eq!(fader_ziehen(0.0, 1.0, 500.0, 0.0), 0.0);
         assert!(zug_breite(Dichte::Kompakt) < zug_breite(Dichte::Breit));
+        // Lämpchenzeile: jeder Filter hat einen eigenen Buchstaben.
+        let buchstaben: Vec<char> = LAEMPCHEN.iter().map(|k| filter_buchstabe(k)).collect();
+        assert_eq!(buchstaben.iter().collect::<String>(), "LENGCADP");
         assert_eq!(
             kopf_teile(900.0),
             KopfTeile {

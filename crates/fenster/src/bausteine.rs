@@ -487,19 +487,16 @@ pub fn laempchen(
         WidgetInfo::labeled(egui::Role::Label, true, format!("Filteranzeige {bus}"))
     });
     let p = ui.painter().clone();
-    // Zwei Kürzel je Zeile: „GATE COMP“ passt in die Zugbreite, drei nicht.
-    let spalten = 2.0;
-    let zelle = Vec2::new(rect.width() / spalten, rect.height() / 4.0);
+    // Eine Zeile, je Filter sein Anfangsbuchstabe (L E N G C A D P); aktive
+    // leuchten im Akzent. Die vollen Namen stehen im Tooltip.
+    let zelle = rect.width() / stand.len() as f32;
     for (i, (kurz, an)) in stand.iter().enumerate() {
-        let (spalte, zeile) = (i as f32 % spalten, (i / 2) as f32);
-        let mitte = Pos2::new(
-            rect.left() + (spalte + 0.5) * zelle.x,
-            rect.top() + (zeile + 0.5) * zelle.y,
-        );
+        let buchstabe = crate::logik::filter_buchstabe(kurz);
+        let mitte = Pos2::new(rect.left() + (i as f32 + 0.5) * zelle, rect.center().y);
         p.text(
             mitte,
             Align2::CENTER_CENTER,
-            *kurz,
+            buchstabe,
             fett(thema::FONT_SIZE_SM),
             if *an { f.accent_default } else { f.text_faint },
         );
