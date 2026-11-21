@@ -36,6 +36,114 @@ pub fn rahmen(f: &Farben, flaeche: Color32) -> egui::Frame {
         .corner_radius(CornerRadius::same(thema::RADIUS_MD as u8))
 }
 
+// -------------------------------------------------------------- Dialoge ----
+
+/// Zugänglicher Name des Schließen-X. In jedem Dialog derselbe: Screenreader,
+/// Tooltip und Tests sollen nicht drei Namen kennen müssen.
+pub const SCHLIESSEN: &str = "SCHLIESSEN";
+
+/// Innenabstand eines Dialogs: vom Rahmen zur Titelleiste und zum Inhalt.
+pub const DIALOG_RAND: f32 = thema::SPACE_3;
+
+/// Höhe der Titelleiste eines Dialogs.
+pub const DIALOG_KOPF: f32 = thema::SIZE_CONTROL_MD;
+
+/// Ein Dialog: was sein Inhalt zurückgibt, und ob er geschlossen werden soll.
+pub struct DialogAntwort<R> {
+    pub inhalt: R,
+    /// Schließen-X, Escape oder ein Klick neben den Dialog.
+    pub zu: bool,
+}
+
+/// Der gemeinsame Rahmen aller Dialoge über dem Pult (FILTER, PRESETS, VBAN,
+/// MIDI, DARSTELLUNG): Titelleiste mit dem Titel links und dem Schließen-X
+/// rechts, darunter der Inhalt. Rand, Hintergrund, Innenabstand und die Wege
+/// zum Schließen (X, Escape, Klick daneben) sind überall dieselben, weil es
+/// überall derselbe Baustein ist.
+///
+/// Der Titel ist der zugängliche Name des Dialogs. Den Inhalt zeichnet der
+/// Aufrufer; er bekommt eine Spalte von `breite` und gibt zurück, was er an
+/// Aktionen gesammelt hat.
+pub fn dialog_rahmen<R>(
+    ctx: &egui::Context,
+    f: &Farben,
+    id: egui::Id,
+    titel: &str,
+    breite: f32,
+    inhalt: impl FnOnce(&mut Ui) -> R,
+) -> DialogAntwort<R> {
+    let mut schliessen = false;
+    let antwort = egui::Modal::new(id)
+        .frame(rahmen(f, f.bg_panel).inner_margin(egui::Margin::same(DIALOG_RAND as i8)))
+        .show(ctx, |ui| {
+            ui.set_width(breite);
+            ui.spacing_mut().item_spacing = Vec2::splat(thema::SPACE_1);
+            titelleiste(ui, f, titel, &mut schliessen);
+            inhalt(ui)
+        });
+    let zu = antwort.should_close() || schliessen;
+    DialogAntwort {
+        inhalt: antwort.inner,
+        zu,
+    }
+}
+
+/// Die Titelleiste: Titel links in derselben Schrift wie die übrigen
+/// Überschriften, das Schließen-X als Icon rechts.
+fn titelleiste(ui: &mut Ui, f: &Farben, titel: &str, schliessen: &mut bool) {
+    let breite = ui.available_width();
+    ui.allocate_ui_with_layout(
+        Vec2::new(breite, DIALOG_KOPF),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(titel)
+                        .font(fett(thema::FONT_SIZE_MD))
+                        .color(f.text_default),
+                )
+                .truncate(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icon_knopf(ui, f, Icon::Schliessen, SCHLIESSEN, false).clicked() {
+                    *schliessen = true;
+                }
+            });
+        },
+    );
+    ui.separator();
+}
+
+/// Kürzt einen Text so, dass er einzeilig in `breite` passt (mit „…“).
+/// Gekürzt wird nur die Anzeige; der volle Text gehört in den Tooltip.
+/// `font` ist die Schrift, in der der Text wirklich gezeichnet wird – sonst
+/// schätzt die Messung daneben und der Text läuft über den Rand.
+pub fn kuerzen(ui: &Ui, text: &str, breite: f32, font: FontId) -> String {
+    let passt = |t: &str| {
+        ui.painter()
+            .layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+            <= breite
+    };
+    if breite <= 0.0 {
+        return "…".into();
+    }
+    if passt(text) {
+        return text.to_string();
+    }
+    let zeichen: Vec<char> = text.chars().collect();
+    let mut n = zeichen.len();
+    while n > 0 {
+        let kandidat = format!("{}…", zeichen[..n].iter().collect::<String>());
+        if passt(&kandidat) {
+            return kandidat;
+        }
+        n -= 1;
+    }
+    "…".into()
+}
+
 // ------------------------------------------------------------ Faderblock ----
 
 /// Ergebnis einer Faderbedienung.

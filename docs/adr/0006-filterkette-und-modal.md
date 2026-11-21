@@ -114,9 +114,24 @@ Deshalb:
   an in `accent_default`, aus in `text_faint` – nur Anzeige, kein Klickziel.
 * Links- wie Rechtsklick öffnen dasselbe Modal: `egui::Modal` (zentriert,
   abgedunkelter Hintergrund, Esc/Klick daneben/X schließen), Titel
-  `FILTER · B1 <Name>`, oben Pegel **ROH** (Summe vor den Filtern) und
-  **NACHHER** (Bus-Pegel), darunter je Filter eine Karte mit Schalter,
-  Kurzbeschreibung und Reglern in der Reihenfolge der Kette.
+  `FILTER · B1` – mit eigenem Namen `FILTER · B1 · <Name>`, ohne Dopplung.
+  Das Modal steht im gemeinsamen Dialograhmen (`bausteine::dialog_rahmen`,
+  ADR 0009): Titel links, Schließen-X rechts in der Titelleiste.
+* Unter dem Titel steht der Pegel **ROH** (Summe vor den Filtern) und
+  **NACHHER** (Bus-Pegel) als eigene Zeile über die volle Innenbreite, je eine
+  Hälfte mit Beschriftung, Balken und Wert.
+* Darunter ein **Raster**: die acht Karten in der Reihenfolge der Kette, links
+  nach rechts. Die Spaltenzahl folgt aus der Breite (drei im kleinsten
+  Fenster, vier bei breiterem; reicht die Höhe nicht, kommt eine Spalte dazu).
+  Alle Spalten sind gleich breit und füllen die Innenbreite, die Karten einer
+  Zeile sind gleich hoch (die höchste der Zeile). In jeder Karte: Kopf mit
+  Kürzel, Titel und An/Aus-Schalter (rechts, überall gleich groß), darunter
+  die Kurzbeschreibung und die Regler. Beschriftung und Wert stehen in festen
+  Spalten, der Schieber nimmt den Rest – so stehen alle Zeilen bündig.
+* Die ECHO-Auswahl bietet nur **lokale** Ausgabegeräte an: keine eigenen
+  `crosspoint_*`-Sinks (die Schleife Bus → Referenz → Bus) und keine
+  Netzwerk-/AirPlay-Ziele (was dort hinausgeht, spielt in einem anderen Raum).
+  Lange Namen stehen einzeilig gekürzt da, der volle Name im Tooltip.
 * Der Zustand steht im Modell (`Oberflaeche::offen = Some(Aufklapp::Filter(bus))`),
   jede Bedienung ist eine `Aktion` durch `logik::ausfuehren` (AGENTS.md §2).
   Die alten Popups (`Aufklapp::Gate`, `Aufklapp::Echo`) entfallen.
@@ -163,4 +178,9 @@ Sammler wie ECHO).
 * Ein Filter-Ausfall durch falsche Bedienung ist wahrscheinlicher geworden:
   acht Schalter statt zwei. Dagegen stehen die Lämpchen (man sieht, was an ist)
   und die Kurzbeschreibung je Karte.
-* Das Modal braucht Platz: bei 720 px Fensterhöhe wird in der Kette gescrollt.
+* Das Modal braucht Platz: im kleinsten Fenster (1642 × 660) nimmt es fast die
+  ganze Höhe ein; mehr Geräte als in die ECHO-Karte passen, stehen dort nur
+  gekürzt (siehe `docs/TODO.md`).
+* Das Raster rechnet mit festen Zeilenhöhen (Kopf, Beschreibung, Reglerzeile).
+  Wer die Beschreibungen verlängert, verschiebt die Zeilenhöhen mit – die
+  Tests halten fest, dass alles im kleinsten Fenster bleibt.

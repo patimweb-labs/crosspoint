@@ -79,10 +79,11 @@ das Mikrofon wieder aufnimmt – das, was Discord „Echounterdrückung“ und W
 Die **Referenz** kommt vom Ausgabegerät: die Monitore der gewählten Geräte
 hängen am Mixer (`<sink>:monitor_FL/FR` → `crosspoint:echo_ref_L/R`), damit auch
 Programme erfasst werden, die an Crosspoint vorbei direkt auf das Gerät spielen
-(Chromium auf HDMI). Im FILTER-Modal steht unter **ECHO** die Auswahl „Was
-spielt auf:“ mit einem Häkchen je Ausgabegerät; mehrere gleichzeitig sind
-erlaubt (Boxen und Kopfhörer), die Auswahl steht in `echo.json` und kommt beim
-Start zurück. Ohne gewähltes Gerät passiert nichts, das Mikrofon bleibt
+(Chromium auf HDMI). Im FILTER-Modal steht unter **ECHO** ein Häkchen je
+lokalem Ausgabegerät; mehrere gleichzeitig sind erlaubt (Boxen und Kopfhörer),
+die Auswahl steht in `echo.json` und kommt beim Start zurück. Angeboten werden
+nur Geräte, die im Raum spielen: nicht Crosspoints eigene Sinks (sonst schlösse
+sich die Schleife Bus → Referenz → Bus) und keine AirPlay-/Netzwerkziele. Ohne gewähltes Gerät passiert nichts, das Mikrofon bleibt
 unverändert.
 
 Kosten: rund 0,4 % eines Kerns je Kanal, 19 ms Latenz (10 ms Rahmen + 9 ms
@@ -127,7 +128,11 @@ stehen beide Ziele für B1–B3.
 An B1–B3 (und am Master, wenn er einen B-Bus bedient) steht dafür ein Knopf
 **FILTER** mit acht Lämpchen: sie zeigen, was an ist. Ein Klick (oder
 Rechtsklick) öffnet das **FILTER-Modal** mit allen Schaltern, Reglern und der
-ECHO-Geräteauswahl; oben steht der Pegel **vor** und **nach** den Filtern.
+ECHO-Geräteauswahl; die Karten stehen in einem Raster (drei Spalten im
+kleinsten Fenster, vier bei breiterem) in der Reihenfolge der Kette, unter dem
+Titel der Pegel **vor** und **nach** den Filtern. Alle Dialoge (auch PRESETS,
+VBAN, MIDI und DARSTELLUNG) teilen sich denselben Rahmen mit dem Schließen-X
+oben rechts ([ADR 0009](docs/adr/0009-ein-dialograhmen-fuer-alle.md)).
 Esc, Klick daneben und das X schließen es. Reihenfolge und Begründung der
 Kette: [ADR 0006](docs/adr/0006-filterkette-und-modal.md).
 Herleitung der Parameternamen des Originals: `docs/02-signalmodell.md`,

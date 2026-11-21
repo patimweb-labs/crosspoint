@@ -85,10 +85,24 @@ fn beispiel(thema: Thema) -> (Fenster, Arc<Params>) {
             "alsa_input.usb-Rode_NT-USB-00.analog-stereo",
             "NT-USB",
         )],
-        senken: vec![eintrag(
-            "alsa_output.pci-0000_00_1f.3.analog-stereo",
-            "Lautsprecher",
-        )],
+        // Wie auf einem echten Rechner: lokale Ausgänge, dazwischen
+        // Crosspoints eigene Sinks und eine AirPlay-Senke.
+        senken: vec![
+            eintrag("alsa_output.pci-0000_00_1f.3.analog-stereo", "Lautsprecher"),
+            eintrag(
+                "alsa_output.pci-0000_03_00.1.hdmi-stereo-extra2",
+                "Navi 48 HDMI/DP Audio Controller Digital Stereo (HDMI 3) [AG326UD]",
+            ),
+            eintrag(
+                "alsa_output.usb-Sennheiser_Profile_0226-00.analog-stereo",
+                "Sennheiser Profile Analoges Stereo",
+            ),
+            eintrag("crosspoint_in_1", "CROSSPOINT-Input-1"),
+            eintrag("crosspoint_out_B1", "CROSSPOINT-Output-B1"),
+            eintrag("crosspoint_out_B2", "CROSSPOINT-Output-B2"),
+            eintrag("raop_sink.Wohnzimmer", "Wohnzimmer"),
+            eintrag("raop_output.MacBook_Pro", "MacBook Pro von Patrick"),
+        ],
         streifen: vec![
             Some("alsa_input.usb-Rode_NT-USB-00.analog-stereo".into()),
             None,
@@ -150,7 +164,7 @@ fn mute_und_routing_schreiben_in_den_kern() {
     h.get_all_by_label("FILTER").next().expect("FILTER").click();
     h.run_steps(3);
     assert!(
-        h.query_by_label("FILTER · B1 Discord").is_some(),
+        h.query_by_label("FILTER · B1 · Discord").is_some(),
         "Modal fehlt"
     );
     h.get_by_label("GATE").click();
@@ -204,9 +218,11 @@ fn filter_modal_waehlt_echo_geraete_und_schaltet_filter() {
         .click_secondary();
     h.run_steps(3);
     assert_eq!(h.state().o.offen, Some(Aufklapp::Filter(5)));
-    assert!(h.query_by_label("FILTER · B1 Discord").is_some());
+    assert!(h.query_by_label("FILTER · B1 · Discord").is_some());
     assert!(h.query_by_label("ECHO · ECHOUNTERDRÜCKUNG").is_some());
-    assert!(h.query_by_label("Was spielt auf:").is_some());
+    assert!(h
+        .query_by_label("Rechnet den Ton der Boxen aus dem Mikrofon heraus.")
+        .is_some());
     assert!(
         h.query_by_label("Lautsprecher").is_some(),
         "Ausgabegerät fehlt"
@@ -219,7 +235,7 @@ fn filter_modal_waehlt_echo_geraete_und_schaltet_filter() {
         vec!["alsa_output.pci-0000_00_1f.3.analog-stereo".to_string()]
     );
     // Das Modal bleibt offen (kein Schließen beim Ankreuzen).
-    assert!(h.query_by_label("FILTER · B1 Discord").is_some());
+    assert!(h.query_by_label("FILTER · B1 · Discord").is_some());
 
     // Jeder Filter hat einen eigenen Schalter, der im Kern landet.
     assert!(!filter_werte(p.buses[5].filter.as_ref().unwrap()).nr);
@@ -405,7 +421,7 @@ fn bilder_in_allen_themes() {
             )));
             let mut h = harness(f, (breite, hoehe));
             h.run_steps(6);
-            assert!(h.query_by_label("FILTER · B1 Discord").is_some());
+            assert!(h.query_by_label("FILTER · B1 · Discord").is_some());
             assert_eq!(
                 h.query_all_by_role(egui::accesskit::Role::ScrollBar)
                     .count(),
@@ -523,7 +539,7 @@ fn filter_modal_passt_ins_kleinste_fenster() {
     liegt_im_fenster(
         &h,
         &[
-            "FILTER · B1 Discord",
+            "FILTER · B1 · Discord",
             "SCHLIESSEN",
             "LC",
             "ECHO",
@@ -540,16 +556,22 @@ fn filter_modal_passt_ins_kleinste_fenster() {
             "Release",
         ],
     );
-    // Drei Spalten: die Kartentitel stehen nebeneinander.
+    // Drei Spalten: die Karten der ersten Zeile stehen nebeneinander, die
+    // zweite Zeile beginnt wieder links (Reihenfolge der Signalkette).
     let spalte = |name: &str| h.get_by_label(name).rect().min.x;
-    let (lc, gate, agc) = (
+    let (lc, echo, nr, gate) = (
         spalte("LC · LOW-CUT"),
+        spalte("ECHO · ECHOUNTERDRÜCKUNG"),
+        spalte("NR · RAUSCHUNTERDRÜCKUNG"),
         spalte("GATE · NOISE GATE"),
-        spalte("AGC · AUTOMATISCHE PEGELANPASSUNG"),
     );
     assert!(
-        lc < gate && gate < agc,
-        "nicht drei Spalten: {lc} {gate} {agc}"
+        lc < echo && echo < nr,
+        "nicht drei Spalten: {lc} {echo} {nr}"
+    );
+    assert!(
+        (lc - gate).abs() < 0.5,
+        "zweite Zeile beginnt nicht links: {lc} {gate}"
     );
 }
 
@@ -621,4 +643,246 @@ fn dialoge_passen_ins_kleinste_fenster() {
         assert!(h.query_by_label("SCHLIESSEN").is_some(), "{d:?}");
         liegt_im_fenster(&h, &["SCHLIESSEN"]);
     }
+}
+
+/// Öffnet das FILTER-Modal an B1 (mit ein paar Filtern an) und gibt das
+/// Fenster samt Kern zurück.
+fn filter_offen(thema: Thema) -> (Fenster, Arc<Params>) {
+    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    let (mut f, params) = beispiel(thema);
+    for (k, v) in [
+        ("lc", 1.0),
+        ("nr", 1.0),
+        ("comp", 1.0),
+        ("limiter", 1.0),
+        ("agc", 1.0),
+        ("duck", 1.0),
+        ("ptt", 1.0),
+    ] {
+        params.set("bus", 5, k, v);
+    }
+    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(5))));
+    (f, params)
+}
+
+/// Eine Meldung der Kopfzeile als Text.
+fn meldung(f: &Fenster) -> String {
+    match &f.o.meldung {
+        crosspoint_fenster::modell::Meldung::Hinweis(t)
+        | crosspoint_fenster::modell::Meldung::Fehler(t) => t.clone(),
+        crosspoint_fenster::modell::Meldung::Keine => String::new(),
+    }
+}
+
+/// Alle Dialoge (FILTER-Modal und die vier Fenster) tragen dasselbe
+/// Schließen-X: genau einmal, gleicher zugänglicher Name, in der Titelleiste
+/// rechts neben dem Titel – und ein Klick darauf schließt.
+#[test]
+fn jeder_dialog_hat_dasselbe_schliessen_x() {
+    use crosspoint_fenster::modell::{Aktion, Dialog};
+    /// Wie ein Dialog geöffnet wird – für die Schleife über alle.
+    type Oeffnen = fn(&mut Fenster);
+    let dialoge: [(&str, Oeffnen); 5] = [
+        ("PRESETS", |f| {
+            f.ausfuehren(Aktion::Dialog(Some(Dialog::Presets)))
+        }),
+        ("VBAN", |f| f.ausfuehren(Aktion::Dialog(Some(Dialog::Vban)))),
+        ("MIDI", |f| f.ausfuehren(Aktion::Dialog(Some(Dialog::Midi)))),
+        ("DARSTELLUNG", |f| {
+            f.ausfuehren(Aktion::Dialog(Some(Dialog::Darstellung)))
+        }),
+        ("FILTER · B1 · Discord", |f| {
+            f.ausfuehren(Aktion::Aufklappen(Some(
+                crosspoint_fenster::modell::Aufklapp::Filter(5),
+            )))
+        }),
+    ];
+    let mut groessen = Vec::new();
+    for (titel, oeffnen) in dialoge {
+        let (mut f, _) = beispiel(Thema::Dunkel);
+        oeffnen(&mut f);
+        let g = mindestgroesse();
+        let mut h = harness(f, (g.x, g.y));
+        h.run_steps(6);
+        // Genau ein Schließen-X, mit demselben Namen wie in allen anderen.
+        assert_eq!(
+            h.get_all_by_label("SCHLIESSEN").count(),
+            1,
+            "{titel}: Schließen-X fehlt oder doppelt"
+        );
+        let x = h.get_by_label("SCHLIESSEN").rect();
+        groessen.push(x.size());
+        // In derselben Zeile steht der Titel links davon.
+        let title = h
+            .get_all_by_label(titel)
+            .map(|n| n.rect())
+            .find(|r| (r.center().y - x.center().y).abs() < 8.0);
+        let title = title.unwrap_or_else(|| panic!("{titel}: Titel nicht in der Titelleiste"));
+        assert!(
+            title.right() < x.left(),
+            "{titel}: X steht nicht rechts vom Titel ({title:?} {x:?})"
+        );
+        // Klick auf das X schließt.
+        h.get_by_label("SCHLIESSEN").click();
+        h.run_steps(3);
+        assert!(
+            h.query_by_label("SCHLIESSEN").is_none(),
+            "{titel}: X schließt nicht"
+        );
+    }
+    // Gleiche Größe überall: es ist derselbe Baustein.
+    for gros in &groessen {
+        assert_eq!(*gros, groessen[0], "{groessen:?}");
+    }
+}
+
+/// Das Raster im FILTER-Modal: gleiche Spaltenbreiten, und jede Zeile füllt
+/// die Innenbreite des Modals von der ersten bis zur letzten Karte.
+#[test]
+fn filter_raster_hat_gleiche_spalten_und_fuellt_die_breite() {
+    let min = mindestgroesse();
+    for (breite, hoehe, name) in [
+        (min.x, min.y, "Mindestgröße"),
+        (1920.0, 1080.0, "1920"),
+        (2560.0, 1440.0, "2560"),
+    ] {
+        let (f, _) = filter_offen(Thema::Dunkel);
+        let mut h = harness(f, (breite, hoehe));
+        h.run_steps(6);
+        let raster = h.get_by_label("Filterraster").rect();
+        let mut karten: Vec<egui::Rect> = h
+            .get_all_by_label_contains("Filterkarte ")
+            .map(|n| n.rect())
+            .collect();
+        assert_eq!(karten.len(), 8, "{name}: nicht acht Karten");
+        // Alle Karten gleich breit.
+        let kante = karten[0].width();
+        for r in &karten {
+            assert!(
+                (r.width() - kante).abs() < 0.5,
+                "{name}: Kartenbreiten {} und {kante}",
+                r.width()
+            );
+        }
+        // Zeilenweise: erste Karte am linken, letzte am rechten Rand.
+        karten.sort_by(|a, b| {
+            a.min
+                .y
+                .total_cmp(&b.min.y)
+                .then(a.min.x.total_cmp(&b.min.x))
+        });
+        let mut zeilen: Vec<Vec<egui::Rect>> = Vec::new();
+        for r in karten {
+            match zeilen.last_mut() {
+                Some(z) if (z[0].min.y - r.min.y).abs() < 0.5 => z.push(r),
+                _ => zeilen.push(vec![r]),
+            }
+        }
+        assert!(zeilen.len() >= 2, "{name}: nur eine Zeile");
+        // Die Spaltenkanten stehen in jeder Zeile an derselben Stelle.
+        let spalten = zeilen[0].len();
+        let kanten: Vec<f32> = zeilen[0].iter().map(|r| r.min.x).collect();
+        for zeile in &zeilen {
+            let erste = zeile.first().unwrap();
+            assert!(
+                (erste.min.x - raster.min.x).abs() < 0.5,
+                "{name}: Zeile beginnt bei {} statt {}",
+                erste.min.x,
+                raster.min.x
+            );
+            for r in zeile {
+                assert!(
+                    kanten.iter().any(|x| (x - r.min.x).abs() < 0.5),
+                    "{name}: Karte bei {} steht nicht in der Spalte",
+                    r.min.x
+                );
+                // Gleiche Höhe innerhalb der Zeile.
+                assert!(
+                    (r.height() - erste.height()).abs() < 0.5,
+                    "{name}: Zeilenhöhen {} und {}",
+                    r.height(),
+                    erste.height()
+                );
+            }
+        }
+        // Eine volle Zeile füllt die Innenbreite genau: Karten plus Lücken.
+        let voll = zeilen
+            .iter()
+            .find(|z| z.len() == spalten)
+            .expect("volle Zeile");
+        let luecke = voll[1].min.x - voll[0].max.x;
+        let gesamt = voll.iter().map(|r| r.width()).sum::<f32>() + luecke * (spalten - 1) as f32;
+        assert!(
+            (gesamt - raster.width()).abs() < 0.5,
+            "{name}: Karten füllen {gesamt} von {}",
+            raster.width()
+        );
+        assert!(
+            (voll.last().unwrap().max.x - raster.max.x).abs() < 0.5,
+            "{name}: letzte Spalte endet bei {} statt {}",
+            voll.last().unwrap().max.x,
+            raster.max.x
+        );
+        if name == "Mindestgröße" {
+            assert_eq!(zeilen[0].len(), 3, "nicht drei Spalten bei Mindestgröße");
+        }
+        if name == "1920" {
+            assert!(zeilen[0].len() >= 3, "zu wenige Spalten bei 1920");
+        }
+    }
+}
+
+/// Die ECHO-Auswahl bietet nur lokale Ausgabegeräte an: keine eigenen Sinks
+/// (Schleife Bus → Referenz → Bus) und keine Netzwerk-/AirPlay-Ziele.
+#[test]
+fn echo_liste_ohne_eigene_und_netzwerk_geraete() {
+    let (f, _) = filter_offen(Thema::Dunkel);
+    let min = mindestgroesse();
+    let mut h = harness(f, (min.x, min.y));
+    h.run_steps(6);
+    for name in [
+        "CROSSPOINT-Input-1",
+        "CROSSPOINT-Output-B1",
+        "CROSSPOINT-Output-B2",
+        "Wohnzimmer",
+        "MacBook Pro von Patrick",
+    ] {
+        assert!(
+            h.query_by_label(name).is_none(),
+            "{name} steht in der ECHO-Liste"
+        );
+    }
+    for name in [
+        "Lautsprecher",
+        "Sennheiser Profile Analoges Stereo",
+        "Navi 48 HDMI/DP Audio Controller Digital Stereo (HDMI 3) [AG326UD]",
+    ] {
+        assert!(
+            h.query_by_label(name).is_some(),
+            "{name} fehlt in der ECHO-Liste"
+        );
+    }
+    assert!(h.state().o.echo_geraete.is_empty());
+}
+
+/// Die Meldung der Kopfzeile nennt den Gerätenamen, nicht die Kennung:
+/// „Echo-Referenz: HDMI … an“ statt „0000_03_00 an“.
+#[test]
+fn echo_meldung_nennt_den_geraetenamen() {
+    let (f, _) = filter_offen(Thema::Dunkel);
+    let min = mindestgroesse();
+    let mut h = harness(f, (min.x, min.y));
+    h.run_steps(6);
+    h.get_by_label("Navi 48 HDMI/DP Audio Controller Digital Stereo (HDMI 3) [AG326UD]")
+        .click();
+    h.run_steps(3);
+    let text = meldung(h.state());
+    assert_eq!(
+        text,
+        "Echo-Referenz: Navi 48 HDMI/DP Audio Controller Digital Stereo (HDMI 3) [AG326UD] an"
+    );
+    assert_eq!(
+        h.state().o.echo_geraete,
+        vec!["alsa_output.pci-0000_03_00.1.hdmi-stereo-extra2".to_string()]
+    );
 }

@@ -67,10 +67,14 @@ unverändert und gilt wieder, sobald das Fenster hoch genug ist; ein Klick auf
 
 ### 5. Dialoge: Spalten und Blätter statt Scrollbereiche
 
-* **FILTER-Modal** – drei Spalten nebeneinander in der Reihenfolge der
-  Signalkette (LC · ECHO · NR | GATE · COMP | AGC · DUCK · PTT). Die Karten
-  sind so verteilt, dass keine Spalte überläuft; Pegel vor/nach den Filtern
-  stehen in der Kopfzeile. Es passt im kleinsten Fenster (geprüft).
+* **FILTER-Modal** – ein Raster in der Reihenfolge der Signalkette (LC, ECHO,
+  NR, GATE, COMP, AGC, DUCK, PTT von links nach rechts, dann die nächste
+  Zeile). Die Spaltenzahl folgt aus der Breite des Modals (drei im kleinsten
+  Fenster, vier bei breiterem), alle Spalten sind gleich breit und füllen die
+  Innenbreite; die Karten einer Zeile sind gleich hoch. Reicht die Höhe nicht
+  (viele Geräte in der ECHO-Karte), kommt eine Spalte dazu, statt zu scrollen.
+  Der Pegel vor/nach den Filtern steht als eigene Zeile unter dem Titel. Es
+  passt im kleinsten Fenster und bei 1920 px (geprüft).
 * **Presets** – zehn Zeilen je Seite mit „<< ZURÜCK“ / „WEITER >>“.
 * **MIDI** – zusätzlich zum Seitenblatt ein Blatt von zehn Zeilen; die letzte
   Seite hat 56 Zeilen (Control Change 0..55) und kommt in sechs Blättern.

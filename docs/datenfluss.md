@@ -38,15 +38,18 @@ flowchart LR
    also gibt es einen `AusgangsFilter`.
 2. `logik::ausfuehren` schreibt den Zustand ins Modell
    (`Oberflaeche::offen`), nicht in die Ansicht. Im nächsten Bild zeichnet
-   `ansichten::filter::modal` das Modal: Titel `FILTER · B1 <Name>`, Pegel
-   **ROH** (`BusParam::roh`, Summe vor den Filtern) und **NACHHER**
-   (`BusParam::level`, nach der Kette), darunter je Filter eine Karte.
+   `ansichten::filter::modal` das Modal im gemeinsamen Dialograhmen
+   (`bausteine::dialog_rahmen`): Titel `FILTER · B1` (mit eigenem Namen
+   `FILTER · B1 · <Name>`), darunter als eigene Zeile der Pegel **ROH**
+   (`BusParam::roh`, Summe vor den Filtern) und **NACHHER** (`BusParam::level`,
+   nach der Kette), dann ein Raster mit je einer Karte pro Filter.
 3. Jede Zeile im Modal ist eine Aktion: Schalter →
    `Setzen { ziel: Bus(5), param: "lc" | "aec" | "nr" | … }`, Regler →
    `Setzen { …, param: "lc_freq" | "comp_schwelle" | … }`, ECHO-Geräte →
    `Aktion::EchoGeraet { name, an }`. Geschlossen wird per X
    (`Aktion::Aufklappen(None)`), Esc oder Klick daneben
-   (`Modal::should_close`).
+   (`Modal::should_close`) – in jedem Dialog derselbe Rahmen und dieselben
+   drei Wege (ADR 0009).
 
 ## „ECHO an B1“
 
@@ -92,7 +95,8 @@ Ein Block, ein Sample, ein Bus – in dieser Reihenfolge
 ## „Echo-Referenz wählen“
 
 1. Im FILTER-Modal unter ECHO ein Häkchen setzen; die Liste kommt aus
-   `geraete::Bestand::senken` (plus die gemerkten, die gerade fehlen).
+   `geraete::Bestand::senken`, gefiltert durch `geraete::ist_echo_kandidat`
+   (nur lokale Ausgabegeräte, ADR 0009), plus die gemerkten, die gerade fehlen.
 2. Klick auf ein Häkchen → `Aktion::EchoGeraet { name, an }` →
    `logik::ausfuehren` bildet die neue **Liste** (die anderen Geräte bleiben) und
    ruft `echo::setzen` über den `Zuordner` (`crates/fenster/src/geraete.rs`).

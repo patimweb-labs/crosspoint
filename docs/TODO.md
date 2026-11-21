@@ -30,6 +30,12 @@ Erledigt:
 
 Offen:
 
+- [ ] **Cheat aus ADR 0009, abzubauen:** die ECHO-Karte im FILTER-Modal zeigt
+      höchstens sieben lokale Ausgabegeräte und darunter „… n weitere Geräte“
+      (der Rest nur im Tooltip). Grund: kein Scrollen (ADR 0007) und eine
+      feste Kartenhöhe im Raster. Sauber wäre eine zweite Spalte innerhalb der
+      Karte oder ein Aufklapper; erst nötig, wenn jemand mehr als sieben lokale
+      Sinks hat.
 - [ ] **Globale Tastenkürzel für PTT** (Fusstaster ohne MIDI, z. B. F13 oder
       Maustaste 4): unter Wayland darf ein Programm ohne Portal keine Tasten
       außerhalb seines Fensters abgreifen. Sauber wäre das
