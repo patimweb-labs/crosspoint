@@ -372,16 +372,22 @@ fn filter_menue(
                             let an = gewaehlt.contains(&eintrag.name);
                             let mut wert = an;
                             let text = geraete::eintrag_text(&eintrag.anzeige, eintrag.fehlt);
-                            if ui
-                                .add(egui::Checkbox::new(&mut wert, text))
-                                .on_hover_text(&eintrag.name)
-                                .changed()
-                            {
-                                a.push(Aktion::EchoGeraet {
-                                    name: eintrag.name.clone(),
-                                    an: wert,
-                                });
-                            }
+                            // Lautsprecher je Gerät: dieselbe Liste, aber mit
+                            // dem Zeichen, das den Ausgang meint.
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = thema::SPACE_2;
+                                bausteine::icon(ui, bausteine::Icon::Lautsprecher, f.text_muted);
+                                if ui
+                                    .add(egui::Checkbox::new(&mut wert, text))
+                                    .on_hover_text(&eintrag.name)
+                                    .changed()
+                                {
+                                    a.push(Aktion::EchoGeraet {
+                                        name: eintrag.name.clone(),
+                                        an: wert,
+                                    });
+                                }
+                            });
                         }
                     });
                     ui.label(
@@ -663,40 +669,52 @@ fn geraetewahl(ui: &mut Ui, f: &Farben, r: Rect, ziel: Ziel, o: &Oberflaeche, a:
         anzeige.clone()
     };
     ui.scope_builder(UiBuilder::new().max_rect(r), |ui| {
-        egui::ComboBox::from_id_salt(("geraet", ziel))
-            // Volle Zugbreite; der Name wird nur so weit gekürzt, dass er
-            // neben dem Pfeil Platz hat.
-            .width(r.width())
-            .wrap_mode(egui::TextWrapMode::Truncate)
-            .selected_text(
-                RichText::new(crate::fmt::kurz(
-                    &anzeige,
-                    ((r.width() - thema::SPACE_5) / (thema::FONT_SIZE_SM * 0.6)).max(3.0) as usize,
-                ))
-                .size(thema::FONT_SIZE_SM)
-                .color(farbe),
-            )
-            .show_ui(ui, |ui| {
-                if ui.selectable_label(aktuell.is_none(), leer).clicked() {
-                    a.push(Aktion::Geraet { ziel, name: None });
-                }
-                for e in liste {
-                    let gewaehlt = aktuell.as_deref() == Some(e.name.as_str());
-                    let text = geraete::eintrag_text(&e.anzeige, e.fehlt);
-                    if ui
-                        .selectable_label(gewaehlt, text)
-                        .on_hover_text(&e.name)
-                        .clicked()
-                        && !gewaehlt
-                    {
-                        a.push(Aktion::Geraet {
-                            ziel,
-                            name: Some(e.name.clone()),
-                        });
+        ui.horizontal(|ui| {
+            // Mikro für Eingänge, Lautsprecher für die A-Busse: worauf der
+            // Zug zeigt, steht damit vor dem Namen.
+            let icon = if quelle {
+                bausteine::Icon::Mikrofon
+            } else {
+                bausteine::Icon::Lautsprecher
+            };
+            bausteine::icon(ui, icon, farbe);
+            let vorne = thema::FONT_SIZE_MD + thema::SPACE_1;
+            let frei = (r.width() - vorne).max(1.0);
+            egui::ComboBox::from_id_salt(("geraet", ziel))
+                // Volle Zugbreite abzüglich des Icons; der Name wird nur so
+                // weit gekürzt, dass er neben dem Pfeil Platz hat.
+                .width(frei)
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .selected_text(
+                    RichText::new(crate::fmt::kurz(
+                        &anzeige,
+                        ((frei - thema::SPACE_5) / (thema::FONT_SIZE_SM * 0.6)).max(3.0) as usize,
+                    ))
+                    .size(thema::FONT_SIZE_SM)
+                    .color(farbe),
+                )
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(aktuell.is_none(), leer).clicked() {
+                        a.push(Aktion::Geraet { ziel, name: None });
                     }
-                }
-            })
-            .response
-            .on_hover_text(tipp);
+                    for e in liste {
+                        let gewaehlt = aktuell.as_deref() == Some(e.name.as_str());
+                        let text = geraete::eintrag_text(&e.anzeige, e.fehlt);
+                        if ui
+                            .selectable_label(gewaehlt, text)
+                            .on_hover_text(&e.name)
+                            .clicked()
+                            && !gewaehlt
+                        {
+                            a.push(Aktion::Geraet {
+                                ziel,
+                                name: Some(e.name.clone()),
+                            });
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(tipp);
+        });
     });
 }

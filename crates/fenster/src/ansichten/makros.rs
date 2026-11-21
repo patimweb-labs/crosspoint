@@ -51,12 +51,12 @@ pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut 
                     true,
                 ));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let text = if o.makros_eingeklappt {
-                        "▸ AUFKLAPPEN"
+                    let (icon, text) = if o.makros_eingeklappt {
+                        (bausteine::Icon::PfeilRechts, "AUFKLAPPEN")
                     } else {
-                        "▾ EINKLAPPEN"
+                        (bausteine::Icon::PfeilRunter, "EINKLAPPEN")
                     };
-                    if bausteine::kopfknopf(ui, f, text, None).clicked() {
+                    if bausteine::kopfknopf_icon(ui, f, icon, text, None).clicked() {
                         a.push(Aktion::MakrosEinklappen(!o.makros_eingeklappt));
                     }
                 });

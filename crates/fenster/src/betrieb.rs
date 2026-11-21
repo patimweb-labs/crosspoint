@@ -264,7 +264,7 @@ fn fenster_laufen(
         "Crosspoint",
         optionen,
         Box::new(move |cc| {
-            thema::schriften(&cc.egui_ctx);
+            crate::einrichten(&cc.egui_ctx);
             Ok(app(&cc.egui_ctx))
         }),
     );

@@ -15,7 +15,7 @@ use crosspoint_fenster::app::{Fenster, Umgebung};
 use crosspoint_fenster::geraete::{Bestand, Eintrag, Zuordner};
 use crosspoint_fenster::logik::Kern;
 use crosspoint_fenster::modell::{Geraete, Oberflaeche};
-use crosspoint_fenster::thema::{self, Thema};
+use crosspoint_fenster::thema::Thema;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 
@@ -125,7 +125,7 @@ fn harness(f: Fenster, groesse: (f32, f32)) -> Harness<'static, Fenster> {
         .with_size(groesse)
         .with_step_dt(1.0 / 30.0)
         .with_max_steps(8)
-        .with_context_setup(thema::schriften)
+        .with_context_setup(crosspoint_fenster::einrichten)
         .build_ui_state(|ui, f: &mut Fenster| f.bild(ui), f)
 }
 
@@ -288,5 +288,48 @@ fn bilder_in_allen_themes() {
             bild.save(ziel.join(format!("echo-menu-{}.png", thema.name())))
                 .unwrap();
         }
+        // Der Darstellung-Dialog zeigt Sonne, Mond und Kontrast — ein Bild
+        // je Theme, damit die Icons geprüft sind.
+        let (mut f, _) = beispiel(thema);
+        f.ausfuehren(crosspoint_fenster::modell::Aktion::Dialog(Some(
+            crosspoint_fenster::modell::Dialog::Darstellung,
+        )));
+        let mut h = harness(f, (1280.0, 720.0));
+        h.run_steps(6);
+        assert!(h.query_by_label("SCHLIESSEN").is_some(), "Schließen fehlt");
+        if let Some(ziel) = &ziel {
+            let bild = h.render().expect("zeichnen (wgpu)");
+            std::fs::create_dir_all(ziel).unwrap();
+            bild.save(ziel.join(format!("darstellung-{}.png", thema.name())))
+                .unwrap();
+        }
     }
+}
+
+/// Icons stehen vor dem Wort, nicht statt seiner: jeder Kopf-, Tape- und
+/// Makroknopf ist weiter über seinen Namen erreichbar (AccessKit liest ihn
+/// vor), und der Name bleibt eindeutig.
+#[test]
+fn icons_lassen_die_namen_stehen() {
+    let (f, _) = beispiel(Thema::Dunkel);
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    for name in ["PRESETS", "VBAN", "MIDI", "DARSTELLUNG", "REC", "STOP"] {
+        assert_eq!(
+            h.get_all_by_label(name).count(),
+            1,
+            "{name}: nicht genau einmal auffindbar"
+        );
+    }
+    // Die Makroleiste klappt über den Namen um, nicht über das gezeichnete
+    // Zeichen — das Icon ist nur das Bild dazu.
+    h.get_by_label("EINKLAPPEN").click();
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("AUFKLAPPEN").is_some(),
+        "Einklappen hat nicht umgeschaltet"
+    );
+    // Die Gerätewahl trägt Mikro bzw. Lautsprecher, der Name bleibt der des
+    // Geräts.
+    assert!(h.query_by_label("NT-USB").is_some());
 }

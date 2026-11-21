@@ -37,6 +37,12 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
             Dialog::Midi => midi(ui, f, o, a),
             Dialog::Darstellung => darstellung(ui, f, o, a),
         }
+        ui.separator();
+        if bausteine::kopfknopf_icon(ui, f, bausteine::Icon::Schliessen, "SCHLIESSEN", None)
+            .clicked()
+        {
+            a.push(Aktion::Dialog(None));
+        }
     });
     if !offen {
         a.push(Aktion::Dialog(None));
@@ -274,7 +280,14 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
     ui.label(bausteine::text(f, "THEME", true, false));
     ui.horizontal(|ui| {
         for t in Thema::ALLE {
-            if ui.selectable_label(o.thema == t, t.anzeige()).clicked() {
+            let gewaehlt = o.thema == t;
+            let knopf = egui::Button::image_and_text(
+                bausteine::thema_icon(t).bild(thema::FONT_SIZE_MD, f.text_muted),
+                t.anzeige(),
+            )
+            .selected(gewaehlt)
+            .frame_when_inactive(gewaehlt);
+            if ui.add(knopf).clicked() {
                 a.push(Aktion::Thema(t));
             }
         }

@@ -86,29 +86,44 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                         ] {
                             let offen = o.dialog == Some(d);
                             let an = offen.then_some(f.accent_default);
-                            if bausteine::kopfknopf(ui, f, d.titel(), an).clicked() {
+                            if bausteine::kopfknopf_icon(ui, f, dialog_icon(d), d.titel(), an)
+                                .clicked()
+                            {
                                 a.push(Aktion::Dialog(if offen { None } else { Some(d) }));
                             }
                         }
+                        // Im RTL-Lauf landet das zuerst gesetzte Element rechts.
                         egui::ComboBox::from_id_salt("thema")
                             .selected_text(o.thema.anzeige())
                             .width(thema::SPACE_6 * 2.5)
                             .show_ui(ui, |ui| {
                                 for t in Thema::ALLE {
-                                    if ui.selectable_label(o.thema == t, t.anzeige()).clicked() {
+                                    let gewaehlt = o.thema == t;
+                                    let knopf = egui::Button::image_and_text(
+                                        bausteine::thema_icon(t)
+                                            .bild(thema::FONT_SIZE_MD, f.text_muted),
+                                        t.anzeige(),
+                                    )
+                                    .selected(gewaehlt)
+                                    .frame_when_inactive(gewaehlt);
+                                    if ui.add(knopf).clicked() {
                                         a.push(Aktion::Thema(t));
                                     }
                                 }
                             })
                             .response
                             .on_hover_text("Theme");
-                        let (text, farbe) = if laeuft {
-                            ("● LAEUFT", f.accent_default)
+                        // … deshalb erst jetzt, damit Sonne/Mond/Kontrast links
+                        // vom Feld stehen und das gewählte Theme zeigen.
+                        bausteine::icon(ui, bausteine::thema_icon(o.thema), f.text_muted);
+                        let (icon, text, farbe) = if laeuft {
+                            (bausteine::Icon::Aktivitaet, "LAEUFT", f.accent_default)
                         } else {
-                            ("● BEREIT", f.status_warn)
+                            (bausteine::Icon::Kreis, "BEREIT", f.status_warn)
                         };
-                        bausteine::zeichen_text(
+                        bausteine::icon_text(
                             ui,
+                            icon,
                             text,
                             egui::FontId::monospace(thema::FONT_SIZE_SM),
                             farbe,
@@ -118,6 +133,17 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                 },
             );
         });
+}
+
+/// Das Icon eines Dialogs für den Kopfknopf: Ordner (Presets), Netzwerk
+/// (VBAN), Regler (MIDI), Palette (Darstellung).
+fn dialog_icon(d: Dialog) -> bausteine::Icon {
+    match d {
+        Dialog::Presets => bausteine::Icon::Ordner,
+        Dialog::Vban => bausteine::Icon::Netzwerk,
+        Dialog::Midi => bausteine::Icon::Regler,
+        Dialog::Darstellung => bausteine::Icon::Palette,
+    }
 }
 
 pub fn tape(
@@ -138,8 +164,13 @@ pub fn tape(
                 |ui| {
                     ui.spacing_mut().item_spacing.x = thema::SPACE_2;
                     let nimmt_auf = matches!(o.tape, Tape::Aufnahme { .. });
-                    let rec =
-                        bausteine::kopfknopf(ui, f, "● REC", nimmt_auf.then_some(f.status_error));
+                    let rec = bausteine::kopfknopf_icon(
+                        ui,
+                        f,
+                        bausteine::Icon::Kreis,
+                        "REC",
+                        nimmt_auf.then_some(f.status_error),
+                    );
                     if rec.clicked() {
                         a.push(if nimmt_auf {
                             Aktion::TapeStop
@@ -147,7 +178,9 @@ pub fn tape(
                             Aktion::TapeStart
                         });
                     }
-                    if bausteine::kopfknopf(ui, f, "■ STOP", None).clicked() {
+                    if bausteine::kopfknopf_icon(ui, f, bausteine::Icon::Quadrat, "STOP", None)
+                        .clicked()
+                    {
                         a.push(Aktion::TapeStop);
                     }
                     let zeit = logik::tape_zeit(logik::tape_dauer(o.tape, jetzt));

@@ -13,7 +13,7 @@ use egui::{
 
 use crate::fmt::{self, fader_pos, pos_db, DB_MAX, DB_MIN};
 use crate::logik::{self, segment_stufe, Stufe, PEGEL_SEGMENTE, SKALA};
-use crate::thema::{self, Farben};
+use crate::thema::{self, Farben, Thema};
 
 fn mono(groesse: f32) -> FontId {
     FontId::monospace(groesse)
@@ -430,6 +430,159 @@ pub fn schalter(
     response
 }
 
+// ----------------------------------------------------------------- Icons ----
+
+/// Die Icons des Pultes: eine kuratierte Auswahl aus Lucide (ISC, Beilage
+/// `icons/LUCIDE-LICENSE.txt`), dieselbe Sorte wie in sprechwerk. Eine Ansicht
+/// kann nur verlangen, was hier steht — kein Name, der ins Leere zeigt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Icon {
+    /// Theme hell
+    Sonne,
+    /// Theme dunkel
+    Mond,
+    /// Theme mono (Kontrast)
+    Kontrast,
+    /// Presets: Ordner
+    Ordner,
+    /// VBAN: Netzwerk
+    Netzwerk,
+    /// MIDI: Regler (Klaviatur ist bei 15 px nicht mehr zu erkennen)
+    Regler,
+    /// Darstellung: Palette
+    Palette,
+    /// Aufnahme
+    Kreis,
+    /// Stopp
+    Quadrat,
+    /// eingeklappt (weiter unten mehr)
+    PfeilRunter,
+    /// aufgeklappt / weiter
+    PfeilRechts,
+    /// Dialog schließen
+    Schliessen,
+    /// Eingang (Mikrofon)
+    Mikrofon,
+    /// Ausgang (Lautsprecher)
+    Lautsprecher,
+    /// läuft
+    Aktivitaet,
+}
+
+impl Icon {
+    /// Alle Icons — damit ein Test prüfen kann, dass jede Datei da ist.
+    pub const ALLE: [Icon; 15] = [
+        Icon::Sonne,
+        Icon::Mond,
+        Icon::Kontrast,
+        Icon::Ordner,
+        Icon::Netzwerk,
+        Icon::Regler,
+        Icon::Palette,
+        Icon::Kreis,
+        Icon::Quadrat,
+        Icon::PfeilRunter,
+        Icon::PfeilRechts,
+        Icon::Schliessen,
+        Icon::Mikrofon,
+        Icon::Lautsprecher,
+        Icon::Aktivitaet,
+    ];
+
+    /// Der Name der Datei in `icons/`.
+    pub fn datei(self) -> &'static str {
+        match self {
+            Icon::Sonne => "sun.svg",
+            Icon::Mond => "moon.svg",
+            Icon::Kontrast => "contrast.svg",
+            Icon::Ordner => "folder.svg",
+            Icon::Netzwerk => "network.svg",
+            Icon::Regler => "sliders-horizontal.svg",
+            Icon::Palette => "palette.svg",
+            Icon::Kreis => "circle.svg",
+            Icon::Quadrat => "square.svg",
+            Icon::PfeilRunter => "chevron-down.svg",
+            Icon::PfeilRechts => "chevron-right.svg",
+            Icon::Schliessen => "x.svg",
+            Icon::Mikrofon => "mic.svg",
+            Icon::Lautsprecher => "volume-2.svg",
+            Icon::Aktivitaet => "activity.svg",
+        }
+    }
+
+    /// Das Icon als Bild, eingefärbt mit `farbe` (Strich, keine Fläche).
+    pub fn quelle(self) -> egui::ImageSource<'static> {
+        match self {
+            Icon::Sonne => egui::include_image!("../icons/sun.svg"),
+            Icon::Mond => egui::include_image!("../icons/moon.svg"),
+            Icon::Kontrast => egui::include_image!("../icons/contrast.svg"),
+            Icon::Ordner => egui::include_image!("../icons/folder.svg"),
+            Icon::Netzwerk => egui::include_image!("../icons/network.svg"),
+            Icon::Regler => egui::include_image!("../icons/sliders-horizontal.svg"),
+            Icon::Palette => egui::include_image!("../icons/palette.svg"),
+            Icon::Kreis => egui::include_image!("../icons/circle.svg"),
+            Icon::Quadrat => egui::include_image!("../icons/square.svg"),
+            Icon::PfeilRunter => egui::include_image!("../icons/chevron-down.svg"),
+            Icon::PfeilRechts => egui::include_image!("../icons/chevron-right.svg"),
+            Icon::Schliessen => egui::include_image!("../icons/x.svg"),
+            Icon::Mikrofon => egui::include_image!("../icons/mic.svg"),
+            Icon::Lautsprecher => egui::include_image!("../icons/volume-2.svg"),
+            Icon::Aktivitaet => egui::include_image!("../icons/activity.svg"),
+        }
+    }
+
+    /// Das Icon als Bild in Größe und Farbe.
+    pub fn bild(self, groesse: f32, farbe: Color32) -> egui::Image<'static> {
+        egui::Image::new(self.quelle())
+            .tint(farbe)
+            .fit_to_exact_size(Vec2::splat(groesse))
+    }
+
+    /// Malt das Icon mittig in ein Quadrat der Kante `groesse` — für alles,
+    /// was selbst zeichnet (Kopfknopf, Statuszeile, Gerätewahl).
+    pub fn malen(self, ui: &Ui, mitte: Pos2, groesse: f32, farbe: Color32) {
+        self.bild(groesse, farbe)
+            .paint_at(ui, Rect::from_center_size(mitte, Vec2::splat(groesse)));
+    }
+}
+
+/// Ein Icon ohne Knopf (Gerätewahl, Zeile im ECHO-Menü).
+pub fn icon(ui: &mut Ui, icon: Icon, farbe: Color32) -> Response {
+    ui.add(icon.bild(thema::FONT_SIZE_MD, farbe))
+}
+
+/// Das Icon eines Themes: Sonne (hell), Mond (dunkel), Kontrast (mono).
+pub fn thema_icon(t: Thema) -> Icon {
+    match t {
+        Thema::Hell => Icon::Sonne,
+        Thema::Dunkel => Icon::Mond,
+        Thema::Mono => Icon::Kontrast,
+    }
+}
+
+/// Knopf nur mit Icon. `name` ist Tooltip **und** zugänglicher Name — ein
+/// Screenreader liest ihn vor, die Maus zeigt ihn beim Darüberfahren.
+///
+/// Im Pult steht das Wort noch neben jedem Icon (die Beschriftung ist der
+/// Name); der Baustein liegt bereit, sobald eine Ansicht ohne Text auskommen
+/// muss, und setzt dann den Namen selbst.
+pub fn icon_knopf(ui: &mut Ui, f: &Farben, icon: Icon, name: &str, an: bool) -> Response {
+    let farbe = if an { f.accent_default } else { f.text_muted };
+    let antwort = ui
+        .add(
+            egui::Button::image(icon.bild(thema::FONT_SIZE_MD, farbe))
+                .selected(an)
+                .frame_when_inactive(an)
+                .min_size(Vec2::splat(thema::SIZE_CONTROL_SM)),
+        )
+        .on_hover_text(name);
+    let name = name.to_string();
+    antwort.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, &name));
+    antwort
+}
+
+// ------------------------------------------------------ Gezeichnete Zeichen ----
+
 /// Gezeichnetes Zeichen (IBM Plex Mono hat keine geometrischen Formen).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zeichen {
@@ -542,17 +695,76 @@ pub fn zeichen_text(
     r
 }
 
-/// Knopf der Kopf- und Tape-Leiste (`PRESETS`, `● REC`). `an` füllt ihn.
-/// Ein führendes ●/■/▾/▸ wird gezeichnet, nicht gesetzt.
+/// Text mit Icon davor (`LAEUFT`, `BEREIT`).
+pub fn icon_text(
+    ui: &mut Ui,
+    icon: Icon,
+    text: &str,
+    font: FontId,
+    farbe: Color32,
+    icon_farbe: Color32,
+) -> Response {
+    let kante = font.size;
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, farbe);
+    let luecke = if text.is_empty() { 0.0 } else { thema::SPACE_1 };
+    let groesse = Vec2::new(kante + luecke + galley.size().x, galley.size().y.max(kante));
+    let (rect, r) = ui.allocate_exact_size(groesse, Sense::hover());
+    r.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, text));
+    icon.malen(
+        ui,
+        Pos2::new(rect.left() + kante * 0.5, rect.center().y),
+        kante,
+        icon_farbe,
+    );
+    ui.painter().galley(
+        Pos2::new(
+            rect.left() + kante + luecke,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        farbe,
+    );
+    r
+}
+
+/// Knopf der Kopf- und Tape-Leiste (`PRESETS`, `LADEN`). `an` füllt ihn.
+/// Ein führendes ●/■/▾/▸ im Text wird gezeichnet, nicht gesetzt — Rückfall für
+/// Zeichen, die die Schrift nicht hat; im Pult steht dort ein [`Icon`].
 pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Response {
+    kopfknopf_inner(ui, f, None, text, an)
+}
+
+/// Derselbe Knopf mit Icon vor dem Text (`PRESETS`, `REC`). Der Text bleibt
+/// der zugängliche Name, das Icon ist Beiwerk.
+pub fn kopfknopf_icon(
+    ui: &mut Ui,
+    f: &Farben,
+    icon: Icon,
+    text: &str,
+    an: Option<Color32>,
+) -> Response {
+    kopfknopf_inner(ui, f, Some(icon), text, an)
+}
+
+fn kopfknopf_inner(
+    ui: &mut Ui,
+    f: &Farben,
+    vor: Option<Icon>,
+    text: &str,
+    an: Option<Color32>,
+) -> Response {
     let font = fett(thema::FONT_SIZE_SM);
     let (zeichen, rest) = Zeichen::aus_text(text);
     let kante = thema::FONT_SIZE_SM * 0.6;
-    let z_breite = if zeichen.is_some() {
-        kante + thema::SPACE_1
-    } else {
-        0.0
+    // Vor dem Text: Icon, sonst gezeichnetes Zeichen, sonst nichts. Beide
+    // bekommen denselben Platz, damit die Knöpfe einer Leiste ausgerichtet
+    // bleiben.
+    let (icon_breite, zeichen_breite) = match (vor, zeichen) {
+        (Some(_), _) => (thema::FONT_SIZE_MD + thema::SPACE_1, 0.0),
+        (None, Some(_)) => (0.0, kante + thema::SPACE_1),
+        (None, None) => (0.0, 0.0),
     };
+    let z_breite = icon_breite + zeichen_breite;
     let text_breite = ui
         .painter()
         .layout_no_wrap(rest.to_string(), font.clone(), f.text_default)
@@ -567,8 +779,9 @@ pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Re
         None if response.hovered() => (f.bg_canvas, f.accent_default, f.text_default),
         None => (f.bg_canvas, f.border_subtle, f.text_default),
     };
-    let p = ui.painter();
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    let links = rect.center().x - (z_breite + text_breite) * 0.5;
+    let p = ui.painter();
     p.rect_filled(rect, ecke, flaeche);
     p.rect_stroke(
         rect,
@@ -576,8 +789,14 @@ pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Re
         Stroke::new(thema::SIZE_BORDER, linie),
         StrokeKind::Inside,
     );
-    let links = rect.center().x - (z_breite + text_breite) * 0.5;
-    if let Some(z) = zeichen {
+    if let Some(i) = vor {
+        i.malen(
+            ui,
+            Pos2::new(links + thema::FONT_SIZE_MD * 0.5, rect.center().y),
+            thema::FONT_SIZE_MD,
+            schrift,
+        );
+    } else if let Some(z) = zeichen {
         z.malen(
             p,
             Pos2::new(links + kante * 0.5, rect.center().y),
@@ -670,4 +889,59 @@ pub fn text(f: &Farben, inhalt: &str, fett_: bool, gedaempft: bool) -> egui::Ric
     } else {
         f.text_default
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Jedes Icon ist eine Datei im Crate, ein SVG mit derselben Strichstärke
+    /// (2 px auf 24er Raster) und weißem Strich — nur so färbt `tint` es.
+    #[test]
+    fn jedes_icon_ist_eine_datei_und_wird_eingefaerbt() {
+        let ordner = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons");
+        for i in Icon::ALLE {
+            let pfad = ordner.join(i.datei());
+            let svg = std::fs::read_to_string(&pfad)
+                .unwrap_or_else(|e| panic!("{}: {e}", pfad.display()));
+            assert!(svg.starts_with("<svg"), "{}: kein SVG", i.datei());
+            assert!(
+                svg.ends_with("</svg>\n"),
+                "{}: nicht abgeschlossen",
+                i.datei()
+            );
+            assert!(
+                svg.contains("stroke=\"#ffffff\""),
+                "{}: Strich nicht weiß, tint wirkt nicht",
+                i.datei()
+            );
+            assert!(
+                svg.contains("stroke-width=\"2\""),
+                "{}: andere Strichstärke als die übrigen",
+                i.datei()
+            );
+            assert!(
+                svg.contains("viewBox=\"0 0 24 24\""),
+                "{}: anderes Raster",
+                i.datei()
+            );
+        }
+    }
+
+    /// Die Lizenz der Icons liegt bei — ohne sie darf das Paket nicht raus.
+    #[test]
+    fn lizenz_der_icons_liegt_bei() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons/LUCIDE-LICENSE.txt"),
+        )
+        .expect("LUCIDE-LICENSE.txt");
+        assert!(text.contains("Lucide"));
+    }
+
+    #[test]
+    fn theme_icons_sind_sonne_mond_und_kontrast() {
+        assert_eq!(thema_icon(Thema::Hell), Icon::Sonne);
+        assert_eq!(thema_icon(Thema::Dunkel), Icon::Mond);
+        assert_eq!(thema_icon(Thema::Mono), Icon::Kontrast);
+    }
 }

@@ -20,3 +20,10 @@ pub mod state;
 pub mod thema;
 pub mod tray;
 pub mod vban;
+
+/// Einmal beim Start: Schriften und die Bildlader für die SVG-Icons
+/// ([`bausteine::Icon`]). Ohne die Lader bliebe jedes Icon ein leerer Kasten.
+pub fn einrichten(ctx: &egui::Context) {
+    thema::schriften(ctx);
+    egui_extras::install_image_loaders(ctx);
+}
