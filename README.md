@@ -128,9 +128,9 @@ stehen beide Ziele für B1–B3.
 An B1–B3 (und am Master, wenn er einen B-Bus bedient) steht dafür ein Knopf
 **FILTER** mit acht Lämpchen: sie zeigen, was an ist. Ein Klick (oder
 Rechtsklick) öffnet das **FILTER-Modal** mit allen Schaltern, Reglern und der
-ECHO-Geräteauswahl; die Karten stehen in einem Raster (drei Spalten im
-kleinsten Fenster, vier bei breiterem) in der Reihenfolge der Kette, unter dem
-Titel der Pegel **vor** und **nach** den Filtern. Alle Dialoge (auch PRESETS,
+ECHO-Geräteauswahl; die Karten stehen in einem Raster aus vier Spalten – acht
+Karten, zwei volle Zeilen, auch im kleinsten Fenster – in der Reihenfolge der
+Kette, unter dem Titel der Pegel **vor** und **nach** den Filtern. Alle Dialoge (auch PRESETS,
 VBAN, MIDI und DARSTELLUNG) teilen sich denselben Rahmen mit dem Schließen-X
 oben rechts ([ADR 0009](docs/adr/0009-ein-dialograhmen-fuer-alle.md)).
 Esc, Klick daneben und das X schließen es. Reihenfolge und Begründung der

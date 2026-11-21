@@ -121,10 +121,11 @@ Deshalb:
   **NACHHER** (Bus-Pegel) als eigene Zeile über die volle Innenbreite, je eine
   Hälfte mit Beschriftung, Balken und Wert.
 * Darunter ein **Raster**: die acht Karten in der Reihenfolge der Kette, links
-  nach rechts. Die Spaltenzahl folgt aus der Breite (drei im kleinsten
-  Fenster, vier bei breiterem; reicht die Höhe nicht, kommt eine Spalte dazu).
-  Alle Spalten sind gleich breit und füllen die Innenbreite, die Karten einer
-  Zeile sind gleich hoch (die höchste der Zeile). In jeder Karte: Kopf mit
+  nach rechts. Die Spaltenzahl folgt aus der Breite: vier, solange die Karten
+  nicht zu schmal werden (im kleinsten Fenster und im Alltagsfenster 1590 × 640
+  sind es vier – acht Karten, zwei volle Zeilen, keine leere Zelle). Alle
+  Spalten sind gleich breit und füllen die Innenbreite, die Karten einer Zeile
+  sind gleich hoch (die höchste der Zeile). In jeder Karte: Kopf mit
   Kürzel, Titel und An/Aus-Schalter (rechts, überall gleich groß), darunter
   die Kurzbeschreibung und die Regler. Beschriftung und Wert stehen in festen
   Spalten, der Schieber nimmt den Rest – so stehen alle Zeilen bündig.

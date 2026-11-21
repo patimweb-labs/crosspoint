@@ -69,12 +69,15 @@ unverändert und gilt wieder, sobald das Fenster hoch genug ist; ein Klick auf
 
 * **FILTER-Modal** – ein Raster in der Reihenfolge der Signalkette (LC, ECHO,
   NR, GATE, COMP, AGC, DUCK, PTT von links nach rechts, dann die nächste
-  Zeile). Die Spaltenzahl folgt aus der Breite des Modals (drei im kleinsten
-  Fenster, vier bei breiterem), alle Spalten sind gleich breit und füllen die
-  Innenbreite; die Karten einer Zeile sind gleich hoch. Reicht die Höhe nicht
-  (viele Geräte in der ECHO-Karte), kommt eine Spalte dazu, statt zu scrollen.
-  Der Pegel vor/nach den Filtern steht als eigene Zeile unter dem Titel. Es
-  passt im kleinsten Fenster und bei 1920 px (geprüft).
+  Zeile). Die Spaltenzahl folgt aus der Breite des Modals: vier, solange die
+  Karten nicht zu schmal werden (im kleinsten Fenster und bei 1590 × 640 sind
+  es vier). Alle Spalten sind gleich breit und füllen die Innenbreite; die
+  Karten einer Zeile sind gleich hoch. Reicht die Höhe nicht (viele Geräte in
+  der ECHO-Karte), zeigt die Karte weniger Geräte – der Rest bleibt im Hinweis
+  und im Tooltip –, statt zu scrollen und statt über das Fenster zu laufen.
+  Der Pegel vor/nach den Filtern steht als eigene Zeile unter dem Titel, in
+  zwei gleich breiten Hälften mit denselben Spalten wie die Karten. Es passt
+  im Alltagsfenster (1590 × 640) und im kleinsten Fenster (geprüft).
 * **Presets** – zehn Zeilen je Seite mit „<< ZURÜCK“ / „WEITER >>“.
 * **MIDI** – zusätzlich zum Seitenblatt ein Blatt von zehn Zeilen; die letzte
   Seite hat 56 Zeilen (Control Change 0..55) und kommt in sechs Blättern.
@@ -103,5 +106,9 @@ in `fenster.json` werden ignoriert).
   Fenster nicht mehr in die Breite; das ist der Preis für „alles sichtbar“.
 - Wer die Skala kleiner lesen will, kann das Fenster nicht weiter verkleinern –
   die Grenze steht in `logik::mindestfenster` und wird von Tests gehalten.
-- Ein Bildschirmfoto mehr je Theme (`pult-*-min.png`, `filter-modal-*-min.png`);
-  der Test `oberflaeche::bilder_in_allen_themes` erzeugt sie.
+- Vier Bildschirmfotos mehr je Theme (`pult-*-1590.png`, `pult-*-min.png`,
+  `filter-modal-*-1590.png`, `filter-modal-*-min.png`); der Test
+  `oberflaeche::bilder_in_allen_themes` erzeugt sie. Die Bilder werden in der
+  Lage erzeugt, in der das Pult steht (1590 × 640 auf einem 2560 × 1440-
+  Bildschirm) und in der Mindestgröße – Bilder in einer Wunschgröße, die es im
+  Betrieb nicht gibt, zeigen Fehler nicht.

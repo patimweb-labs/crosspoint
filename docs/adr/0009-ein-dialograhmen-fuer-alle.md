@@ -32,17 +32,26 @@ Rahmen:
 
 ### 2. Raster statt fester Spalten (FILTER-Modal)
 
-* Die Spaltenzahl folgt aus der Innenbreite: drei im kleinsten Fenster, vier
-  bei breiterem. Alle Spalten sind gleich breit und füllen die Innenbreite
-  genau; die Kartengröße wird gerechnet, nicht geschätzt.
+* Die Spaltenzahl folgt aus der Innenbreite: vier, solange die Karten nicht zu
+  schmal werden – acht Karten sind dann zwei volle Zeilen, keine Zelle bleibt
+  leer. Alle Spalten sind gleich breit und füllen die Innenbreite genau; die
+  Kartengröße wird gerechnet, nicht geschätzt.
 * Die Höhe einer Zeile ist die höchste Karte der Zeile. Dafür misst
   `karte_hoehe` die Beschreibung im Umbruch der Kartenbreite und zählt die
   Reglerzeilen – dieselben Maße, mit denen die Karte gezeichnet wird. Kein
   zweiter Zeichenlauf, keine doppelten Widget-IDs.
-* Reicht die Fensterhöhe nicht (viele Geräte in der ECHO-Karte), kommt eine
-  Spalte dazu – lieber schmaler als abgeschnitten (ADR 0007: kein Scrollen).
+* Reicht die Fensterhöhe nicht (viele Geräte in der ECHO-Karte), zeigt die
+  ECHO-Karte weniger Geräte (der Rest steht im Hinweis und im Tooltip) – lieber
+  eine Gerätezeile weniger als eine Karte, die unten aus dem Fenster läuft
+  (ADR 0007: kein Scrollen). Die Beschreibung einer Karte wird als fertiger
+  Textblock in der eingeplanten Höhe gezeichnet: ein `Label` wächst mit seinem
+  Text und schöbe die Zeilen darunter aus der Karte.
 * In der Karte: Beschriftung und Wert in festen Spalten, der Schieber nimmt den
-  Rest. Beschriftungs- und Wertspalte werden gemessen, nicht geschätzt: die
+  Rest – die **ganze** Spalte, mit sichtbarer Schiene (`bausteine::schieber`,
+  Rahmenfarbe auf der Karte) und dem gefüllten Teil im Akzent. Der
+  Standardregler von egui malt seine Schiene in Fläche und Rahmenfarbe des
+  Widgets; auf einer Karte derselben Farbe ist sie unsichtbar, und sichtbar
+  bleibt nur der gefüllte Teil bis zum Griff. Beschriftungs- und Wertspalte werden gemessen, nicht geschätzt: die
   Beschriftungsspalte ist so breit wie die breiteste Beschriftung aller Karten
   (`wort::ALLE`), die Wertspalte so breit wie der längste Wert (`WERT_LANG`).
   Damit sind alle Schieber einer Karte gleich lang, enden an der Wertspalte,
@@ -53,6 +62,11 @@ Rahmen:
   die Karte. Zeile und Zellen setzen dazu `set_min_size`/`set_min_width` – ohne
   das schrumpft `allocate_ui_with_layout` auf den Inhalt, und jede Karte bekäme
   ihre eigene Spalte.
+* Die Breite eines Dialogs kommt aus seinem Inhalt, nicht aus einer geratenen
+  Zahl: DARSTELLUNG misst den längsten Text (das Autostart-Kästchen) und die
+  Knopfreihen in den Schriften, in denen sie gezeichnet werden, und gibt links
+  und rechts einen Rand dazu. Die Bedienung steht in einem Raster auf einer
+  Kante, die Knöpfe teilen ihre Spalte in gleiche Stücke.
 * Der An/Aus-Schalter sitzt oben rechts und ist in jeder Karte gleich groß. An
   ist eine Akzentfläche, Aus ein Grund mit Linie und gedämpfter Schrift – wie
   die übrigen Schalter im Pult. Denselben Stand trägt `WidgetInfo::selected`
