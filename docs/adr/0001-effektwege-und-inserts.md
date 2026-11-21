@@ -1,6 +1,6 @@
 # 0001 – Effektwege und Inserts
 
-Stand: 2026-11-17
+Stand: 2026-11-17 · **abgelöst durch [0002](0002-rohsignal-und-ausgangsfilter.md) am 2026-11-21**: Effektwege und Inserts sind entfernt, Filter sitzen nur noch an B1–B3.
 
 ## Entscheidung
 

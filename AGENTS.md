@@ -140,13 +140,17 @@ Der Stil steht in `docs/marke/icons.md`; hier nur die Regeln, an die sich Code h
 
 - **Name, Zweck, Zielgruppe:** Crosspoint — 8×8-Mixer für PipeWire/JACK;
   Anwender mit einem Mischpultmodell in der Hand (Fader, Busse, Tape).
-- **Abweichende Befehle:** UI im Crate `crates/ui-gtk` (GTK4), Engine als
-  JACK-Client. Bau: `cargo build --release --features ui`. Das Flatpak baut aus
-  vorgebauten Binaries in `flatpak/prebuilt/` (nicht eingecheckt):
-  erst `cargo build --release --features ui`, dann `crosspoint` und
-  `crosspoint-engine` dorthin kopieren.
+- **Abweichende Befehle:** Oberfläche ist egui im Crate `crates/fenster`
+  (ADR 0003), kein `ui/`, kein Node. Engine als JACK-Client. Bau:
+  `cargo build --release --features ui`; Prüfen:
+  `cargo fmt --all --check && cargo clippy --workspace --all-targets --features ui -- -D warnings && cargo test --workspace --features ui`.
+  Bilder: `CROSSPOINT_BILDER=$PWD/docs/bilder cargo test -p crosspoint-fenster --test oberflaeche`.
+  Pakete nur Linux (ADR 0004): `packaging/linux/paket.sh` (tar.gz, AppImage),
+  Flatpak aus vorgebauten Binaries in `prebuilt/` (nicht eingecheckt).
 - **Besonderheiten:** bindgen braucht `libclang` (`dnf install clang-devel`,
   ggf. `LIBCLANG_PATH=/usr/lib64`). Keine `-devel`-Pakete für PipeWire/JACK:
-  `packaging/pkgconfig` liefert eigene `.pc`-Stümpfe. `web/index.html` ist die
-  Referenz für die Parität der GTK-Oberfläche und bleibt bis dahin im Baum.
+  `packaging/pkgconfig` liefert eigene `.pc`-Stümpfe. Filter nur an den
+  virtuellen Bussen B1–B3, Eingänge und A1–A5 tragen das Rohsignal (ADR 0002).
+  Nach Änderungen an `Cargo.lock`: `python3 packaging/flatpak/quellen.py >
+  flatpak/new-sources.json`. `web/index.html` ist die Web-Fernbedienung.
 - **Kontakt/Issues:** https://github.com/patimweb-labs/crosspoint/issues

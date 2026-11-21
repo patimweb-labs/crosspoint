@@ -4,6 +4,34 @@ Stand: 2026-10-29. Erledigt ist alles bis Release `v0.2.0` (natives Fenster,
 Zustand merken, Autostart, Tray). Diese Liste ist die Arbeitsgrundlage für das,
 was noch fehlt — sortiert nach Nutzen pro Aufwand.
 
+## Stand 2026-11-21 (Umbau)
+
+Erledigt:
+
+- [x] **Rohsignal an den Eingängen**: EQ, Kompressor, Gate, NR, TK, Lowcut,
+      Effektwege und Inserts sind aus den Kanalzügen und den Hardware-Bussen
+      entfernt (ADR 0002).
+- [x] **Noise Gate und Echounterdrückung an B1–B3** (`crates/core/src/aec.rs`),
+      Referenz = Ausgang eines Hardware-Busses (ab Werk A1).
+- [x] **Fenster in egui** statt GTK4 (`crates/fenster`, ADR 0003), Bilder aus
+      dem Oberflächentest, alle drei Themes.
+- [x] **Pakete**: Flatpak (Freedesktop-Runtime), AppImage, tar.gz (ADR 0004).
+- [x] Tray mit `ksni`; mit Tray schließt der Fensterknopf nur das Fenster,
+      ein zweiter Start holt das Fenster der laufenden Instanz.
+
+Offen:
+
+- [ ] **Restecho-Unterdrückung** hinter dem adaptiven Filter (nichtlinear,
+      wie der Suppressor in WebRTC AEC3) – für kleine, verzerrende Boxen.
+- [ ] Echounterdrückung mit echten Boxen und Mikrofon abhören und die
+      Schrittweite (`aec::MU`) an Sprache statt Rauschen nachmessen.
+- [ ] Flatpak einmal vollständig mit `flatpak-builder` bauen (lokal fehlt
+      `org.freedesktop.Sdk//25.08`; die CI baut es).
+- [ ] AppImage lokal bauen und auf einer zweiten Distribution starten.
+- [ ] `web/index.html` (Web-Fernbedienung) zeigt noch EQ/COMP/GATE/NR an den
+      Eingängen; die Engine lehnt diese Werte ab. Auf Rohsignal + Filter an
+      B1–B3 umstellen.
+
 ## 0. Stand 2026-11-14 (Fehlerrunde)
 
 Erledigt in dieser Runde:
@@ -70,36 +98,31 @@ Nachgezogen am 2026-11-15:
 
 ## 3. Effekte
 
-- [x] **LV2-Inserts über mod-host** (2026-11-17: Insert-Ports je Streifen/Bus,
-      Ketten verkabelt, Plugin-Verzeichnis ohne lilv, Editor im FX-Menü): je Streifen und Bus ein Insert-Slot,
+- [ ] **LV2-Inserts über mod-host**: je Streifen und Bus ein Insert-Slot,
       mod-host als betreuter Kindprozess (Socket 5555), Plugin-Liste aus
       `lv2ls`, Zustand im Preset.
       Abnahme: Kompressor-Plugin geladen, Pegel vor/nach messbar.
-- [x] **Carla als VST-Brücke** (2026-11-17: Erkennung, Start-Knopf, Verkabelung
-      von Hand über die Insert-Ports; Insert wird aktiv, sobald der Rückweg steht) (optional, nur wenn installiert): Erkennung,
+- [ ] **Carla als VST-Brücke** (optional, nur wenn installiert): Erkennung,
       Start, Rack je Streifen, Parameter über OSC; im UI als „externer Host"
       gekennzeichnet. VST2/VST3 laufen dort, nicht in Crosspoint.
       Abnahme: Carla-Rack mit einem VST, Signal läuft durch den Streifen.
 
 ## 4. Parität zum Original (aus `docs/04-abgleich-original.md`)
 
-- [x] Voice Color als `farbe` (Kippfilter ±6 dB); Pan bleibt der Pan-Regler,
-      ein 2D-Feld wie im Original gibt es nicht
-- [x] Sends `R`, `D`, `Fx1`, `Fx2` mit Pre/Post-Schalter (Hall und Echo eingebaut)
-- [x] Bus-Returns `retR`, `retD`, `retFx1`, `retFx2`
-- [x] `SEL` (im Modell, Master folgt) und `monitor` (A1 hört den Bus ab)
-- [x] Programme `prg_c`, `prg_g`, `prg_d` (5/4/4 Programme)
-- [x] `vaio` — A1–A5 zusätzlich als virtuelles Gerät
-- [x] `muc`, `karaoke`, `greenmode` (`green`); `stripmode` bleibt offen:
-      Bedeutung im Original nicht belegt, nichts erfunden
+- [ ] Intellipan / Voice Color (`paneltype`, `Panel3Dx/y`, `ColorPanel*`)
+- [ ] Sends `R`, `D`, `Fx1`, `Fx2` mit Pre/Post-Schalter
+- [ ] Bus-Returns `retR`, `retD`, `retFx1`, `retFx2`
+- [ ] `SEL` und `monitor` je Bus
+- [ ] FX-Preset-Programme `prg_c`, `prg_g`, `prg_d`
+- [ ] `vaio` — Bus als eigenes virtuelles Gerät
+- [ ] `muc`, `karaoke`, `stripmode`, `greenmode`
 
 ## 5. Verpackung und Vertrieb
 
-- [~] **macOS**: gestrichen (2026-11-17) – Crosspoint bleibt ein Linux-Werkzeug
 - [ ] **Flathub-Einreichung**: Metainfo ist da, Screenshots im Repo,
       Einreichung als PR gegen `flathub/flathub`
 - [x] **Host-Betrieb ohne Flatpak** ebenfalls nativ: `crosspoint-launch.sh`
-      startet `crosspoint` (GTK4, `cargo build --release --features ui`)
+      startet `crosspoint` (`cargo build --release --features ui`)
 - [ ] release-please-Kette einmal komplett durchlaufen lassen
       (Feature-Commit → Release-PR → Merge), bisher wird per Tag ausgelöst
 
@@ -109,10 +132,14 @@ Nachgezogen am 2026-11-15:
 - [x] Brave-Reste des alten Fensterpfads entfernt: `crosspoint-launch.sh`
       startet das native Fenster, `crosspoint-browser-prefs.sh` und
       `tools/fenster_screenshot.py` (CDP gegen Brave) sind weg (2026-11-15)
-- [x] Tray im nativen Fenster (`crosspoint --minimized`, `crates/ui-gtk/src/tray.rs`);
-      `crosspoint-fenster` bleibt nur Rückfall (2026-11-15)
+- [x] Tray im nativen Fenster (`crosspoint --minimized`, seit 2026-11-21
+      `crates/fenster/src/tray.rs`); der WebKit-Rückfall `crosspoint-fenster`
+      ist entfernt
 
 ## Nicht geplant (bewusste Entscheidung)
+
+- **Windows und macOS**: ausgeliefert wird nur für Linux (Flatpak, AppImage,
+  tar.gz), siehe `docs/architektur.md`.
 
 - **Eigenes VST-Hosting**: VST3-SDK, Plugin-Scan, GUI-Einbettung, Sandboxing —
   Wochen Arbeit. Carla macht das seit Jahren; wir verdrahten es.
