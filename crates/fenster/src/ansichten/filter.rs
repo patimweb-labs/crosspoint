@@ -44,6 +44,9 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
     };
     let ziel = Ziel::Bus(bus);
     let Some(fw) = logik::filter_von(&k.params, ziel, o.master_bus) else {
+        // Ein Bus ohne Filter (A1–A5): es gibt nichts zu zeigen. Der Zustand
+        // wird zurückgesetzt, damit das Modal nicht „offen, aber leer“ bleibt.
+        a.push(Aktion::Aufklappen(None));
         return;
     };
     let name = logik::name(ziel, o, k);
