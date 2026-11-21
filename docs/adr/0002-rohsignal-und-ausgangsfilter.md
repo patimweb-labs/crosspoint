@@ -1,6 +1,8 @@
 # 0002 – Rohsignal an den Eingängen, Filter nur an den virtuellen Ausgängen
 
-Stand: 2026-11-21 · entschieden
+Stand: 2026-11-21 · entschieden · **teilweise abgelöst durch [ADR 0005](0005-echounterdrueckung-mit-aec3.md)**
+(Punkte 3 und 4: nicht mehr der eigene Filter, und die Referenz kommt vom
+Ausgabegerät statt vom Ausgang eines Hardware-Busses)
 
 ## Kontext
 
@@ -28,9 +30,14 @@ Noise Gate und einen Filter, der den Systemsound rausrechnet."
    gegen Doppelsprechen. Allokationsfrei im Audio-Thread, Tests mit Raummodell:
    40 dB Echodämpfung, Stimme beim Doppelsprechen 28 dB über dem Rest,
    Neulernen nach Raumwechsel.
+   → *abgelöst*: seit ADR 0005 rechnet AEC3 aus `sonora` (dasselbe Verfahren wie
+   WebRTC); der eigene Filter schaffte bei getrennten Uhren nur 2,4 dB.
 4. **Referenz ist der fertige Ausgang eines Hardware-Busses** (`aec_ref`, ab
    Werk A1): genau der Ton, den die Boxen spielen. Darum rechnet der Callback
    A1–A5 vor B1–B3.
+   → *abgelöst*: seit ADR 0005 hängen die Monitore der gewählten
+   **Ausgabegeräte** an `echo_ref_L/R`. Programme, die an Crosspoint vorbei
+   spielen, sind damit in der Referenz.
 5. Die Effektwege aus ADR 0001 (Hall/Echo, FX1/FX2, LV2-Inserts über mod-host, Programme,
    `vaio`) sind entfernt; sie stehen in der Historie (Commits vor diesem Umbau).
 
@@ -51,3 +58,4 @@ Noise Gate und einen Filter, der den Systemsound rausrechnet."
   (offen in `docs/TODO.md`).
 - Ein Ton, der an Crosspoint vorbei auf die Boxen geht, ist nicht in der
   Referenz und wird nicht herausgerechnet.
+  → *erledigt* mit ADR 0005: die Referenz kommt vom Ausgabegerät.

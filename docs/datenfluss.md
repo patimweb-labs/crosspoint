@@ -36,10 +36,29 @@ flowchart LR
 1. Linksklick auf ECHO am Zug B1 → `Setzen { ziel: Bus(5), param: "aec" }`.
 2. `Params::set` → `AusgangsFilter::set` (nur virtuelle Busse haben einen
    `AusgangsFilter`; an A1–A5 wird `aec` abgelehnt und gemeldet).
-3. Audio-Thread: `reconfigure` sieht den Wechsel auf „an" und setzt die
-   Echounterdrücker zurück; im Sample-Takt rechnet `process` erst die
-   Hardware-Busse, dann B1 mit dem fertigen Ausgang von `aec_ref` (ab Werk A1)
-   als Referenz (`crates/core/src/aec.rs`), danach das Gate.
+3. Audio-Thread: `reconfigure` sieht den Wechsel auf „an" und leert die Puffer
+   der Echounterdrücker; im Sample-Takt nimmt `process` das Sample von
+   `crosspoint:echo_ref_L/R` als Referenz (die Monitore der gewählten
+   Ausgabegeräte, siehe Abschnitt „Echo-Referenz“) und rechnet B1 damit
+   (`crates/core/src/aec.rs`, AEC3 aus `sonora`), danach folgt das Gate. Die
+   Ausgabe kommt 19 ms später (10 ms Rahmen + 9 ms AEC3); ist die Referenz
+   still, geht das Mikrofon unverändert und nur verzögert durch.
+
+## „Echo-Referenz wählen"
+
+1. Rechtsklick auf ECHO → `Aktion::Aufklappen(Some(Aufklapp::Echo(bus)))`; das
+   Menü hängt am Knopf und zeigt die Ausgabegeräte aus `geraete::Bestand::senken`
+   (plus die gemerkten, die gerade fehlen) mit einem Häkchen je Gerät.
+2. Klick auf ein Häkchen → `Aktion::EchoGeraet { name, an }` →
+   `logik::ausfuehren` bildet die neue **Liste** (die anderen Geräte bleiben) und
+   ruft `echo::setzen` über den `Zuordner` (`crates/fenster/src/geraete.rs`).
+3. `echo::setzen` löst alle Links an `crosspoint:echo_ref_L/R` und legt für jedes
+   gewählte Gerät `<sink>:monitor_FL/FR` darauf (dieselben pw-Wege wie
+   `devices.rs`/`inputs.rs`), dann schreibt es `echo.json`.
+4. Beim Start macht das `echo::beim_start`; kommt ein Gerät zurück, legt es der
+   Wächter (`wache::abgleich`) nach. Der Audio-Thread liest die Ports und rechnet
+   sie als Referenz – kein Neustart, kein Modul.
+   `GET/POST /api/echo` ist derselbe Weg von außen.
 
 ## „Master bedienen"
 

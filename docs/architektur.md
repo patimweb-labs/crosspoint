@@ -36,10 +36,13 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
 ```
 
 Signalweg (ADR 0002): Eingänge und Hardware-Busse tragen das Rohsignal;
-Noise Gate und Echounterdrückung (`crates/core/src/aec.rs`) sitzen nur an den
-virtuellen Bussen B1–B3. Die Echounterdrückung nimmt den fertigen Ausgang
-eines Hardware-Busses als Referenz; deshalb rechnet der Callback A1–A5 vor
-B1–B3.
+Noise Gate und Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`)
+sitzen nur an den virtuellen Bussen B1–B3. Die Echounterdrückung nimmt den
+Ton der gewählten Ausgabegeräte (`crates/core/src/echo.rs` legt deren Monitore
+auf `crosspoint:echo_ref_L/R`) und rechnet ihn aus dem Mikrofon. Der frühere
+Weg – der fertige Ausgang eines Hardware-Busses als Referenz – ist mit
+ADR 0005 entfallen: Programme, die an Crosspoint vorbei spielen, waren darin
+nicht enthalten.
 
 Fenster (ADR 0003): `crates/fenster` ist egui wie in sprechwerk –
 `modell.rs` (Summentypen), `logik.rs` (Aktionen ausführen, getestet),

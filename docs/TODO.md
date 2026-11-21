@@ -19,12 +19,32 @@ Erledigt:
 - [x] Tray mit `ksni`; mit Tray schließt der Fensterknopf nur das Fenster,
       ein zweiter Start holt das Fenster der laufenden Instanz.
 
+- [x] **Echo-Referenz vom Ausgabegerät** statt vom A-Bus: Monitore der
+      gewählten Geräte auf `echo_ref_L/R`, Auswahl in `echo.json`,
+      Häkchen je Gerät im ECHO-Menü (ADR 0005).
+- [x] **AEC3 statt eigenem Filter** (`sonora`, reines Rust): 21 dB statt 2,4 dB
+      bei getrennten Uhren, 0 Allokationen im Callback (ADR 0005).
+
 Offen:
 
-- [ ] **Restecho-Unterdrückung** hinter dem adaptiven Filter (nichtlinear,
-      wie der Suppressor in WebRTC AEC3) – für kleine, verzerrende Boxen.
-- [ ] Echounterdrückung mit echten Boxen und Mikrofon abhören und die
-      Schrittweite (`aec::MU`) an Sprache statt Rauschen nachmessen.
+- [ ] **Einzelne Programme als Echo-Referenz wählbar:** heute hängt die
+      Referenz am Ausgabegerät (Monitor des Sinks) – alles, was dort landet,
+      ist in der Referenz. Wer nur den Browser herausrechnen will und den
+      Rest (Spiel, Musik) behalten möchte, braucht den Ton je Anwendung statt
+      je Gerät: `pw-dump` liefert Streams (`media.class: Stream/Output/Audio`)
+      mit eigenem `node.name`; sie ließen sich wie Sinks behandeln
+      (Monitor gibt es dort nicht, dafür den Stream-Ausgang direkt abgreifen
+      und auf `echo_ref_L/R` legen). Offene Fragen: welche Streams sind
+      stabil benannt, wie wird die Auswahl gespeichert, was passiert bei
+      einem Stream-Neustart.
+- [ ] **Restecho-Unterdrückung** feiner abstimmen: `sonora` bringt eine
+      Rauschunterdrückung mit (`noise_suppression`), die in der Messung 12 dB
+      mehr bringt, aber am Mikrofonklang dreht. Als Schalter je Bus denkbar
+      (nicht in dieser Runde, siehe ADR 0005).
+- [ ] Echounterdrückung mit echten Boxen und Mikrofon abhören: die
+      Entscheidung stützt sich auf den nachgebauten Pfad und die frühere
+      Feldmessung (1,5 dB gegen 30 dB), nicht auf eine eigene Aufnahme mit
+      AEC3 im Raum.
 - [ ] Flatpak einmal vollständig mit `flatpak-builder` bauen (lokal fehlt
       `org.freedesktop.Sdk//25.08`; die CI baut es).
 - [ ] AppImage lokal bauen und auf einer zweiten Distribution starten.

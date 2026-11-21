@@ -49,12 +49,26 @@ Busse B1..B3:   Summe → Mono/Modus → ECHO → GATE → Delay → Trim → Ga
 Ein Mikrofon auf A1 **und** B1 ergibt also das Rohsignal auf A1 (Kopfhörer,
 Aufnahme) und das bereinigte auf B1 (`CROSSPOINT-Output-B1`, z. B. für Discord).
 
-**ECHO** (Echounterdrückung): ein adaptiver Filter im Frequenzbereich
-(256 ms Filterlänge, zwei Filter gegen Doppelsprechen) lernt, wie der Ton der
-Boxen im Mikrofon ankommt, und zieht ihn ab. Referenz ist der fertige Ausgang
-eines Hardware-Busses – ab Werk A1, umstellbar per Rechtsklick auf ECHO. Kosten:
-rund 0,7 % eines Kerns je Kanal, 2,7 ms Latenz. Gemessen im Test: 40 dB weniger
-Echo, die Stimme beim Doppelsprechen bleibt 28 dB über dem Rest.
+**ECHO** (Echounterdrückung): rechnet den Ton heraus, den die Boxen spielen und
+das Mikrofon wieder aufnimmt – das, was Discord „Echounterdrückung“ und Windows
+„Akustische Echounterdrückung“ nennen. Gerechnet wird mit AEC3 (WebRTC-Verfahren,
+`sonora`, reines Rust; Begründung und Messung in
+[ADR 0005](docs/adr/0005-echounterdrueckung-mit-aec3.md)).
+
+Die **Referenz** kommt vom Ausgabegerät: die Monitore der gewählten Geräte
+hängen am Mixer (`<sink>:monitor_FL/FR` → `crosspoint:echo_ref_L/R`), damit auch
+Programme erfasst werden, die an Crosspoint vorbei direkt auf das Gerät spielen
+(Chromium auf HDMI). Rechtsklick auf ECHO öffnet **ECHOUNTERDRÜCKUNG – Was
+spielt auf:** mit einem Häkchen je Ausgabegerät; mehrere gleichzeitig sind
+erlaubt (Boxen und Kopfhörer), die Auswahl steht in `echo.json` und kommt beim
+Start zurück. Ohne gewähltes Gerät passiert nichts, das Mikrofon bleibt
+unverändert.
+
+Kosten: rund 0,4 % eines Kerns je Kanal, 19 ms Latenz (10 ms Rahmen + 9 ms
+AEC3), keine Allokation im Audio-Callback. Spielt nichts, geht das Mikrofon
+unverändert und nur verzögert durch. Gemessen: 21 dB Echodämpfung bei getrennten
+Uhren von Ausgabe- und Aufnahmegerät (der frühere lineare Filter schaffte dort
+2,4 dB), die Stimme kommt beim Doppelsprechen in ihrer Lautstärke durch.
 
 **GATE**: schließt in Pausen (Schwelle, Tiefe, Attack, Hold, Release per
 Rechtsklick); es entscheidet nach der Echounterdrückung, also am echofreien
@@ -97,7 +111,9 @@ die Oberfläche läuft im selben Prozess und fragt den HTTP-Adapter nicht.
 `./scripts/crosspoint-wire.sh sweep` macht dasselbe von der Kommandozeile.
 
 Der JACK-Client heißt `crosspoint`, seine Ports sind `crosspoint:strip1_L` …
-`crosspoint:busB3_R` sowie `crosspoint:vban_L/_R`.
+`crosspoint:busB3_R`, `crosspoint:echo_ref_L/_R` (Referenz der
+Echounterdrückung, hängt an den Monitoren der gewählten Ausgabegeräte) sowie
+`crosspoint:vban_L/_R`.
 
 ## Konfiguration
 
@@ -108,6 +124,7 @@ Alles liegt in `~/.config/crosspoint` (bzw. `$XDG_CONFIG_HOME/crosspoint`):
 | `preset.json` | aktueller Mischpultzustand |
 | `devices.json` | Hardware-Bus → PipeWire-Gerät |
 | `inputs.conf` | Streifen 1..5 → Aufnahmequelle |
+| `echo.json` | Ausgabegeräte, deren Ton aus dem Mikrofon gerechnet wird |
 | `macros.json` | Makro-Tasten |
 | `tape/` | Mitschnitte der Bandmaschine |
 
@@ -181,6 +198,9 @@ curl http://127.0.0.1:8770/api/levels    # Pegel in dB
 curl -X POST http://127.0.0.1:8770/api/preset -d '{"action":"save"}'
 curl http://127.0.0.1:8770/api/restore   # {"devices":n,"inputs":n,"preset":bool}
 curl -X POST http://127.0.0.1:8770/api/restore -d '{"preset":true,"devices":true,"inputs":false}'
+curl http://127.0.0.1:8770/api/echo     # {"geraete":[…],"ausgabegeraete":[…],"links":[…]}
+curl -X POST http://127.0.0.1:8770/api/echo \
+     -d '{"geraete":["alsa_output.pci-0000_03_00.1.hdmi-stereo"]}'
 curl http://127.0.0.1:8770/api/autostart # {"enabled":…,"path":…,"exec":…}
 curl -X POST http://127.0.0.1:8770/api/autostart -d '{"enabled":true}'
 curl http://127.0.0.1:8770/api/vban/config   # Sende-/Empfangsweg + beide Tabellen
@@ -192,9 +212,13 @@ curl -X POST http://127.0.0.1:8770/api/vban/config -d '{"action":"save"}'   # au
 Parameter der Eingänge: `gain`, `pan`, `mute`, `solo`, `mono`, `send0..send7`.
 Busse: `gain`, `mute`, `mono`, `mode`, `cross`, `trim`, `delay`; nur B1–B3
 (Index 5–7) zusätzlich `gate`, `gate_schwelle`, `gate_tiefe`, `gate_attack`,
-`gate_hold`, `gate_release`, `aec`, `aec_ref` (0–4 = A1–A5). An einem
-Hardware-Bus antwortet `gate`/`aec` mit einem Fehler. Ältere Presets mit
-Filtern an den Eingängen laden weiter; diese Werte werden übergangen.
+`gate_hold`, `gate_release`, `aec`. An einem Hardware-Bus antwortet
+`gate`/`aec` mit einem Fehler. Ältere Presets mit Filtern an den Eingängen oder
+mit `aec_ref` laden weiter; diese Werte werden übergangen.
+
+Welche Ausgabegeräte als Echo-Referenz dienen, steht nicht im Preset (das ist
+eine Eigenschaft des Rechners, nicht des Mischzustands), sondern in
+`echo.json`; `/api/echo` liest und schreibt die Liste.
 Die Engine hat keine Authentifizierung und lauscht nur auf `127.0.0.1`.
 
 **Anzeigenamen:** Streifen und Busse tragen auf Wunsch einen eigenen Namen. Der
