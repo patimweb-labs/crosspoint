@@ -64,6 +64,20 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
                     format!("/bus/{i}/gain"),
                 ));
             }
+            // Push-to-Talk gehört auf dieselbe Seite wie die Busse: erst `ptt`
+            // einschalten (der Bus ist dann stumm), dann `ptt_offen` auf die
+            // Taste legen. Nur die virtuellen Busse B1–B3 haben die Filter.
+            for i in crosspoint::engine::ERSTER_VIRTUELLER..crosspoint::BUSES {
+                let name = crosspoint::BUS_NAMES[i];
+                z.push(Zeile::neu(
+                    format!("Push to Talk Bus {name} (stumm bis Taste)"),
+                    format!("/bus/{i}/ptt"),
+                ));
+                z.push(Zeile::neu(
+                    format!("PTT-Taste Bus {name}"),
+                    format!("/bus/{i}/ptt_offen"),
+                ));
+            }
         }
         2 => {
             for i in 0..8 {
@@ -114,7 +128,8 @@ impl Karte {
 
     /// Alle Zeilen aller Seiten (die Datei kennt keine Seiten).
     pub fn alle(&mut self) {
-        if self.zeilen.len() >= SEITEN * 8 {
+        let gesamt: usize = (0..SEITEN).map(|s| seiten_ziele(s).len()).sum();
+        if self.zeilen.len() >= gesamt {
             return;
         }
         let mut neu = Vec::new();
@@ -213,6 +228,9 @@ const BEREICHE: &[&str] = &[
     "/strip/[0-7]/solo = f 0.0 1.0",
     "/strip/[0-7]/mono = f 0.0 1.0",
     "/bus/[0-7]/mute = f 0.0 1.0",
+    // Push-to-Talk: `ptt` schaltet den Bus stumm, `ptt_offen` ist die Taste.
+    "/bus/[0-7]/ptt = f 0.0 1.0",
+    "/bus/[0-7]/ptt_offen = f 0.0 1.0",
     // `[a-b]` ist bei MIDIMonster eine Zeichenklasse (ein Zeichen), keine
     // Zahlenspanne: fuer die mehrstelligen CC-Nummern deshalb `*`.
     "/midi/cc/* = f 0.0 127.0",
@@ -439,6 +457,11 @@ mod tests {
         let s1 = seiten_ziele(1);
         assert_eq!(s1[0].titel, "Gain Fader Bus A1");
         assert_eq!(s1[7].ziel, "/bus/7/gain");
+        // Push-to-Talk der virtuellen Busse steht auf derselben Seite.
+        assert!(s1.iter().any(|z| z.ziel == "/bus/5/ptt"));
+        assert!(s1.iter().any(|z| z.ziel == "/bus/5/ptt_offen"));
+        // Die Hardware-Busse haben keine Filter, also auch kein PTT.
+        assert!(!s1.iter().any(|z| z.ziel == "/bus/0/ptt"));
         let s4 = seiten_ziele(4);
         assert_eq!(s4[0].titel, "Solo Strip #1");
         assert_eq!(s4[0].ziel, "/strip/0/solo");
