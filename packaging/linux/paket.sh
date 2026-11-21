@@ -40,6 +40,9 @@ done
 install -Dm644 LICENSE "$stufe/usr/share/doc/crosspoint/LICENSE"
 # IBM Plex ist im Fenster eingebettet (die OFL verlangt die Beilage).
 install -Dm644 crates/fenster/schriften/OFL.txt "$stufe/usr/share/doc/crosspoint/IBM-Plex-OFL.txt"
+# Die Icons (Lucide) sind ebenfalls eingebettet — ISC, Beilage mitliefern.
+install -Dm644 crates/fenster/icons/LUCIDE-LICENSE.txt \
+  "$stufe/usr/share/doc/crosspoint/LUCIDE-LICENSE.txt"
 
 # --- tar.gz: zum Auspacken ohne Paketverwaltung ----------------------------
 tar -C "$stufe" -czf "dist/crosspoint-${VERSION}-linux-${ARCH}.tar.gz" usr

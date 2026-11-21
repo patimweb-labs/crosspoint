@@ -76,6 +76,8 @@ modules:
             "/app/share/icons/hicolor/${n}x${n}/apps/de.weppelmann.Crosspoint.png"
         done
       - install -Dm644 crates/fenster/schriften/OFL.txt /app/share/doc/crosspoint/IBM-Plex-OFL.txt
+      # Die Icons (Lucide) stecken im Fenster — ISC, Beilage mitliefern.
+      - install -Dm644 crates/fenster/icons/LUCIDE-LICENSE.txt /app/share/doc/crosspoint/LUCIDE-LICENSE.txt
     sources:
       - type: file
         path: ../prebuilt/crosspoint
