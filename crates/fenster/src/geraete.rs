@@ -94,6 +94,34 @@ pub fn eintrag_text(anzeige: &str, fehlt: bool) -> String {
     }
 }
 
+/// Präfixe und Stücke technischer Namen, die auf ein Netzwerk- oder
+/// AirPlay-Ziel zeigen (`raop_sink.wohnzimmer`, `module-rtp-sink`, …).
+const NETZ_ZIELE: [&str; 5] = ["raop", "airplay", "tunnel", "rtp", "netjack"];
+
+/// Ist der Sink ein lokales Ausgabegerät, dessen Ton im Raum zu hören ist?
+///
+/// Die Echo-Referenz speist die Echounterdrückung: Mikrofon minus dem, was aus
+/// den Boxen kommt. Dafür taugen nur Sinks, die **hier** im Raum spielen. Nicht
+/// angeboten werden deshalb
+///
+/// * Crosspoints eigene Sinks (`crosspoint_out_B1`, `CROSSPOINT-Output-B1`) –
+///   ihr Ton kommt aus diesem Mixer; als Referenz gelegt schlösse sich die
+///   Schleife Bus → Referenz → Bus, und die Echounterdrückung rechnete gegen
+///   sich selbst,
+/// * Netzwerk- und AirPlay-Senken (`raop_sink.*`, `module-rtp-sink`, …) – was
+///   dort hinausgeht, spielt in einem anderen Raum; der Monitor eines solchen
+///   Sinks sagt nichts über den Schall am Mikrofon, und die Netzlatenz macht
+///   die Referenz unbrauchbar.
+///
+/// Alles andere (ALSA, Bluetooth, HDMI, USB, virtuelle lokale Sinks) bleibt.
+pub fn ist_echo_kandidat(name: &str) -> bool {
+    if inputs::ist_eigen(name) {
+        return false;
+    }
+    let klein = name.to_ascii_lowercase();
+    !NETZ_ZIELE.iter().any(|z| klein.contains(z))
+}
+
 /// Bestand aus einem Graphen lesen (rein, damit ohne PipeWire pruefbar).
 pub fn bestand_aus(
     graph: Result<Graph, String>,
@@ -472,6 +500,28 @@ mod tests {
         );
         assert_eq!(kurzname("ohne_praefix"), "ohne_praefix");
         assert_eq!(kurzname(""), "");
+    }
+
+    #[test]
+    fn echo_nur_lokale_ausgabegeraete() {
+        // Eigene Sinks: die Schleife Bus → Referenz → Bus.
+        assert!(!ist_echo_kandidat("crosspoint_out_B1"));
+        assert!(!ist_echo_kandidat("crosspoint_in_1"));
+        assert!(!ist_echo_kandidat("crosspoint"));
+        // Netzwerk und AirPlay spielen in einem anderen Raum.
+        assert!(!ist_echo_kandidat("raop_sink.Wohnzimmer"));
+        assert!(!ist_echo_kandidat("raop_output.MacBook_Pro"));
+        assert!(!ist_echo_kandidat("module-rtp-sink"));
+        assert!(!ist_echo_kandidat("AirPlay-Kueche"));
+        // Lokale Geräte bleiben: HDMI, USB, Bluetooth, analog, virtuell.
+        for name in [
+            "alsa_output.pci-0000_03_00.1.hdmi-stereo-extra2",
+            "alsa_output.usb-Sennheiser_Profile_0226-00.analog-stereo",
+            "bluez_output.00_11_22_33_44_55.1",
+            "alsa_output.platform-snd_aloop.0.analog-stereo",
+        ] {
+            assert!(ist_echo_kandidat(name), "{name}");
+        }
     }
 
     #[test]

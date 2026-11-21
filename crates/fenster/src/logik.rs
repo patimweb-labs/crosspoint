@@ -15,7 +15,7 @@ use crosspoint::vban_io::{VbanControl, VbanRecvControl};
 use crosspoint::{BUSES, BUS_NAMES, STRIP_NAMES};
 
 use crate::geraete::{self, Zuordner};
-use crate::modell::{Aktion, Meldung, Oberflaeche, Tape, Umbenennen, Ziel};
+use crate::modell::{Aktion, Geraete, Meldung, Oberflaeche, Tape, Umbenennen, Ziel};
 use crate::thema;
 
 /// Was eine Aktion im Kern erreichen kann. In Tests sind Tape und Makros
@@ -171,7 +171,7 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
                     o.echo_geraete = liste;
                     Meldung::Hinweis(format!(
                         "Echo-Referenz: {}{}",
-                        geraete::kurzname(&name),
+                        geraete_anzeige(&name, o),
                         if an { " an" } else { " aus" }
                     ))
                 }
@@ -410,6 +410,28 @@ pub fn name(ziel: Ziel, o: &Oberflaeche, k: &Kern) -> String {
         Some(l) if !l.is_empty() => l,
         _ => vorgabe_name(ziel, o.master_bus),
     }
+}
+
+/// Der gesetzte eigene Name eines Zugs (`None`, solange keiner gesetzt ist).
+/// [`name`] liefert dagegen immer einen – notfalls die Vorgabe.
+pub fn eigener_name(ziel: Ziel, o: &Oberflaeche, k: &Kern) -> Option<String> {
+    if ziel == Ziel::Master {
+        return None;
+    }
+    let (t, i) = kern_ziel(ziel, o.master_bus);
+    k.params.label(t, i).filter(|l| !l.is_empty())
+}
+
+/// Anzeigename eines Geräts für Meldungen: die Beschreibung aus dem Bestand
+/// („HDMI (AG326UD)“), sonst der technische Kurzname. Die Kennung allein
+/// (`0000_03_00`) sagt niemandem etwas.
+pub fn geraete_anzeige(name: &str, o: &Oberflaeche) -> String {
+    if let Geraete::Fertig(b) = &o.geraete {
+        if let Some(e) = b.senken.iter().find(|e| e.name == name) {
+            return e.anzeige.clone();
+        }
+    }
+    geraete::kurzname(name)
 }
 
 /// Kurzname für Meldungen.
