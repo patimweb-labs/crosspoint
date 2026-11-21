@@ -1,12 +1,18 @@
 # Crosspoint
 
+<p align="center">
+  <img src="data/icons/hicolor/256x256/apps/de.weppelmann.Crosspoint.png" width="140" alt="Crosspoint: acht Eingänge, acht Busse, das Kreuz in der Mitte">
+</p>
+
 8×8-Mixer für PipeWire/JACK in Rust: 8 Eingänge, 8 Busse (A1–A5 Hardware,
 B1–B3 virtuell), ohne Kernelmodul. Die Eingänge liefern ihr **Rohsignal**;
 Filter gibt es nur an den virtuellen Ausgängen B1–B3 – dort, wo das Signal zu
-Discord, OBS oder einer Aufnahme geht: ein **Noise Gate** und eine
-**Echounterdrückung**, die den Systemton herausrechnet, den die Boxen zurück
-ins Mikrofon spielen. Engine und Fenster (egui) laufen in einem Prozess; die
-Engine ist ein JACK-Client.
+Discord, OBS oder einer Aufnahme geht: **Low-Cut**, **Echounterdrückung**
+(rechnet den Systemton heraus, den die Boxen zurück ins Mikrofon spielen),
+**Rauschunterdrückung**, **Noise Gate**, **Kompressor mit Limiter**, **AGC**,
+**Ducking** und **Push-to-Talk** – acht Filter, geschaltet und eingestellt in
+einem **FILTER-Modal** je Bus. Engine und Fenster (egui) laufen in einem
+Prozess; die Engine ist ein JACK-Client.
 
 ## Installation
 
@@ -27,9 +33,23 @@ Debian, Arch und openSUSE Standard). Das Flatpak bringt beides selbst mit.
 
 ![Pult im hellen Theme](docs/bilder/pult-light-1920.png)
 
+![FILTER-Modal an B1](docs/bilder/filter-modal-dark.png)
+
 Die Bilder erzeugt der Oberflächentest (`CROSSPOINT_BILDER=$PWD/docs/bilder
 cargo test -p crosspoint-fenster --test oberflaeche`), sie werden nicht von
 Hand abgelegt.
+
+Dunkel ist Cyan auf Nachtblau, hell ist Schwarz auf Kachelweiß, mono eine
+Tinte — und in allen drei Themes sitzt der Kreuzungspunkt bernsteinfarben:
+an der Zuordnung `A1 … B3` und an der Spitze der Pegel. Zeichen, Wortmarke und
+Icons liegen als SVG in `assets/`, die Farben als Tokens in
+`crates/fenster/tokens/` ([ADR 0008](docs/adr/0008-logo-und-farben.md)).
+
+Das Pult **scrollt nicht**: alle 17 Züge mit allen neun Skalenzahlen (+12 …
+−60) stehen immer vollständig da. Damit nichts abgeschnitten wird, hat das
+Fenster eine Mindestgröße von 1642 × 660 Pixeln, die aus den Maßen des Pults
+gerechnet wird ([ADR 0007](docs/adr/0007-pult-ohne-scrollleisten.md)); die
+Makrofelder klappen bei knapper Höhe von selbst auf ihre Kopfzeile zusammen.
 
 ## Daten und Datenschutz
 
@@ -43,7 +63,8 @@ keine Konten, keine Cloud-Verbindung. Konfiguration und Presets liegen unter
 ```
 Eingänge 1..8:  Eingang → Mono → Fader → Pan → Routing (8 Busse)        – Rohsignal
 Busse A1..A5:   Summe → Mono/Modus → Delay → Trim → Gain/Mute → Ausgang  – Rohsignal
-Busse B1..B3:   Summe → Mono/Modus → ECHO → GATE → Delay → Trim → Gain/Mute → Ausgang
+Busse B1..B3:   Summe → Mono/Modus → LC → ECHO → NR → GATE → COMP → AGC
+                → Limiter → DUCK → PTT → Delay → Trim → Gain/Mute → Ausgang
 ```
 
 Ein Mikrofon auf A1 **und** B1 ergibt also das Rohsignal auf A1 (Kopfhörer,
@@ -58,10 +79,11 @@ das Mikrofon wieder aufnimmt – das, was Discord „Echounterdrückung“ und W
 Die **Referenz** kommt vom Ausgabegerät: die Monitore der gewählten Geräte
 hängen am Mixer (`<sink>:monitor_FL/FR` → `crosspoint:echo_ref_L/R`), damit auch
 Programme erfasst werden, die an Crosspoint vorbei direkt auf das Gerät spielen
-(Chromium auf HDMI). Rechtsklick auf ECHO öffnet **ECHOUNTERDRÜCKUNG – Was
-spielt auf:** mit einem Häkchen je Ausgabegerät; mehrere gleichzeitig sind
-erlaubt (Boxen und Kopfhörer), die Auswahl steht in `echo.json` und kommt beim
-Start zurück. Ohne gewähltes Gerät passiert nichts, das Mikrofon bleibt
+(Chromium auf HDMI). Im FILTER-Modal steht unter **ECHO** ein Häkchen je
+lokalem Ausgabegerät; mehrere gleichzeitig sind erlaubt (Boxen und Kopfhörer),
+die Auswahl steht in `echo.json` und kommt beim Start zurück. Angeboten werden
+nur Geräte, die im Raum spielen: nicht Crosspoints eigene Sinks (sonst schlösse
+sich die Schleife Bus → Referenz → Bus) und keine AirPlay-/Netzwerkziele. Ohne gewähltes Gerät passiert nichts, das Mikrofon bleibt
 unverändert.
 
 Kosten: rund 0,4 % eines Kerns je Kanal, 19 ms Latenz (10 ms Rahmen + 9 ms
@@ -71,15 +93,48 @@ Nachhall und getrennten Uhren: 14 dB Echodämpfung (der frühere lineare Filter
 schaffte dort 2,4 dB), die Stimme kommt beim Doppelsprechen in ihrer Lautstärke
 durch.
 
-Häkchen **RESTECHO MIT WEGRECHNEN** (im selben Menü) schaltet die
-Rauschunterdrückung hinter der Echounterdrückung dazu: 12–13 dB mehr, dafür ein
-rauerer Mikrofonklang. Vorgabe ist aus; sie wirkt nur zusammen mit ECHO.
+**NR** (Rauschunterdrückung): Lüfter, Tastatur, Maus. Eigener Schalter,
+unabhängig von ECHO, Stufe niedrig/mittel/hoch/sehr hoch (6/12/18/21 dB). Der
+alte Parameter `aec_ns` – bis ADR 0005 das Häkchen „Restecho mit weg rechnen“
+im ECHO-Menü – schaltet dieselbe Rauschunterdrückung ein, damit alte Presets
+laden.
 
-**GATE**: schließt in Pausen (Schwelle, Tiefe, Attack, Hold, Release per
-Rechtsklick); es entscheidet nach der Echounterdrückung, also am echofreien
-Signal.
+**LC** (Low-Cut): Hochpass 2. Ordnung, 40–200 Hz, ab Werk 80 Hz. Räumt
+Rumpeln, Trittschall und Lüfterbrummen weg, bevor die Echounterdrückung
+rechnet.
 
-Linksklick auf GATE oder ECHO schaltet, Rechtsklick öffnet die Einstellungen.
+**GATE**: schließt in Pausen (Schwelle, Tiefe, Attack, Hold, Release); es
+entscheidet nach der Echounterdrückung, also am echofreien Signal.
+
+**COMP** (Kompressor) und **Limiter**: Schwelle, Ratio, Attack, Release,
+Make-up; der Limiter hält die Decke (ab Werk −1 dBFS) und ist getrennt
+schaltbar. Beide arbeiten mit gekoppeltem Stereo-Detektor – das Stereobild
+wandert nicht, wenn eine Seite leiser wird.
+
+**AGC**: zieht die Sprache auf den eingestellten Zielpegel (ab Werk −12 dBFS),
+egal wie laut man spricht. AGC2 aus `sonora`, mit einem eigenen, langsamen
+Trim für den Zielpegel; kostet 10 ms Latenz, solange er an ist.
+
+**DUCK** (Ducking): spricht man auf diesem Bus, wird ein anderer Bus (A1–A5
+oder B1–B3, z. B. der Spielton) um X dB abgesenkt – mit Schwelle, Tiefe,
+Attack und Release. Die Entscheidung fällt mit dem Pegel des vorigen Blocks
+(eine Blocklänge, bei 512 Frames 10,7 ms).
+
+**PTT** (Push-to-Talk): ist PTT an, ist der Bus stumm, solange die Taste nicht
+gedrückt ist (`ptt_offen`). Der Fusstaster hängt über MIDI/OSC am Bus:
+`/bus/<n>/ptt` und `/bus/<n>/ptt_offen`; in der MIDI-Karte (Seite „Busse“)
+stehen beide Ziele für B1–B3.
+
+An B1–B3 (und am Master, wenn er einen B-Bus bedient) steht dafür ein Knopf
+**FILTER** mit acht Lämpchen: sie zeigen, was an ist. Ein Klick (oder
+Rechtsklick) öffnet das **FILTER-Modal** mit allen Schaltern, Reglern und der
+ECHO-Geräteauswahl; die Karten stehen in einem Raster aus vier Spalten – acht
+Karten, zwei volle Zeilen, auch im kleinsten Fenster – in der Reihenfolge der
+Kette, unter dem Titel der Pegel **vor** und **nach** den Filtern. Alle Dialoge (auch PRESETS,
+VBAN, MIDI und DARSTELLUNG) teilen sich denselben Rahmen mit dem Schließen-X
+oben rechts ([ADR 0009](docs/adr/0009-ein-dialograhmen-fuer-alle.md)).
+Esc, Klick daneben und das X schließen es. Reihenfolge und Begründung der
+Kette: [ADR 0006](docs/adr/0006-filterkette-und-modal.md).
 Herleitung der Parameternamen des Originals: `docs/02-signalmodell.md`,
 `docs/03-ghidra-app.md`, `docs/04-abgleich-original.md`.
 
@@ -216,10 +271,34 @@ curl -X POST http://127.0.0.1:8770/api/vban/config -d '{"action":"save"}'   # au
 
 Parameter der Eingänge: `gain`, `pan`, `mute`, `solo`, `mono`, `send0..send7`.
 Busse: `gain`, `mute`, `mono`, `mode`, `cross`, `trim`, `delay`; nur B1–B3
-(Index 5–7) zusätzlich `gate`, `gate_schwelle`, `gate_tiefe`, `gate_attack`,
-`gate_hold`, `gate_release`, `aec`. An einem Hardware-Bus antwortet
-`gate`/`aec` mit einem Fehler. Ältere Presets mit Filtern an den Eingängen oder
-mit `aec_ref` laden weiter; diese Werte werden übergangen.
+(Index 5–7) zusätzlich die Filter:
+
+| Filter | Parameter |
+|---|---|
+| Low-Cut | `lc`, `lc_freq` (40–200 Hz) |
+| Echounterdrückung | `aec` |
+| Rauschunterdrückung | `nr`, `nr_stufe` (0–3), dazu `aec_ns` als alter Name |
+| Noise Gate | `gate`, `gate_schwelle`, `gate_tiefe`, `gate_attack`, `gate_hold`, `gate_release` |
+| Kompressor | `comp`, `comp_schwelle`, `comp_ratio`, `comp_attack`, `comp_release`, `comp_makeup` |
+| Limiter | `limiter`, `limiter_decke` (−12…0 dBFS) |
+| AGC | `agc`, `agc_ziel` (−40…0 dBFS) |
+| Ducking | `duck`, `duck_ziel` (0–7), `duck_tiefe`, `duck_schwelle`, `duck_attack`, `duck_release` |
+| Push-to-Talk | `ptt`, `ptt_offen` |
+
+An einem Hardware-Bus antworten diese Namen mit einem Fehler. Ältere Presets
+mit Filtern an den Eingängen, mit `aec_ref` oder mit `aec_ns` laden weiter;
+`aec_ns` schaltet jetzt die Rauschunterdrückung.
+
+```bash
+# Ducking: B1 (Mikrofon) senkt A1 (Spielton) um 12 dB, ab −30 dBFS
+curl -X POST http://127.0.0.1:8770/api/set -d '{"target":"bus","index":5,"param":"duck","value":1}'
+curl -X POST http://127.0.0.1:8770/api/set -d '{"target":"bus","index":5,"param":"duck_ziel","value":0}'
+curl -X POST http://127.0.0.1:8770/api/set -d '{"target":"bus","index":5,"param":"duck_tiefe","value":12}'
+# Push-to-Talk: B2 stumm, bis die Taste kommt
+curl -X POST http://127.0.0.1:8770/api/set -d '{"target":"bus","index":6,"param":"ptt","value":1}'
+curl -X POST http://127.0.0.1:8770/api/set -d '{"target":"bus","index":6,"param":"ptt_offen","value":1}'
+# dieselben Wege per OSC: /bus/5/duck, /bus/5/duck_tiefe, /bus/6/ptt_offen
+```
 
 Welche Ausgabegeräte als Echo-Referenz dienen, steht nicht im Preset (das ist
 eine Eigenschaft des Rechners, nicht des Mischzustands), sondern in
@@ -275,9 +354,10 @@ im Flatpak `flatpak run de.weppelmann.Crosspoint --minimized`.
 
 ## Grenzen (ehrlich)
 
-- **Echounterdrückung ohne Restecho-Unterdrückung:** der adaptive Filter zieht
-  das lineare Echo ab; Verzerrungen kleiner Boxen bleiben leise hörbar. Ein
-  nachgeschalteter Suppressor (wie in WebRTC) fehlt noch.
+- **Echounterdrückung ohne Rauschunterdrückung:** AEC3 zieht das lineare Echo
+  ab; Verzerrungen kleiner Boxen bleiben leise hörbar, solange NR aus ist. NR
+  nimmt sie mit, kostet aber Mikrofonklang – deshalb ein eigener Schalter und
+  keine Vorgabe.
 - Die Referenz ist das, was Crosspoint an die Boxen schickt. Spielt eine
   Anwendung an Crosspoint vorbei direkt auf die Boxen, kann ECHO sie nicht
   herausrechnen.

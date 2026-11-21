@@ -1,55 +1,73 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" shape-rendering="crispEdges">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <title>Crosspoint</title>
-  <!-- Erzeugt von markenwerk aus marken/crosspoint.pm. Nicht von Hand ändern:
-       die Quelle ist das Raster, nicht dieses Bild. Kachelform: Achteck. -->
-  <path d="M 112 0 H 400 L 512 112 V 400 L 400 512 H 112 L 0 400 V 112 Z" fill="#C9862C"/>
-<rect x="80" y="80" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="80" width="96" height="16" fill="#E9E5DC"/>
-<rect x="80" y="96" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="96" width="96" height="16" fill="#E9E5DC"/>
-<rect x="80" y="112" width="32" height="16" fill="#E9E5DC"/>
-<rect x="144" y="112" width="64" height="16" fill="#E9E5DC"/>
-<rect x="240" y="112" width="32" height="16" fill="#E9E5DC"/>
-<rect x="304" y="112" width="64" height="16" fill="#E9E5DC"/>
-<rect x="400" y="112" width="32" height="16" fill="#E9E5DC"/>
-<rect x="80" y="128" width="32" height="16" fill="#E9E5DC"/>
-<rect x="144" y="128" width="64" height="16" fill="#E9E5DC"/>
-<rect x="240" y="128" width="32" height="16" fill="#E9E5DC"/>
-<rect x="304" y="128" width="64" height="16" fill="#E9E5DC"/>
-<rect x="400" y="128" width="32" height="16" fill="#E9E5DC"/>
-<rect x="80" y="144" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="144" width="96" height="16" fill="#E9E5DC"/>
-<rect x="80" y="160" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="160" width="96" height="16" fill="#E9E5DC"/>
-<rect x="112" y="176" width="32" height="16" fill="#E9E5DC"/>
-<rect x="368" y="176" width="32" height="16" fill="#E9E5DC"/>
-<rect x="112" y="192" width="32" height="16" fill="#E9E5DC"/>
-<rect x="368" y="192" width="32" height="16" fill="#E9E5DC"/>
-<rect x="112" y="240" width="32" height="16" fill="#E9E5DC"/>
-<rect x="368" y="240" width="32" height="16" fill="#E9E5DC"/>
-<rect x="112" y="256" width="32" height="16" fill="#E9E5DC"/>
-<rect x="368" y="256" width="32" height="16" fill="#E9E5DC"/>
-<rect x="112" y="304" width="32" height="16" fill="#E9E5DC"/>
-<rect x="368" y="304" width="32" height="16" fill="#E9E5DC"/>
-<rect x="112" y="320" width="32" height="16" fill="#E9E5DC"/>
-<rect x="368" y="320" width="32" height="16" fill="#E9E5DC"/>
-<rect x="80" y="336" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="336" width="96" height="16" fill="#E9E5DC"/>
-<rect x="80" y="352" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="352" width="96" height="16" fill="#E9E5DC"/>
-<rect x="80" y="368" width="32" height="16" fill="#E9E5DC"/>
-<rect x="144" y="368" width="64" height="16" fill="#E9E5DC"/>
-<rect x="240" y="368" width="32" height="16" fill="#E9E5DC"/>
-<rect x="304" y="368" width="64" height="16" fill="#E9E5DC"/>
-<rect x="400" y="368" width="32" height="16" fill="#E9E5DC"/>
-<rect x="80" y="384" width="32" height="16" fill="#E9E5DC"/>
-<rect x="144" y="384" width="64" height="16" fill="#E9E5DC"/>
-<rect x="240" y="384" width="32" height="16" fill="#E9E5DC"/>
-<rect x="304" y="384" width="64" height="16" fill="#E9E5DC"/>
-<rect x="400" y="384" width="32" height="16" fill="#E9E5DC"/>
-<rect x="80" y="400" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="400" width="96" height="16" fill="#E9E5DC"/>
-<rect x="80" y="416" width="96" height="16" fill="#E9E5DC"/>
-<rect x="336" y="416" width="96" height="16" fill="#E9E5DC"/>
+  <!-- Crosspoint-Zeichen, 1:1 aus der Vorlage ausgemessen -->
+  <!-- (CROSSPOINT Tech-Logo-Showcase.png, ADR 0008). -->
+  <!-- PNGs und die installierten Icons: packaging/icons/erzeugen.sh -->
+  <defs>
+    <linearGradient id="kachel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191E25"/>
+      <stop offset="1" stop-color="#0C0F14"/>
+    </linearGradient>
+    <radialGradient id="glut">
+      <stop offset="0" stop-color="#FEBD31" stop-opacity="0.55"/>
+      <stop offset="0.4" stop-color="#FEBD31" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#FEBD31" stop-opacity="0"/>
+    </radialGradient>
+    <rect id="punkt" width="36" height="36" rx="12"/>
+  </defs>
+  <g id="kachel">
+    <rect x="1.5" y="1.5" width="509" height="509" rx="81" fill="url(#kachel)"/>
+    <rect x="1.5" y="1.5" width="509" height="509" rx="81" fill="none" stroke="#485163" stroke-width="3"/>
+  </g>
+  <g id="matrix" fill="#404856">
+    <use href="#punkt" x="70" y="70"/>
+    <use href="#punkt" x="126" y="70"/>
+    <use href="#punkt" x="182" y="70"/>
+    <use href="#punkt" x="294" y="70"/>
+    <use href="#punkt" x="350" y="70"/>
+    <use href="#punkt" x="406" y="70"/>
+    <use href="#punkt" x="70" y="126"/>
+    <use href="#punkt" x="126" y="126"/>
+    <use href="#punkt" x="182" y="126"/>
+    <use href="#punkt" x="294" y="126"/>
+    <use href="#punkt" x="350" y="126"/>
+    <use href="#punkt" x="406" y="126"/>
+    <use href="#punkt" x="70" y="182"/>
+    <use href="#punkt" x="126" y="182"/>
+    <use href="#punkt" x="182" y="182"/>
+    <use href="#punkt" x="294" y="182"/>
+    <use href="#punkt" x="350" y="182"/>
+    <use href="#punkt" x="406" y="182"/>
+    <use href="#punkt" x="70" y="294"/>
+    <use href="#punkt" x="126" y="294"/>
+    <use href="#punkt" x="182" y="294"/>
+    <use href="#punkt" x="294" y="294"/>
+    <use href="#punkt" x="350" y="294"/>
+    <use href="#punkt" x="406" y="294"/>
+    <use href="#punkt" x="70" y="350"/>
+    <use href="#punkt" x="126" y="350"/>
+    <use href="#punkt" x="182" y="350"/>
+    <use href="#punkt" x="294" y="350"/>
+    <use href="#punkt" x="350" y="350"/>
+    <use href="#punkt" x="406" y="350"/>
+    <use href="#punkt" x="70" y="406"/>
+    <use href="#punkt" x="126" y="406"/>
+    <use href="#punkt" x="182" y="406"/>
+    <use href="#punkt" x="294" y="406"/>
+    <use href="#punkt" x="350" y="406"/>
+    <use href="#punkt" x="406" y="406"/>
+  </g>
+  <g id="kreuz" fill="#00BDE6">
+    <rect x="88" y="248" width="336" height="16"/>
+    <rect x="248" y="88" width="16" height="336"/>
+    <rect x="66" y="234" width="44" height="44" rx="13"/>
+    <rect x="402" y="234" width="44" height="44" rx="13"/>
+    <rect x="234" y="66" width="44" height="44" rx="13"/>
+    <rect x="234" y="402" width="44" height="44" rx="13"/>
+  </g>
+  <g id="punkt">
+    <circle cx="256" cy="256" r="54" fill="url(#glut)"/>
+    <rect x="236" y="236" width="40" height="40" rx="12" fill="#FEBD31"/>
+  </g>
 </svg>

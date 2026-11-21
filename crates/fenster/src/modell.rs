@@ -23,35 +23,6 @@ pub enum Ziel {
     Master,
 }
 
-/// Dichte: Faktor auf die Zugbreite.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Dichte {
-    Kompakt,
-    #[default]
-    Normal,
-    Breit,
-}
-
-impl Dichte {
-    pub const ALLE: [Dichte; 3] = [Dichte::Kompakt, Dichte::Normal, Dichte::Breit];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Dichte::Kompakt => "kompakt",
-            Dichte::Normal => "normal",
-            Dichte::Breit => "breit",
-        }
-    }
-
-    pub fn aus_name(name: &str) -> Dichte {
-        match name {
-            "kompakt" => Dichte::Kompakt,
-            "breit" => Dichte::Breit,
-            _ => Dichte::Normal,
-        }
-    }
-}
-
 /// Dialogfenster über dem Pult.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialog {
@@ -62,6 +33,14 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    /// Alle Dialoge (für Tests und die Übersicht).
+    pub const ALLE: [Dialog; 4] = [
+        Dialog::Presets,
+        Dialog::Vban,
+        Dialog::Midi,
+        Dialog::Darstellung,
+    ];
+
     pub fn titel(self) -> &'static str {
         match self {
             Dialog::Presets => "PRESETS",
@@ -82,15 +61,17 @@ impl Dialog {
     }
 }
 
-/// Aufgeklapptes Menü an einem Zug.
+/// Was gerade aufgeklappt ist: ein Menü am Zug oder das FILTER-Modal.
+///
+/// Der Zustand steht hier (nicht in der Ansicht), damit er sich als
+/// [`Aktion::Aufklappen`] über `logik::ausfuehren` setzen lässt – auch von
+/// außen (Start mit `--dialog`, Tests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Aufklapp {
-    /// Noise Gate eines virtuellen Busses.
-    Gate(usize),
-    /// Echounterdrückung eines virtuellen Busses.
-    Echo(usize),
-    /// Trim und Delay des Master-Busses.
+    /// Trim und Delay des Master-Busses (Popup am Knopf).
     TrimDelay,
+    /// Modal „FILTER“ eines virtuellen Busses (B1–B3).
+    Filter(usize),
 }
 
 /// Laufende Umbenennung eines Zugs.
@@ -133,6 +114,8 @@ pub enum Geraete {
 pub struct MidiDialog {
     pub karte: crate::midimonster::Karte,
     pub seite: usize,
+    /// Blatt innerhalb der Seite (ohne Scrollen, [`crate::midimonster::BLATT_ZEILEN`]).
+    pub blatt: usize,
     /// Ziel, das gerade auf eine CC-Meldung wartet.
     pub lernt: Option<String>,
     /// MIDI-Anschlüsse des ALSA-Sequencers (beim Öffnen gelesen).
@@ -177,7 +160,6 @@ impl Pegel {
 #[derive(Debug, Clone)]
 pub struct Oberflaeche {
     pub thema: Thema,
-    pub dichte: Dichte,
     /// Bus, den der Master-Zug bedient.
     pub master_bus: usize,
     pub dialog: Option<Dialog>,
@@ -195,6 +177,8 @@ pub struct Oberflaeche {
     pub pegel: Pegel,
     /// Eingabefeld „Preset speichern als“.
     pub preset_name: String,
+    /// Seite der Presetliste (ohne Scrollen).
+    pub preset_seite: usize,
     /// VBAN-Formular (beim Öffnen des Dialogs aus dem Kern gefüllt).
     pub vban: Option<crate::vban::Formular>,
     pub midi: Option<MidiDialog>,
@@ -210,7 +194,6 @@ impl Default for Oberflaeche {
     fn default() -> Self {
         Oberflaeche {
             thema: Thema::default(),
-            dichte: Dichte::default(),
             master_bus: 0,
             dialog: None,
             offen: None,
@@ -224,10 +207,13 @@ impl Default for Oberflaeche {
             geraete: Geraete::Laedt,
             pegel: Pegel::default(),
             preset_name: String::new(),
+            preset_seite: 0,
             vban: None,
             midi: None,
             autostart: false,
-            echo_geraete: crosspoint::echo::auswahl(),
+            // Leer; das Programm lädt die Auswahl beim Start (betrieb.rs),
+            // Tests setzen sie selbst – kein Dateizugriff im Standardwert.
+            echo_geraete: Vec::new(),
         }
     }
 }
@@ -254,7 +240,6 @@ pub enum Aktion {
     UmbenennenEnde(bool),
     MasterBus(usize),
     Thema(Thema),
-    Dichte(Dichte),
     Dialog(Option<Dialog>),
     Aufklappen(Option<Aufklapp>),
     TapeStart,
@@ -274,6 +259,8 @@ pub enum Aktion {
         an: bool,
     },
     PresetName(String),
+    /// Seite der Presetliste.
+    PresetSeite(usize),
     PresetSpeichern,
     PresetLaden(std::path::PathBuf),
     Meldung(Meldung),
@@ -282,6 +269,8 @@ pub enum Aktion {
     /// Lernen für ein Ziel starten oder abbrechen; gebundene Ziele werden gelöst.
     MidiLernen(String),
     MidiSeite(usize),
+    /// Blatt innerhalb der MIDI-Seite.
+    MidiBlatt(usize),
     MidiZuruecksetzen,
     MidiSpeichern,
     MidiLaden,

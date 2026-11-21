@@ -33,13 +33,22 @@ install -Dm755 scripts/crosspoint-launch.sh "$stufe/usr/bin/crosspoint-launch"
 install -Dm755 scripts/crosspoint-wire.sh "$stufe/usr/bin/crosspoint-wire.sh"
 install -Dm644 packaging/linux/$ID.desktop "$stufe/usr/share/applications/$ID.desktop"
 install -Dm644 packaging/linux/$ID.metainfo.xml "$stufe/usr/share/metainfo/$ID.metainfo.xml"
-for n in 16 32 48 64 128 256 512; do
+# hicolor kennt nur 16 bis 512; die 1024er Fassung in data/icons ist Vorlage
+# fuer Laden und Dokumentation, kein installiertes Symbol.
+for n in 16 24 32 48 64 128 256 512; do
   install -Dm644 "data/icons/hicolor/${n}x${n}/apps/$ID.png" \
     "$stufe/usr/share/icons/hicolor/${n}x${n}/apps/$ID.png"
 done
+install -Dm644 "data/icons/hicolor/scalable/apps/$ID.svg" \
+  "$stufe/usr/share/icons/hicolor/scalable/apps/$ID.svg"
+install -Dm644 "data/icons/symbolic/apps/$ID-symbolic.svg" \
+  "$stufe/usr/share/icons/symbolic/apps/$ID-symbolic.svg"
 install -Dm644 LICENSE "$stufe/usr/share/doc/crosspoint/LICENSE"
 # IBM Plex ist im Fenster eingebettet (die OFL verlangt die Beilage).
 install -Dm644 crates/fenster/schriften/OFL.txt "$stufe/usr/share/doc/crosspoint/IBM-Plex-OFL.txt"
+# Die Icons (Lucide) sind ebenfalls eingebettet — ISC, Beilage mitliefern.
+install -Dm644 crates/fenster/icons/LUCIDE-LICENSE.txt \
+  "$stufe/usr/share/doc/crosspoint/LUCIDE-LICENSE.txt"
 
 # --- tar.gz: zum Auspacken ohne Paketverwaltung ----------------------------
 tar -C "$stufe" -czf "dist/crosspoint-${VERSION}-linux-${ARCH}.tar.gz" usr

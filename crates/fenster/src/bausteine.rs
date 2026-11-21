@@ -13,7 +13,7 @@ use egui::{
 
 use crate::fmt::{self, fader_pos, pos_db, DB_MAX, DB_MIN};
 use crate::logik::{self, segment_stufe, Stufe, PEGEL_SEGMENTE, SKALA};
-use crate::thema::{self, Farben};
+use crate::thema::{self, Farben, Thema};
 
 fn mono(groesse: f32) -> FontId {
     FontId::monospace(groesse)
@@ -34,6 +34,126 @@ pub fn rahmen(f: &Farben, flaeche: Color32) -> egui::Frame {
         .fill(flaeche)
         .stroke(Stroke::new(thema::SIZE_BORDER, f.border_subtle))
         .corner_radius(CornerRadius::same(thema::RADIUS_MD as u8))
+}
+
+// -------------------------------------------------------------- Dialoge ----
+
+/// Zugänglicher Name des Schließen-X. In jedem Dialog derselbe: Screenreader,
+/// Tooltip und Tests sollen nicht drei Namen kennen müssen.
+pub const SCHLIESSEN: &str = "SCHLIESSEN";
+
+/// Innenabstand eines Dialogs: vom Rahmen zur Titelleiste und zum Inhalt.
+pub const DIALOG_RAND: f32 = thema::SPACE_3;
+
+/// Höhe der Titelleiste eines Dialogs.
+pub const DIALOG_KOPF: f32 = thema::SIZE_CONTROL_MD;
+
+/// Ein Dialog: was sein Inhalt zurückgibt, und ob er geschlossen werden soll.
+pub struct DialogAntwort<R> {
+    pub inhalt: R,
+    /// Schließen-X, Escape oder ein Klick neben den Dialog.
+    pub zu: bool,
+}
+
+/// Der gemeinsame Rahmen aller Dialoge über dem Pult (FILTER, PRESETS, VBAN,
+/// MIDI, DARSTELLUNG): Titelleiste mit dem Titel links und dem Schließen-X
+/// rechts, darunter der Inhalt. Rand, Hintergrund, Innenabstand und die Wege
+/// zum Schließen (X, Escape, Klick daneben) sind überall dieselben, weil es
+/// überall derselbe Baustein ist.
+///
+/// Der Titel ist der zugängliche Name des Dialogs. Den Inhalt zeichnet der
+/// Aufrufer; er bekommt eine Spalte von `breite` und gibt zurück, was er an
+/// Aktionen gesammelt hat.
+pub fn dialog_rahmen<R>(
+    ctx: &egui::Context,
+    f: &Farben,
+    id: egui::Id,
+    titel: &str,
+    breite: f32,
+    inhalt: impl FnOnce(&mut Ui) -> R,
+) -> DialogAntwort<R> {
+    let mut schliessen = false;
+    let antwort = egui::Modal::new(id)
+        .frame(rahmen(f, f.bg_panel).inner_margin(egui::Margin::same(DIALOG_RAND as i8)))
+        .show(ctx, |ui| {
+            ui.set_width(breite);
+            ui.spacing_mut().item_spacing = Vec2::splat(thema::SPACE_1);
+            titelleiste(ui, f, titel, &mut schliessen);
+            // Die Fläche des Dialogs als eigener Knoten: die Tests prüfen
+            // daran, dass der Inhalt im Fenster und mit Abstand zum Rand steht,
+            // und ein Screenreader liest den Dialog als Ganzes.
+            let inhalt = ui.scope_builder(
+                egui::UiBuilder::new()
+                    .sense(egui::Sense::hover())
+                    .id_salt(("dialoginhalt", titel)),
+                inhalt,
+            );
+            inhalt.response.widget_info(|| {
+                WidgetInfo::labeled(egui::Role::Group, true, format!("Dialog {titel}"))
+            });
+            inhalt.inner
+        });
+    let zu = antwort.should_close() || schliessen;
+    DialogAntwort {
+        inhalt: antwort.inner,
+        zu,
+    }
+}
+
+/// Die Titelleiste: Titel links in derselben Schrift wie die übrigen
+/// Überschriften, das Schließen-X als Icon rechts.
+fn titelleiste(ui: &mut Ui, f: &Farben, titel: &str, schliessen: &mut bool) {
+    let breite = ui.available_width();
+    ui.allocate_ui_with_layout(
+        Vec2::new(breite, DIALOG_KOPF),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(titel)
+                        .font(fett(thema::FONT_SIZE_MD))
+                        .color(f.text_default),
+                )
+                .truncate(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icon_knopf(ui, f, Icon::Schliessen, SCHLIESSEN, false).clicked() {
+                    *schliessen = true;
+                }
+            });
+        },
+    );
+    ui.separator();
+}
+
+/// Kürzt einen Text so, dass er einzeilig in `breite` passt (mit „…“).
+/// Gekürzt wird nur die Anzeige; der volle Text gehört in den Tooltip.
+/// `font` ist die Schrift, in der der Text wirklich gezeichnet wird – sonst
+/// schätzt die Messung daneben und der Text läuft über den Rand.
+pub fn kuerzen(ui: &Ui, text: &str, breite: f32, font: FontId) -> String {
+    let passt = |t: &str| {
+        ui.painter()
+            .layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+            <= breite
+    };
+    if breite <= 0.0 {
+        return "…".into();
+    }
+    if passt(text) {
+        return text.to_string();
+    }
+    let zeichen: Vec<char> = text.chars().collect();
+    let mut n = zeichen.len();
+    while n > 0 {
+        let kandidat = format!("{}…", zeichen[..n].iter().collect::<String>());
+        if passt(&kandidat) {
+            return kandidat;
+        }
+        n -= 1;
+    }
+    "…".into()
 }
 
 // ------------------------------------------------------------ Faderblock ----
@@ -64,9 +184,17 @@ pub fn fader(
     let pad = thema::SPACE_1;
     let wert_h = thema::FONT_SIZE_SM + thema::SPACE_1;
     let top = rect.top() + pad + thema::SPACE_2;
-    let len = (rect.height() - pad * 2.0 - thema::SPACE_2 - wert_h - thema::SPACE_2).max(20.0);
+    let len = logik::fader_laenge(rect.height());
     let bahn = thema::SIZE_FADER_BAHN;
-    let x_bahn = rect.center().x - bahn * 0.5 - thema::SPACE_1;
+    // Von rechts: Pegelsäule, Bahn, Skalenstrich, Zahlen – die Bahn sitzt so
+    // weit rechts, dass die Skala links den ganzen Platz bekommt. Schmale
+    // Züge (Busse) verlieren so keine Zahlen.
+    let meter_w = thema::SIZE_PEGEL_BREITE;
+    let meter = Rect::from_min_size(
+        Pos2::new(rect.right() - pad - meter_w, top),
+        Vec2::new(meter_w, len),
+    );
+    let x_bahn = meter.left() - thema::SPACE_1 - bahn;
 
     // Bedienung
     let mut neu = None;
@@ -131,19 +259,15 @@ pub fn fader(
         p.rect_filled(fuellung, ecke, f.accent_deep);
     }
 
-    // Skala
+    // Skala: alle neun Zahlen, nie ausgedünnt. Reicht die Breite nicht für die
+    // kleine Schrift, wird sie kleiner (`logik::fader_skala_schrift`).
     let skala_rechts = x_bahn - thema::SPACE_1;
-    let platz = skala_rechts - rect.left() - thema::SPACE_2;
-    // Schmale Züge (Busse): die Skala wird kleiner gesetzt statt wegzufallen,
-    // höchstens bis 3/4 der kleinen Schrift (wie in der GTK-Oberfläche).
-    let fs = thema::FONT_SIZE_SM;
-    let fs_skala = (platz / 1.9).min(fs);
-    let breit_genug = fs_skala >= fs * 0.75;
+    let fs = logik::fader_skala_schrift(rect.width());
     for (db, text) in SKALA {
         let y = top + (1.0 - fader_pos(db)) * len;
         let haupt = db == 0.0;
         let farbe = if haupt { f.text_default } else { f.text_muted };
-        let strich = if haupt { 5.0 } else { 3.0 };
+        let strich = if haupt { logik::SKALA_STRICH } else { 3.0 };
         p.line_segment(
             [
                 Pos2::new(skala_rechts, y),
@@ -154,23 +278,16 @@ pub fn fader(
                 alpha(farbe, if haupt { 0.9 } else { 0.55 }),
             ),
         );
-        if breit_genug {
-            p.text(
-                Pos2::new(skala_rechts - thema::SPACE_1, y),
-                Align2::RIGHT_CENTER,
-                text,
-                mono(fs_skala),
-                alpha(farbe, if haupt { 0.95 } else { 0.6 }),
-            );
-        }
+        p.text(
+            Pos2::new(skala_rechts - thema::SPACE_1, y),
+            Align2::RIGHT_CENTER,
+            text,
+            mono(fs),
+            alpha(farbe, if haupt { 0.95 } else { 0.6 }),
+        );
     }
 
     // Pegel rechts
-    let meter_w = thema::SIZE_PEGEL_BREITE;
-    let meter = Rect::from_min_size(
-        Pos2::new(rect.right() - pad - meter_w - thema::SPACE_1, top),
-        Vec2::new(meter_w, len),
-    );
     pegelsaeule(&p, f, meter, pegel_db, spitze_db);
 
     // Griff
@@ -215,7 +332,13 @@ pub fn fader(
             Vec2::new(feld_w, wert_h),
         );
         p.rect_filled(feld, ecke, alpha(f.bg_canvas, 0.85));
-        p.text(feld.center(), Align2::CENTER_CENTER, text, mono(fs), farbe);
+        p.text(
+            feld.center(),
+            Align2::CENTER_CENTER,
+            text,
+            mono(thema::FONT_SIZE_SM),
+            farbe,
+        );
     }
     if response.has_focus() {
         p.rect_stroke(
@@ -229,6 +352,153 @@ pub fn fader(
     FaderAntwort { response, neu }
 }
 
+/// Ein waagerechter Regler für die Zeilen im FILTER-Modal.
+///
+/// Die **ganze** Schiene ist zu sehen – von der Beschriftungsspalte bis an die
+/// Wertspalte –, der gefüllte Teil bis zum Griff steht im Akzent, der Griff
+/// sitzt als Knopf darauf. Gezeichnet wie der Fader: der Standardregler von
+/// egui malt seine Schiene in der Fläche, auf der er steht, und die
+/// verschwindet dann in der Karte.
+///
+/// Bedienung: Klick oder Ziehen setzt den Wert an den Zeiger, Pfeiltasten bei
+/// Fokus (mit Umschalt zehn Schritte), Mausrad fein. Für Screenreader ist er
+/// ein Regler mit Namen und Wert. Gibt den neuen Wert zurück, wenn sich einer
+/// ergibt – sonst `None`.
+#[allow(clippy::too_many_arguments)]
+pub fn schieber(
+    ui: &mut Ui,
+    f: &Farben,
+    name: &str,
+    breite: f32,
+    hoehe: f32,
+    wert: f32,
+    von: f32,
+    bis: f32,
+    dezimal: usize,
+) -> Option<f32> {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(breite, hoehe), Sense::click_and_drag());
+    let stellen = 10f32.powi(dezimal as i32);
+    let runden = |v: f32| (v * stellen).round() / stellen;
+    // Ein Schritt ist der hundertste Teil der Spanne, aber nie feiner als die
+    // letzte Stelle, die die Zeile zeigt.
+    let fein = (((bis - von) * 0.01) * stellen).round().max(1.0) / stellen;
+    let spanne = bis - von;
+    // Der Griff läuft von links nach rechts über die ganze Breite: an beiden
+    // Enden steht seine Mitte, damit er nicht über die Schiene hinausragt.
+    let griff = Vec2::new(
+        thema::SPACE_3,
+        (hoehe - 2.0 * thema::SIZE_BORDER).max(thema::SPACE_2),
+    );
+    let weg = (rect.width() - griff.x).max(1.0);
+
+    let mut neu = None;
+    if response.clicked() || response.dragged() {
+        if let Some(zeiger) = response.interact_pointer_pos() {
+            let t = ((zeiger.x - rect.left() - griff.x * 0.5) / weg).clamp(0.0, 1.0);
+            neu = Some(runden(von + t * spanne));
+        }
+    }
+    if response.has_focus() {
+        // Pfeiltasten gehören dem Regler, solange er den Fokus hat – sonst
+        // springt der Fokus im Modal weiter, statt den Wert zu ändern.
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+        let (links, rechts, weit) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.modifiers.shift,
+            )
+        });
+        let schritt = if weit { fein * 10.0 } else { fein };
+        if links {
+            neu = Some(runden(wert - schritt));
+        } else if rechts {
+            neu = Some(runden(wert + schritt));
+        }
+    }
+    if response.hovered() {
+        let rad = ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y);
+        if rad.abs() > 0.5 {
+            neu = Some(runden(wert + rad.signum() * fein));
+        }
+    }
+    if response.clicked() {
+        response.request_focus();
+    }
+    let neu = neu.map(|v| v.clamp(von.min(bis), von.max(bis)));
+    let anzeige = neu.unwrap_or(wert);
+    response.widget_info(|| WidgetInfo::slider(true, anzeige as f64, name));
+
+    let p = ui.painter_at(rect);
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    // Die Schiene: die ganze Spalte, nicht nur der gefüllte Teil.
+    let bahn = schiene(rect);
+    p.rect_filled(bahn, ecke, f.border_strong);
+    let t = ((anzeige - von) / spanne).clamp(0.0, 1.0);
+    let x = rect.left() + griff.x * 0.5 + t * weg;
+    if x > bahn.left() + 1.0 {
+        p.rect_filled(
+            Rect::from_min_max(bahn.min, Pos2::new(x, bahn.max.y)),
+            ecke,
+            f.accent_default,
+        );
+    }
+    // Der Griff: Fläche der Karte, Rahmen wie am Fader.
+    let kopf = Rect::from_center_size(Pos2::new(x, rect.center().y), griff);
+    p.rect_filled(kopf, ecke, f.bg_raised);
+    let rand = if response.hovered() || response.dragged() || response.has_focus() {
+        f.accent_default
+    } else {
+        f.text_default
+    };
+    p.rect_stroke(
+        kopf,
+        ecke,
+        Stroke::new(thema::SIZE_BORDER, rand),
+        StrokeKind::Inside,
+    );
+    if response.has_focus() {
+        p.rect_stroke(
+            rect,
+            ecke,
+            Stroke::new(thema::SIZE_FOCUS, f.focus_ring),
+            StrokeKind::Inside,
+        );
+    }
+    neu.filter(|v| *v != wert)
+}
+
+/// Schiene eines Reglers: die ganze Breite seines Rechtecks, in der Höhe von
+/// [`thema::SIZE_FADER_BAHN`] mittig darin.
+pub fn schiene(rect: Rect) -> Rect {
+    let dick = thema::SIZE_FADER_BAHN;
+    Rect::from_min_max(
+        Pos2::new(rect.left(), rect.center().y - dick * 0.5),
+        Pos2::new(rect.right(), rect.center().y + dick * 0.5),
+    )
+}
+
+/// Gibt dem Standardregler von egui eine sichtbare Schiene: die ganze Schiene
+/// in der Rahmenfarbe, der gefüllte Teil im Akzent – dieselben Farben wie
+/// [`schieber`]. Für die wenigen Stellen, an denen der Regler seine Zahl
+/// selbst mitbringt (TRIM · DELAY im Kopf); überall sonst gilt [`schieber`].
+pub fn sichtbare_schiene(ui: &mut Ui, f: &Farben) {
+    let v = ui.visuals_mut();
+    v.widgets.inactive.bg_fill = f.border_strong;
+    v.selection.bg_fill = f.accent_default;
+    // Dieselbe Schienenhöhe wie [`schieber`] – egui hätte sonst eine eigene.
+    ui.spacing_mut().slider_rail_height = thema::SIZE_FADER_BAHN;
+}
+
 /// Senkrechte Pegelsäule mit Segmenten und Spitzenmarke.
 pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32) {
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
@@ -238,9 +508,11 @@ pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32)
         let seg_db = pos_db((i as f32 + 1.0) / PEGEL_SEGMENTE as f32);
         let y = r.bottom() - (i as f32 + 1.0) * seg_h;
         let farbe = if seg_db <= db {
+            // Oben am Anschlag wird das Signal bernsteinfarben – die Farbe des
+            // Kreuzungspunkts im Zeichen (ADR 0008).
             match segment_stufe(seg_db) {
-                Stufe::Spitze => f.status_warn,
-                Stufe::Laut => alpha(f.status_warn, 0.9),
+                Stufe::Spitze => f.signal_default,
+                Stufe::Laut => alpha(f.signal_default, 0.9),
                 Stufe::Normal => f.accent_default,
             }
         } else {
@@ -256,7 +528,7 @@ pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32)
         let y = r.top() + (1.0 - fader_pos(spitze)) * r.height();
         p.line_segment(
             [Pos2::new(r.left() + 1.0, y), Pos2::new(r.right() - 1.0, y)],
-            Stroke::new(1.5, alpha(f.text_default, 0.85)),
+            Stroke::new(1.5, alpha(f.signal_default, 0.9)),
         );
     }
 }
@@ -373,8 +645,10 @@ pub fn pan(ui: &mut Ui, f: &Farben, name: &str, breite: f32, pan: f32) -> (Respo
 /// Farbe eines eingeschalteten Schalters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Art {
-    /// Akzent (M, GATE, ECHO, Zuordnung).
+    /// Akzent (M, GATE, ECHO, Filterlämpchen).
     Akzent,
+    /// Zweites Signal, Bernstein: der Kreuzungspunkt der Zuordnung (ADR 0008).
+    Signal,
     /// Schrift auf Grund (S).
     Solo,
     /// Dunkler Akzent (MONO).
@@ -390,11 +664,60 @@ pub fn schalter(
     art: Art,
     groesse: Vec2,
 ) -> Response {
+    schalter_gross(ui, f, None, text, an, art, groesse, thema::FONT_SIZE_SM)
+}
+
+/// Wie [`schalter`], aber mit eigener Schriftgröße – für Reihen, in denen
+/// mehrere Wörter in einer schmalen Spalte Platz haben müssen (die vier Stufen
+/// der Rauschunterdrückung). Reicht es auch in kleiner Schrift nicht, wird das
+/// Wort gekürzt statt über den Nachbarn zu laufen; der volle Text bleibt der
+/// Name für den Screenreader.
+pub fn schalter_schrift(
+    ui: &mut Ui,
+    f: &Farben,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+    schriftgroesse: f32,
+) -> Response {
+    schalter_gross(ui, f, None, text, an, art, groesse, schriftgroesse)
+}
+
+/// Wie [`schalter`], aber mit einem Icon vor dem Wort (`FILTER`). Das Wort
+/// bleibt der zugängliche Name, das Icon ist nur das Bild dazu.
+pub fn schalter_icon(
+    ui: &mut Ui,
+    f: &Farben,
+    icon: Option<Icon>,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+) -> Response {
+    schalter_gross(ui, f, icon, text, an, art, groesse, thema::FONT_SIZE_SM)
+}
+
+/// Der gemeinsame Bau aller Schalter: Fläche, Rahmen, Schrift (und Icon) –
+/// nur die Schriftgröße kommt von außen, damit enge Reihen sie verkleinern
+/// können.
+#[allow(clippy::too_many_arguments)]
+fn schalter_gross(
+    ui: &mut Ui,
+    f: &Farben,
+    icon: Option<Icon>,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+    schriftgroesse: f32,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(groesse, Sense::click());
     response.widget_info(|| WidgetInfo::selected(egui::Role::CheckBox, true, an, text));
     let (flaeche, linie, schrift) = if an {
         match art {
             Art::Akzent => (f.accent_default, f.accent_default, f.text_on_accent),
+            Art::Signal => (f.signal_default, f.signal_default, f.text_on_accent),
             Art::Solo => (f.text_default, f.text_default, f.bg_canvas),
             Art::Tief => (f.accent_deep, f.accent_deep, f.text_default),
         }
@@ -403,7 +726,7 @@ pub fn schalter(
     } else {
         (f.bg_canvas, f.border_subtle, f.text_muted)
     };
-    let p = ui.painter();
+    let p = ui.painter().clone();
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
     p.rect_filled(rect, ecke, flaeche);
     p.rect_stroke(
@@ -412,13 +735,45 @@ pub fn schalter(
         Stroke::new(thema::SIZE_BORDER, linie),
         StrokeKind::Inside,
     );
-    p.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        fett(thema::FONT_SIZE_SM),
-        schrift,
-    );
+    // Platz für das Wort: die Fläche minus Rand – was nicht passt, wird
+    // gekürzt.
+    let font = fett(schriftgroesse);
+    match icon {
+        None => {
+            let passend = kuerzen(ui, text, rect.width() - 2.0 * thema::SPACE_1, font.clone());
+            let galley = p.layout_no_wrap(passend, font, schrift);
+            p.galley(
+                Pos2::new(
+                    rect.center().x - galley.size().x * 0.5,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+                schrift,
+            );
+        }
+        Some(icon) => {
+            let galley = p.layout_no_wrap(text.to_string(), font, schrift);
+            let kante = schriftgroesse * 0.8;
+            let luecke = thema::SPACE_1;
+            let gesamt = kante + luecke + galley.size().x;
+            let links = rect.center().x - gesamt * 0.5;
+            icon.bild(kante, schrift).paint_at(
+                ui,
+                Rect::from_center_size(
+                    Pos2::new(links + kante * 0.5, rect.center().y),
+                    Vec2::splat(kante),
+                ),
+            );
+            p.galley(
+                Pos2::new(
+                    links + kante + luecke,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+                schrift,
+            );
+        }
+    }
     if response.has_focus() {
         p.rect_stroke(
             rect.expand(1.0),
@@ -429,6 +784,194 @@ pub fn schalter(
     }
     response
 }
+
+/// Lämpchenreihe: die acht Filter eines virtuellen Busses als Kürzel, an in
+/// der Akzentfarbe, aus in der gedämpften. Nur Anzeige – geschaltet wird im
+/// FILTER-Modal; der zugängliche Name nennt den Bus, der Tooltip den Stand.
+pub fn laempchen(
+    ui: &mut Ui,
+    f: &Farben,
+    groesse: Vec2,
+    bus: &str,
+    stand: &[(&'static str, bool); 8],
+    zusammenfassung: &str,
+) {
+    let (rect, response) = ui.allocate_exact_size(groesse, Sense::hover());
+    response.widget_info(|| {
+        WidgetInfo::labeled(egui::Role::Label, true, format!("Filteranzeige {bus}"))
+    });
+    let p = ui.painter().clone();
+    // Eine Zeile, je Filter sein Anfangsbuchstabe (L E N G C A D P); aktive
+    // leuchten im Akzent. Die vollen Namen stehen im Tooltip.
+    let zelle = rect.width() / stand.len() as f32;
+    for (i, (kurz, an)) in stand.iter().enumerate() {
+        let buchstabe = crate::logik::filter_buchstabe(kurz);
+        let mitte = Pos2::new(rect.left() + (i as f32 + 0.5) * zelle, rect.center().y);
+        p.text(
+            mitte,
+            Align2::CENTER_CENTER,
+            buchstabe,
+            fett(thema::FONT_SIZE_SM),
+            if *an { f.accent_default } else { f.text_faint },
+        );
+    }
+    if !zusammenfassung.is_empty() {
+        response.on_hover_text(zusammenfassung);
+    }
+}
+
+// ----------------------------------------------------------------- Icons ----
+
+/// Die Icons des Pultes: eine kuratierte Auswahl aus Lucide (ISC, Beilage
+/// `icons/LUCIDE-LICENSE.txt`), dieselbe Sorte wie in sprechwerk. Eine Ansicht
+/// kann nur verlangen, was hier steht — kein Name, der ins Leere zeigt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Icon {
+    /// Theme hell
+    Sonne,
+    /// Theme dunkel
+    Mond,
+    /// Theme mono (Kontrast)
+    Kontrast,
+    /// Presets: Ordner
+    Ordner,
+    /// VBAN: Netzwerk
+    Netzwerk,
+    /// MIDI: Regler (Klaviatur ist bei 15 px nicht mehr zu erkennen)
+    Regler,
+    /// Darstellung: Palette
+    Palette,
+    /// Aufnahme
+    Kreis,
+    /// Stopp
+    Quadrat,
+    /// eingeklappt (weiter unten mehr)
+    PfeilRunter,
+    /// aufgeklappt / weiter
+    PfeilRechts,
+    /// Dialog schließen
+    Schliessen,
+    /// Eingang (Mikrofon)
+    Mikrofon,
+    /// Ausgang (Lautsprecher)
+    Lautsprecher,
+    /// läuft
+    Aktivitaet,
+}
+
+impl Icon {
+    /// Alle Icons — damit ein Test prüfen kann, dass jede Datei da ist.
+    pub const ALLE: [Icon; 15] = [
+        Icon::Sonne,
+        Icon::Mond,
+        Icon::Kontrast,
+        Icon::Ordner,
+        Icon::Netzwerk,
+        Icon::Regler,
+        Icon::Palette,
+        Icon::Kreis,
+        Icon::Quadrat,
+        Icon::PfeilRunter,
+        Icon::PfeilRechts,
+        Icon::Schliessen,
+        Icon::Mikrofon,
+        Icon::Lautsprecher,
+        Icon::Aktivitaet,
+    ];
+
+    /// Der Name der Datei in `icons/`.
+    pub fn datei(self) -> &'static str {
+        match self {
+            Icon::Sonne => "sun.svg",
+            Icon::Mond => "moon.svg",
+            Icon::Kontrast => "contrast.svg",
+            Icon::Ordner => "folder.svg",
+            Icon::Netzwerk => "network.svg",
+            Icon::Regler => "sliders-horizontal.svg",
+            Icon::Palette => "palette.svg",
+            Icon::Kreis => "circle.svg",
+            Icon::Quadrat => "square.svg",
+            Icon::PfeilRunter => "chevron-down.svg",
+            Icon::PfeilRechts => "chevron-right.svg",
+            Icon::Schliessen => "x.svg",
+            Icon::Mikrofon => "mic.svg",
+            Icon::Lautsprecher => "volume-2.svg",
+            Icon::Aktivitaet => "activity.svg",
+        }
+    }
+
+    /// Das Icon als Bild, eingefärbt mit `farbe` (Strich, keine Fläche).
+    pub fn quelle(self) -> egui::ImageSource<'static> {
+        match self {
+            Icon::Sonne => egui::include_image!("../icons/sun.svg"),
+            Icon::Mond => egui::include_image!("../icons/moon.svg"),
+            Icon::Kontrast => egui::include_image!("../icons/contrast.svg"),
+            Icon::Ordner => egui::include_image!("../icons/folder.svg"),
+            Icon::Netzwerk => egui::include_image!("../icons/network.svg"),
+            Icon::Regler => egui::include_image!("../icons/sliders-horizontal.svg"),
+            Icon::Palette => egui::include_image!("../icons/palette.svg"),
+            Icon::Kreis => egui::include_image!("../icons/circle.svg"),
+            Icon::Quadrat => egui::include_image!("../icons/square.svg"),
+            Icon::PfeilRunter => egui::include_image!("../icons/chevron-down.svg"),
+            Icon::PfeilRechts => egui::include_image!("../icons/chevron-right.svg"),
+            Icon::Schliessen => egui::include_image!("../icons/x.svg"),
+            Icon::Mikrofon => egui::include_image!("../icons/mic.svg"),
+            Icon::Lautsprecher => egui::include_image!("../icons/volume-2.svg"),
+            Icon::Aktivitaet => egui::include_image!("../icons/activity.svg"),
+        }
+    }
+
+    /// Das Icon als Bild in Größe und Farbe.
+    pub fn bild(self, groesse: f32, farbe: Color32) -> egui::Image<'static> {
+        egui::Image::new(self.quelle())
+            .tint(farbe)
+            .fit_to_exact_size(Vec2::splat(groesse))
+    }
+
+    /// Malt das Icon mittig in ein Quadrat der Kante `groesse` — für alles,
+    /// was selbst zeichnet (Kopfknopf, Statuszeile, Gerätewahl).
+    pub fn malen(self, ui: &Ui, mitte: Pos2, groesse: f32, farbe: Color32) {
+        self.bild(groesse, farbe)
+            .paint_at(ui, Rect::from_center_size(mitte, Vec2::splat(groesse)));
+    }
+}
+
+/// Ein Icon ohne Knopf (Gerätewahl, Zeile im ECHO-Menü).
+pub fn icon(ui: &mut Ui, icon: Icon, farbe: Color32) -> Response {
+    ui.add(icon.bild(thema::FONT_SIZE_MD, farbe))
+}
+
+/// Das Icon eines Themes: Sonne (hell), Mond (dunkel), Kontrast (mono).
+pub fn thema_icon(t: Thema) -> Icon {
+    match t {
+        Thema::Hell => Icon::Sonne,
+        Thema::Dunkel => Icon::Mond,
+        Thema::Mono => Icon::Kontrast,
+    }
+}
+
+/// Knopf nur mit Icon. `name` ist Tooltip **und** zugänglicher Name — ein
+/// Screenreader liest ihn vor, die Maus zeigt ihn beim Darüberfahren.
+///
+/// Im Pult steht das Wort noch neben jedem Icon (die Beschriftung ist der
+/// Name); der Baustein liegt bereit, sobald eine Ansicht ohne Text auskommen
+/// muss, und setzt dann den Namen selbst.
+pub fn icon_knopf(ui: &mut Ui, f: &Farben, icon: Icon, name: &str, an: bool) -> Response {
+    let farbe = if an { f.accent_default } else { f.text_muted };
+    let antwort = ui
+        .add(
+            egui::Button::image(icon.bild(thema::FONT_SIZE_MD, farbe))
+                .selected(an)
+                .frame_when_inactive(an)
+                .min_size(Vec2::splat(thema::SIZE_CONTROL_SM)),
+        )
+        .on_hover_text(name);
+    let name = name.to_string();
+    antwort.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, &name));
+    antwort
+}
+
+// ------------------------------------------------------ Gezeichnete Zeichen ----
 
 /// Gezeichnetes Zeichen (IBM Plex Mono hat keine geometrischen Formen).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,43 +1040,30 @@ impl Zeichen {
     }
 }
 
-/// Text mit gezeichnetem Zeichen davor (`● LAEUFT`, Marke `▪`).
-pub fn zeichen_text(
+/// Text mit Icon davor (`LAEUFT`, `BEREIT`).
+pub fn icon_text(
     ui: &mut Ui,
+    icon: Icon,
     text: &str,
     font: FontId,
     farbe: Color32,
-    zeichen_farbe: Color32,
+    icon_farbe: Color32,
 ) -> Response {
-    let (zeichen, rest) = Zeichen::aus_text(text);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(rest.to_string(), font.clone(), farbe);
-    let kante = font.size * 0.6;
-    let luecke = if zeichen.is_some() && !rest.is_empty() {
-        thema::SPACE_1
-    } else {
-        0.0
-    };
-    let z_breite = if zeichen.is_some() {
-        kante + luecke
-    } else {
-        0.0
-    };
-    let groesse = Vec2::new(z_breite + galley.size().x, galley.size().y.max(kante));
+    let kante = font.size;
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, farbe);
+    let luecke = if text.is_empty() { 0.0 } else { thema::SPACE_1 };
+    let groesse = Vec2::new(kante + luecke + galley.size().x, galley.size().y.max(kante));
     let (rect, r) = ui.allocate_exact_size(groesse, Sense::hover());
-    r.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, rest));
-    if let Some(z) = zeichen {
-        z.malen(
-            ui.painter(),
-            Pos2::new(rect.left() + kante * 0.5, rect.center().y),
-            kante,
-            zeichen_farbe,
-        );
-    }
+    r.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, text));
+    icon.malen(
+        ui,
+        Pos2::new(rect.left() + kante * 0.5, rect.center().y),
+        kante,
+        icon_farbe,
+    );
     ui.painter().galley(
         Pos2::new(
-            rect.left() + z_breite,
+            rect.left() + kante + luecke,
             rect.center().y - galley.size().y * 0.5,
         ),
         galley,
@@ -542,17 +1072,44 @@ pub fn zeichen_text(
     r
 }
 
-/// Knopf der Kopf- und Tape-Leiste (`PRESETS`, `● REC`). `an` füllt ihn.
-/// Ein führendes ●/■/▾/▸ wird gezeichnet, nicht gesetzt.
+/// Knopf der Kopf- und Tape-Leiste (`PRESETS`, `LADEN`). `an` füllt ihn.
+/// Ein führendes ●/■/▾/▸ im Text wird gezeichnet, nicht gesetzt — Rückfall für
+/// Zeichen, die die Schrift nicht hat; im Pult steht dort ein [`Icon`].
 pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Response {
+    kopfknopf_inner(ui, f, None, text, an)
+}
+
+/// Derselbe Knopf mit Icon vor dem Text (`PRESETS`, `REC`). Der Text bleibt
+/// der zugängliche Name, das Icon ist Beiwerk.
+pub fn kopfknopf_icon(
+    ui: &mut Ui,
+    f: &Farben,
+    icon: Icon,
+    text: &str,
+    an: Option<Color32>,
+) -> Response {
+    kopfknopf_inner(ui, f, Some(icon), text, an)
+}
+
+fn kopfknopf_inner(
+    ui: &mut Ui,
+    f: &Farben,
+    vor: Option<Icon>,
+    text: &str,
+    an: Option<Color32>,
+) -> Response {
     let font = fett(thema::FONT_SIZE_SM);
     let (zeichen, rest) = Zeichen::aus_text(text);
     let kante = thema::FONT_SIZE_SM * 0.6;
-    let z_breite = if zeichen.is_some() {
-        kante + thema::SPACE_1
-    } else {
-        0.0
+    // Vor dem Text: Icon, sonst gezeichnetes Zeichen, sonst nichts. Beide
+    // bekommen denselben Platz, damit die Knöpfe einer Leiste ausgerichtet
+    // bleiben.
+    let (icon_breite, zeichen_breite) = match (vor, zeichen) {
+        (Some(_), _) => (thema::FONT_SIZE_MD + thema::SPACE_1, 0.0),
+        (None, Some(_)) => (0.0, kante + thema::SPACE_1),
+        (None, None) => (0.0, 0.0),
     };
+    let z_breite = icon_breite + zeichen_breite;
     let text_breite = ui
         .painter()
         .layout_no_wrap(rest.to_string(), font.clone(), f.text_default)
@@ -567,8 +1124,9 @@ pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Re
         None if response.hovered() => (f.bg_canvas, f.accent_default, f.text_default),
         None => (f.bg_canvas, f.border_subtle, f.text_default),
     };
-    let p = ui.painter();
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    let links = rect.center().x - (z_breite + text_breite) * 0.5;
+    let p = ui.painter();
     p.rect_filled(rect, ecke, flaeche);
     p.rect_stroke(
         rect,
@@ -576,8 +1134,14 @@ pub fn kopfknopf(ui: &mut Ui, f: &Farben, text: &str, an: Option<Color32>) -> Re
         Stroke::new(thema::SIZE_BORDER, linie),
         StrokeKind::Inside,
     );
-    let links = rect.center().x - (z_breite + text_breite) * 0.5;
-    if let Some(z) = zeichen {
+    if let Some(i) = vor {
+        i.malen(
+            ui,
+            Pos2::new(links + thema::FONT_SIZE_MD * 0.5, rect.center().y),
+            thema::FONT_SIZE_MD,
+            schrift,
+        );
+    } else if let Some(z) = zeichen {
         z.malen(
             p,
             Pos2::new(links + kante * 0.5, rect.center().y),
@@ -638,18 +1202,30 @@ pub fn chip(ui: &mut Ui, f: &Farben, schluessel: &str, wert: &str) {
 /// Waagerechte Segmentleiste (Tape-Pegel).
 pub fn segmentleiste(ui: &mut Ui, f: &Farben, db: f32, segmente: usize) {
     let seg_w = 3.0;
-    let groesse = Vec2::new(segmente as f32 * (seg_w + 1.0), thema::SPACE_3 - 3.0);
-    let (rect, _) = ui.allocate_exact_size(groesse, Sense::hover());
+    let breite = segmente as f32 * (seg_w + 1.0) - 1.0;
+    segmentleiste_breit(ui, f, db, breite, segmente);
+}
+
+/// Waagerechte Segmentleiste, die **genau** `breite` füllt: die Segmente
+/// teilen sich die Breite, dazwischen steht eine Lücke von
+/// [`thema::SIZE_BORDER`]. So reicht der Balken von der Beschriftung bis an die
+/// Wertspalte, statt mitten in der Zeile aufzuhören.
+pub fn segmentleiste_breit(ui: &mut Ui, f: &Farben, db: f32, breite: f32, segmente: usize) {
+    let segmente = segmente.max(1);
+    let hoehe = thema::SPACE_3 - 3.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(breite, hoehe), Sense::hover());
+    let luecke = thema::SIZE_BORDER;
+    let seg_w = ((breite - (segmente as f32 - 1.0) * luecke) / segmente as f32).max(1.0);
     let p = ui.painter();
     for i in 0..segmente {
         let seg_db = pos_db((i as f32 + 1.0) / segmente as f32);
         let spitze = i + 3 >= segmente;
         let farbe = match (seg_db <= db, spitze) {
-            (true, true) => f.status_warn,
+            (true, true) => f.signal_default,
             (true, false) => f.accent_default,
             _ => f.border_subtle,
         };
-        let x = rect.left() + i as f32 * (seg_w + 1.0);
+        let x = rect.left() + i as f32 * (seg_w + luecke);
         p.rect_filled(
             Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(seg_w, rect.height())),
             CornerRadius::ZERO,
@@ -670,4 +1246,59 @@ pub fn text(f: &Farben, inhalt: &str, fett_: bool, gedaempft: bool) -> egui::Ric
     } else {
         f.text_default
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Jedes Icon ist eine Datei im Crate, ein SVG mit derselben Strichstärke
+    /// (2 px auf 24er Raster) und weißem Strich — nur so färbt `tint` es.
+    #[test]
+    fn jedes_icon_ist_eine_datei_und_wird_eingefaerbt() {
+        let ordner = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons");
+        for i in Icon::ALLE {
+            let pfad = ordner.join(i.datei());
+            let svg = std::fs::read_to_string(&pfad)
+                .unwrap_or_else(|e| panic!("{}: {e}", pfad.display()));
+            assert!(svg.starts_with("<svg"), "{}: kein SVG", i.datei());
+            assert!(
+                svg.ends_with("</svg>\n"),
+                "{}: nicht abgeschlossen",
+                i.datei()
+            );
+            assert!(
+                svg.contains("stroke=\"#ffffff\""),
+                "{}: Strich nicht weiß, tint wirkt nicht",
+                i.datei()
+            );
+            assert!(
+                svg.contains("stroke-width=\"2\""),
+                "{}: andere Strichstärke als die übrigen",
+                i.datei()
+            );
+            assert!(
+                svg.contains("viewBox=\"0 0 24 24\""),
+                "{}: anderes Raster",
+                i.datei()
+            );
+        }
+    }
+
+    /// Die Lizenz der Icons liegt bei — ohne sie darf das Paket nicht raus.
+    #[test]
+    fn lizenz_der_icons_liegt_bei() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons/LUCIDE-LICENSE.txt"),
+        )
+        .expect("LUCIDE-LICENSE.txt");
+        assert!(text.contains("Lucide"));
+    }
+
+    #[test]
+    fn theme_icons_sind_sonne_mond_und_kontrast() {
+        assert_eq!(thema_icon(Thema::Hell), Icon::Sonne);
+        assert_eq!(thema_icon(Thema::Dunkel), Icon::Mond);
+        assert_eq!(thema_icon(Thema::Mono), Icon::Kontrast);
+    }
 }

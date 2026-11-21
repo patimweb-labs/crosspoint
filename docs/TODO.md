@@ -24,9 +24,35 @@ Erledigt:
       Häkchen je Gerät im ECHO-Menü (ADR 0005).
 - [x] **AEC3 statt eigenem Filter** (`sonora`, reines Rust): 21 dB statt 2,4 dB
       bei getrennten Uhren, 0 Allokationen im Callback (ADR 0005).
+- [x] **Filterkette an B1–B3**: LC, ECHO, NR (eigener Schalter, Stufe), GATE,
+      COMP + Limiter, AGC, DUCK, PTT, in einem FILTER-Modal statt acht Knöpfen
+      (ADR 0006). `aec_ns` schaltet jetzt NR, alte Presets laden weiter.
 
 Offen:
 
+- [ ] **Cheat aus ADR 0009, abzubauen:** die ECHO-Karte im FILTER-Modal zeigt
+      höchstens sieben lokale Ausgabegeräte und darunter „… n weitere Geräte“
+      (der Rest nur im Tooltip). Grund: kein Scrollen (ADR 0007) und eine
+      feste Kartenhöhe im Raster. Sauber wäre eine zweite Spalte innerhalb der
+      Karte oder ein Aufklapper; erst nötig, wenn jemand mehr als sieben lokale
+      Sinks hat.
+- [ ] **Globale Tastenkürzel für PTT** (Fusstaster ohne MIDI, z. B. F13 oder
+      Maustaste 4): unter Wayland darf ein Programm ohne Portal keine Tasten
+      außerhalb seines Fensters abgreifen. Sauber wäre das
+      `GlobalShortcuts`-Portal (`org.freedesktop.portal.GlobalShortcuts`,
+      Wayland 1.4+/xdg-desktop-portal 1.19) – das gibt es nicht auf jedem
+      Schreibtisch, und GNOME hat es lange nicht angeboten. Bis dahin: MIDI
+      (`/bus/<n>/ptt_offen` in der MIDI-Karte) oder OSC. Nicht halb bauen:
+      ein X11-Weg über `XGrabKey` wäre auf Wayland wirkungslos und auf X11
+      ein zweiter Codepfad.
+- [ ] **RNNoise als Alternative zur NR:** `sonora`s NS ist WebRTCs
+      Spektralverfahren (6/12/18/21 dB) und frisst bei hohen Stufen
+      Sprachanteile. RNNoise (BSD-3, GRU-basiert, 48 kHz) klingt bei gleicher
+      Dämpfung natürlicher, braucht aber ein Modell (~90 KiB) und eine
+      C-Bindung (`nnnoiseless` ist reines Rust) – als *zusätzliche* Stufe
+      hinter NR denkbar, nicht als Ersatz, weil die Stufen dann zwei
+      Bedeutungen hätten. Messen: Sprache bei 48 kHz, SNR-Gewinn und
+      Verständlichkeit, im Vergleich zu `nr_stufe = 2/3`.
 - [ ] **Einzelne Programme als Echo-Referenz wählbar:** heute hängt die
       Referenz am Ausgabegerät (Monitor des Sinks) – alles, was dort landet,
       ist in der Referenz. Wer nur den Browser herausrechnen will und den

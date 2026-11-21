@@ -158,6 +158,8 @@ pub fn anwenden(ctx: &egui::Context, thema: Thema) {
     s.interact_size.y = SIZE_CONTROL_SM;
     s.window_margin = egui::Margin::same(SPACE_4 as i8);
     s.menu_margin = egui::Margin::same(SPACE_1 as i8);
+    // Keine Scrollbalken im Pult (ADR 0007); Aufklapplisten bleiben schmal.
+    s.scroll = egui::style::ScrollStyle::thin();
 
     style.text_styles = [
         (TextStyle::Small, FontId::monospace(FONT_SIZE_SM)),
@@ -190,6 +192,103 @@ mod tests {
         for f in [&DUNKEL, &HELL, &MONO] {
             assert_ne!(f.text_default, f.bg_panel);
             assert_ne!(f.text_on_accent, f.accent_default);
+            assert_ne!(f.text_on_accent, f.signal_default);
+            // Zwei Signale: das Kreuz (Akzent) und sein Kreuzungspunkt (Signal).
+            assert_ne!(f.accent_default, f.signal_default);
+        }
+    }
+
+    /// Relative Leuchtdichte nach WCAG 2.1.
+    fn leuchtdichte(c: egui::Color32) -> f32 {
+        let kanal = |wert: u8| {
+            let s = wert as f32 / 255.0;
+            if s <= 0.039_28 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * kanal(c.r()) + 0.7152 * kanal(c.g()) + 0.0722 * kanal(c.b())
+    }
+
+    fn kontrast(a: egui::Color32, b: egui::Color32) -> f32 {
+        let (x, y) = (leuchtdichte(a), leuchtdichte(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Jedes Theme muss Text, Akzent und Signal so tragen, dass man sie liest
+    /// (WCAG AA: 4,5 für kleinen Text, 3,0 für Linien und Flächen).
+    #[test]
+    fn kontrast_traegt_in_allen_drei_themes() {
+        for (name, f) in [("dark", &DUNKEL), ("light", &HELL), ("mono", &MONO)] {
+            for flaeche in [f.bg_canvas, f.bg_panel, f.bg_raised] {
+                assert!(
+                    kontrast(f.text_default, flaeche) >= 7.0,
+                    "{name}: Text auf Fläche zu schwach"
+                );
+                assert!(
+                    kontrast(f.accent_default, flaeche) >= 3.0,
+                    "{name}: Akzent auf Fläche zu schwach"
+                );
+                assert!(
+                    kontrast(f.signal_default, flaeche) >= 3.0,
+                    "{name}: Signal auf Fläche zu schwach"
+                );
+            }
+            assert!(
+                kontrast(f.text_muted, f.bg_panel) >= 4.5,
+                "{name}: gedämpfter Text zu schwach"
+            );
+            assert!(
+                kontrast(f.border_strong, f.bg_panel) >= 1.5,
+                "{name}: Rahmen unsichtbar"
+            );
+            for flaeche in [f.accent_default, f.signal_default] {
+                assert!(
+                    kontrast(f.text_on_accent, flaeche) >= 4.4,
+                    "{name}: Schrift auf dem Signal zu schwach"
+                );
+            }
+        }
+    }
+
+    /// Zeichen und Oberfläche dürfen nicht auseinanderlaufen: die Farben des
+    /// Logos stehen als Tokens im Code (ADR 0008).
+    #[test]
+    fn zeichen_und_tokens_tragen_dieselben_farben() {
+        let dunkel = include_str!("../../../assets/crosspoint-logo.svg");
+        let hell = include_str!("../../../assets/crosspoint-hell.svg");
+        let mono = include_str!("../../../assets/crosspoint-mono.svg");
+        let hex = |c: egui::Color32| format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
+        for (datei, was, farbe) in [
+            (dunkel, "Kreuz", DUNKEL.accent_default),
+            (dunkel, "Kreuzungspunkt", DUNKEL.signal_default),
+            (dunkel, "Matrix", DUNKEL.border_strong),
+            (hell, "Kachel hell", HELL.bg_panel),
+            (mono, "Kreuz mono", MONO.accent_default),
+        ] {
+            assert!(
+                datei.contains(&hex(farbe)),
+                "{was}: {} steht nicht im Zeichen",
+                hex(farbe)
+            );
+        }
+    }
+
+    /// Die Schiene eines Reglers liegt auf der Karte: sie muss sich von der
+    /// Kartenfläche abheben (sonst ist nur der gefüllte Teil zu sehen), und die
+    /// Füllung muss sich von der Schiene unterscheiden.
+    #[test]
+    fn reglerschiene_hebt_sich_von_der_karte_ab() {
+        for (name, f) in [("dark", &DUNKEL), ("light", &HELL), ("mono", &MONO)] {
+            assert!(
+                kontrast(f.border_strong, f.bg_raised) >= 1.5,
+                "{name}: Schiene auf der Karte unsichtbar"
+            );
+            assert!(
+                kontrast(f.accent_default, f.border_strong) >= 1.5,
+                "{name}: Füllung hebt sich nicht von der Schiene ab"
+            );
         }
     }
 

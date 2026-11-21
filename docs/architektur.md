@@ -35,9 +35,12 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
    Fernbedienung/Tests       MIDI über MIDIMonster   Netzwerk-Audio
 ```
 
-Signalweg (ADR 0002): Eingänge und Hardware-Busse tragen das Rohsignal;
-Noise Gate und Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`)
-sitzen nur an den virtuellen Bussen B1–B3. Die Echounterdrückung nimmt den
+Signalweg (ADR 0002/0006): Eingänge und Hardware-Busse tragen das Rohsignal;
+die Filterkette sitzt nur an den virtuellen Bussen B1–B3 – Low-Cut,
+Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`),
+Rauschunterdrückung (dieselbe Instanz), Noise Gate, Kompressor und Limiter
+(`crates/core/src/dsp.rs`), AGC (`crates/core/src/agc.rs`, AGC2 aus `sonora`),
+Ducking und Push-to-Talk. Die Echounterdrückung nimmt den
 Ton der gewählten Ausgabegeräte (`crates/core/src/echo.rs` legt deren Monitore
 auf `crosspoint:echo_ref_L/R`) und rechnet ihn aus dem Mikrofon. Der frühere
 Weg – der fertige Ausgang eines Hardware-Busses als Referenz – ist mit
@@ -102,7 +105,7 @@ Jeder Schritt muss einzeln lauffähig sein; nach jedem Schritt Tests grün und
 die API-Antworten unverändert. Kein Schritt darf einen neuen Adapter
 einführen, ohne dass ein alter wegfällt.
 
-## Darstellung: drei Themes, eine Dichte
+## Darstellung: drei Themes, feste Anordnung
 
 Seit dem Wechsel auf egui (ADR 0003) gilt AGENTS.md §2.7 wörtlich: drei
 Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
@@ -111,33 +114,102 @@ Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
   `build.rs` erzeugt daraus Konstanten. Im Code stehen nur Namen
   (`f.accent_default`, `SIZE_FADER_BAHN`).
 - **Auch selbst gezeichnete Fader und Pegel** lesen ihre Farben aus dem Theme.
+- **Icons sind Dateien, keine Glyphen.** `crates/fenster/icons/*.svg` sind eine
+  kuratierte Auswahl aus Lucide (ISC, Beilage `LUCIDE-LICENSE.txt`), in
+  `bausteine::Icon` eingebettet und über `tint` mit der Textfarbe eingefärbt.
+  Ein Icon steht **vor** dem Wort, nie statt seiner: der Name bleibt der
+  zugängliche Name des Knopfs. Die Schrift (IBM Plex Mono) hat keine
+  geometrischen Formen; statt Ersatzzeichen zu setzen, wird gezeichnet.
 - Die Anordnung ist fest (Kopf, Tape, Eingänge | Busse | Master, Makros); die
-  Breite der Züge folgt dem Fenster (`logik::zugbreiten`), bei Full HD passen
-  alle 17 Züge. Wählbar bleibt nur die Dichte (kompakt, normal, breit) und die
-  Zahl der Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
+  17 Züge füllen die Fläche zwischen Kopf- und Makroleiste genau
+  (`logik::zugbreiten`). **Es scrollt nichts** (ADR 0007): Statt einer
+  Scrollleiste hat das Fenster eine Mindestgröße, die aus den Maßen des Pults
+  gerechnet wird (`logik::mindestfenster`, 1642 × 660). Alle neun
+  Skalenzahlen stehen immer da; reicht die Höhe nicht für die Makrofelder,
+  zeigt die Leiste nur ihre Kopfzeile. Wählbar bleiben Theme und Zahl der
+  Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
 
-## Plattformen: nur Linux
+## Plattformen: Linux ausgeliefert, macOS im Unterbau
 
-Ausgeliefert wird als Flatpak, AppImage und tar.gz (ADR 0004) – damit ist
+Ausgeliefert wird heute als Flatpak, AppImage und tar.gz (ADR 0004) – damit ist
 jede Distribution mit PipeWire abgedeckt, ohne je Distribution ein eigenes
-Paket zu pflegen.
+Paket zu pflegen. macOS ist seit 2026-11-21 **geplant und beschlossen**
+([ADR 0010](adr/0010-macos-unterbau.md), [plan-macos.md](plan-macos.md)), aber
+noch nicht gebaut: entschieden ist der Unterbau, nicht das Ausliefern.
 
-### Warum nicht Windows oder macOS
+### Zwei Grenzen statt einer Portierung
+
+PipeWire lässt sich nicht portieren, der Mixer schon. Der Kern bekommt deshalb
+zwei Traits, hinter denen je eine Plattform sitzt:
+
+```
+crates/fenster     kennt nur Modell, Aktionen und Umgebung (als Daten)
+     │
+crates/core
+     ├── AudioBackend    ein Callback, 18 Puffer je Block
+     └── GeraeteBackend  welche Geräte, welcher Bus wohin, Echo-Referenz
+              │                       │
+      JACK + PipeWire            Core Audio
+      (heute, Linux)             (neu, macOS)
+```
+
+Gewählt wird in `src/` (Kompositionswurzel), **nie** im Fenster: AGENTS.md §2.10
+gilt hier wörtlich, `crates/fenster` bekommt kein `cfg(target_os)`, sondern eine
+`Umgebung` im Modell. `cfg` bleibt nur in `Cargo.toml`, wo Cargo es erzwingt.
+
+Die Naht ist schon da: `EngineDsp::process(&Params, &Io, frames)` bekommt 18
+rohe Pufferzeiger und weiß nichts von einem Audio-Server. `Zugriff`
+(`crates/core/src/pw.rs`) ist der Keim des Geräte-Backends und wandert nach
+`core/src/backend/geraete.rs`. Zusammen sind das 24–40 h – und sie lohnen auch
+ohne macOS, weil danach Tests ohne PipeWire laufen.
+
+### Warum nicht Windows
 
 Entschieden am 2026-10-29 nach Aufwandsmessung (`wc -l` über den Code).
 
-**Windows: nicht geplant.** Der Mixer selbst wäre portierbar (≈19 % des Kerns
+**Windows: nicht geplant.** Der Mixer selbst wäre portierbar (≈20 % des Kerns
 ist plattformnah, DSP/VBAN/OSC/HTTP sind plattformneutral), aber virtuelle
 Geräte — also genau das, was einen VoiceMeeter-Ersatz ausmacht — brauchen einen
 **signierten Kernel-Treiber**: 400–800 h Arbeit plus EV-Zertifikat
 (300–700 €/Jahr). Ein Pult ohne virtuelle Kabel (120–200 h) löst den
-Anwendungsfall „Programm X auf Kanal 3" nicht und wäre damit kein Ersatz.
+Anwendungsfall „Programm X auf Kanal 3" nicht und wäre damit kein Ersatz. Die
+Grenze aus ADR 0010 macht es später leichter, entscheidet aber nichts darüber.
 
-**macOS: nicht geplant, aber machbar.** Kein Treiber nötig (Audio Taps ab
-macOS 13), aber CoreAudio-Backend, Taps, `.app`, Notarisierung (99 €/Jahr) und
-Testhardware ergeben 170–240 h. Nur sinnvoll mit einem Mac zum Belegen und
-einer Gruppe, die es vermisst.
+### macOS (ADR 0010)
 
-**Regel für später:** Wer die Portierung wieder aufbringt, beginnt mit dem
-Audio-Backend allein (60–80 h) und entscheidet erst danach über Oberfläche und
-Geräte-Routing. Nicht mit dem Treiber anfangen — daran sterben solche Projekte.
+Kein Kernel-Treiber: virtuelle Geräte kommen von **BlackHole** (kostenlos,
+signiert, vom Nutzer per `brew install blackhole-2ch` installiert) und werden
+im Modell auf B1–B3 abgebildet. Ein eigenes *Audio Server Plug-in* in
+`/Library/Audio/Plug-Ins/HAL` (userspace, `libASPL`, Shared Memory und zwei
+lock-freie Ringpuffer) bleibt als Option – aber ohne Entwicklerkonto gibt es
+keine Developer ID, und ein nur ad-hoc signiertes Plugin lädt nach den
+vorliegenden Berichten nicht zuverlässig (AMFI, `-423`; der Befund ist
+unsicher, siehe [plan-macos.md](plan-macos.md) §3.2). Audio läuft über die
+Core-Audio-HAL-API (`objc2-core-audio`, nicht `cpal` – cpal verbirgt Aggregat-
+Geräte und IOProc). Die **Echo-Referenz** aus ADR 0005 wird auf macOS nicht aus
+Monitor-Ports gebaut, sondern aus einem globalen **Core-Audio-Tap**
+(`AudioHardwareCreateProcessTap`, seit **macOS 14.2**) – das ist näher am
+Original als der PipeWire-Weg, weil ein Gerät keinen Monitor haben muss. Die
+frühere Notiz „Audio Taps ab macOS 13" war zu früh. Unterstützt wird nur die
+jeweils **aktuelle macOS-Version** (Frage 1, beantwortet am 2026-11-21), die
+Taps sind damit immer vorhanden – und damit **nur Apple Silicon**: macOS 26
+(Tahoe) war die letzte Version für Intel-Macs.
+
+Aufwand **104–164 h** in sechs Schritten, jeder einzeln lauffähig; mit dem
+optionalen eigenen Plugin 164–264 h. **Geld: 0 €** – kein Apple Developer
+Program, kein Zertifikat. Die App wird **ad hoc** signiert und über
+GitHub-Releases verteilt; der Preis dafür ist eine Gatekeeper-Warnung beim
+ersten Start (seit macOS 15 führt kein Rechtsklick mehr daran vorbei, sondern
+nur *Systemeinstellungen › Datenschutz & Sicherheit › Trotzdem öffnen*) und
+damit eine Anleitung im README. Die Zahl liegt über den früher genannten
+170–240 h, weil dort die Trait-Grenze (a) und der Ersatz für `echo.rs` (e)
+fehlten. Risiko: ein eigenes Plugin liefe im `coreaudiod`, ein Absturz dort
+nimmt den Ton des ganzen Macs mit – ein weiterer Grund, warum BlackHole
+trägt.
+
+### Regel für später
+
+Wer die Portierung aufbringt, beginnt **nicht** mit dem Treiber und nicht mit
+der Oberfläche, sondern mit der Grenze: erst `AudioBackend` und
+`GeraeteBackend` einziehen, Linux unverändert grün, dann ein zweites Backend
+dahinter. Erst danach virtuelle Geräte. Daran sterben solche Projekte.

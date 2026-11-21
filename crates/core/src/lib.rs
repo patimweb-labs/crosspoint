@@ -17,6 +17,7 @@
 /// Geraete abraeumen: ein Sweep ohne Merkliste (Absturz, kill -9, doppelte Pfade).
 /// Echounterdrückung für die virtuellen Ausgänge (B1–B3).
 pub mod aec;
+pub mod agc;
 pub mod aufraeumen;
 pub mod autostart;
 pub mod devices;

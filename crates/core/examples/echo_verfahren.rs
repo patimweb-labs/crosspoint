@@ -153,8 +153,8 @@ fn main() {
         let mut zeile = String::new();
         for ns in [false, true] {
             let mut aec = Box::new(Echounterdruecker::neu(48_000));
-            // `set_ns` allokiert einmal – gehört deshalb vor die Messung.
-            aec.set_ns(ns);
+            // `set_filter` allokiert einmal – gehört deshalb vor die Messung.
+            aec.set_filter(true, ns, 1);
             let d = aec.verzoegerung();
             let aus: Vec<f32> = (0..n).map(|i| aec.process(mik[i], r[i])).collect();
             let von = 4 * 48_000;
@@ -170,6 +170,7 @@ fn main() {
     // Allokationen im laufenden Betrieb: Puffer sind angelegt, `process` darf
     // nichts mehr bauen.
     let mut aec = Box::new(Echounterdruecker::neu(48_000));
+    aec.set_filter(true, true, 1);
     let mik = pfad(&r[..48_000], true, true, true);
     for i in 0..4800 {
         aec.process(mik[i], r[i]);

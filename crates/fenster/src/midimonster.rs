@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 pub const SEITEN: usize = 6;
 /// CC-Nummern der Zusatzzeilen "Control Change n".
 pub const FREIE_CCS: usize = 56;
+/// Zeilen je Blatt im Dialog: mehr passen im kleinsten Fenster nicht hin,
+/// ohne zu scrollen (ADR 0007).
+pub const BLATT_ZEILEN: usize = 10;
 
 /// Ein Ziel mit optionaler CC-Bindung.
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +67,20 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
                     format!("/bus/{i}/gain"),
                 ));
             }
+            // Push-to-Talk gehört auf dieselbe Seite wie die Busse: erst `ptt`
+            // einschalten (der Bus ist dann stumm), dann `ptt_offen` auf die
+            // Taste legen. Nur die virtuellen Busse B1–B3 haben die Filter.
+            for i in crosspoint::engine::ERSTER_VIRTUELLER..crosspoint::BUSES {
+                let name = crosspoint::BUS_NAMES[i];
+                z.push(Zeile::neu(
+                    format!("Push to Talk Bus {name} (stumm bis Taste)"),
+                    format!("/bus/{i}/ptt"),
+                ));
+                z.push(Zeile::neu(
+                    format!("PTT-Taste Bus {name}"),
+                    format!("/bus/{i}/ptt_offen"),
+                ));
+            }
         }
         2 => {
             for i in 0..8 {
@@ -101,6 +118,11 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
     z
 }
 
+/// Blätter einer Seite (mindestens eins).
+pub fn seiten_blaetter(seite: usize) -> usize {
+    seiten_ziele(seite).len().div_ceil(BLATT_ZEILEN).max(1)
+}
+
 impl Karte {
     /// Leere Karte mit den Zielen der ersten Seite.
     pub fn leer() -> Karte {
@@ -114,7 +136,8 @@ impl Karte {
 
     /// Alle Zeilen aller Seiten (die Datei kennt keine Seiten).
     pub fn alle(&mut self) {
-        if self.zeilen.len() >= SEITEN * 8 {
+        let gesamt: usize = (0..SEITEN).map(|s| seiten_ziele(s).len()).sum();
+        if self.zeilen.len() >= gesamt {
             return;
         }
         let mut neu = Vec::new();
@@ -132,6 +155,13 @@ impl Karte {
             }
         }
         self.zeilen = neu;
+    }
+
+    /// Die Zeilen eines Blatts der Seite, mit den gebundenen CCs.
+    pub fn blatt(&self, seite: usize, blatt: usize) -> Vec<Zeile> {
+        let zeilen = self.seite(seite);
+        let von = blatt.min(seiten_blaetter(seite) - 1) * BLATT_ZEILEN;
+        zeilen[von..(von + BLATT_ZEILEN).min(zeilen.len())].to_vec()
     }
 
     /// Ziele einer Seite mit den aktuell gebundenen CCs.
@@ -213,6 +243,9 @@ const BEREICHE: &[&str] = &[
     "/strip/[0-7]/solo = f 0.0 1.0",
     "/strip/[0-7]/mono = f 0.0 1.0",
     "/bus/[0-7]/mute = f 0.0 1.0",
+    // Push-to-Talk: `ptt` schaltet den Bus stumm, `ptt_offen` ist die Taste.
+    "/bus/[0-7]/ptt = f 0.0 1.0",
+    "/bus/[0-7]/ptt_offen = f 0.0 1.0",
     // `[a-b]` ist bei MIDIMonster eine Zeichenklasse (ein Zeichen), keine
     // Zahlenspanne: fuer die mehrstelligen CC-Nummern deshalb `*`.
     "/midi/cc/* = f 0.0 127.0",
@@ -439,6 +472,11 @@ mod tests {
         let s1 = seiten_ziele(1);
         assert_eq!(s1[0].titel, "Gain Fader Bus A1");
         assert_eq!(s1[7].ziel, "/bus/7/gain");
+        // Push-to-Talk der virtuellen Busse steht auf derselben Seite.
+        assert!(s1.iter().any(|z| z.ziel == "/bus/5/ptt"));
+        assert!(s1.iter().any(|z| z.ziel == "/bus/5/ptt_offen"));
+        // Die Hardware-Busse haben keine Filter, also auch kein PTT.
+        assert!(!s1.iter().any(|z| z.ziel == "/bus/0/ptt"));
         let s4 = seiten_ziele(4);
         assert_eq!(s4[0].titel, "Solo Strip #1");
         assert_eq!(s4[0].ziel, "/strip/0/solo");

@@ -84,6 +84,7 @@ fn main() {
     let start = n / 2; // zweite Hälfte = nach dem Einlernen
     {
         let mut aec = Box::new(Echounterdruecker::neu(48_000));
+        aec.set_filter(true, false, 1);
         let b = aec.verzoegerung();
         let aus: Vec<f32> = (0..n).map(|i| aec.process(kuenstlich[i], r[i])).collect();
         println!(
@@ -93,6 +94,7 @@ fn main() {
     }
     for extra in [0usize, 4800, 9600, 14_400] {
         let mut aec = Box::new(Echounterdruecker::neu(48_000));
+        aec.set_filter(true, false, 1);
         let b = aec.verzoegerung();
         let aus: Vec<f32> = (0..n)
             .map(|i| {

@@ -128,6 +128,13 @@ Grenze falsch gezogen.
 
 ## 8. Marke und Icons
 
+**Ausnahme Crosspoint:** dieses Logo ist aus einer Vorlage des Nutzers 1 : 1
+übernommen und folgt den Regeln 1–6 unten nicht. Quelle sind die SVG-Dateien in
+`assets/` (`crosspoint-logo.svg`, `-zeichen`, `-hell`, `-mono`, `-klein`,
+`-wortmarke`, `-schriftzug`, `-symbolic`), erzeugt wird mit
+`packaging/icons/erzeugen.sh`. Eine `.pm`-Rasterdatei gibt es hier nicht mehr.
+Begründung, Farben und Kosten: [ADR 0008](docs/adr/0008-logo-und-farben.md).
+
 Der Stil steht in `docs/marke/icons.md`; hier nur die Regeln, an die sich Code hält.
 
 1. **Quelle ist das Raster.** `assets/<name>.pm`: Kopf (`name`, `surface`, `ink`,
@@ -142,6 +149,8 @@ Der Stil steht in `docs/marke/icons.md`; hier nur die Regeln, an die sich Code h
    mit 1 px, während die anderen 2 px haben — nebeneinander fällt es auf.
 5. **Zwei Farben.** Fläche je Anwendung (`#4F7A2E` hexwerk, `#A8321E` wled,
    `#C9862C` crosspoint), Zeichnung immer `#E9E5DC`. Werte aus `primitives.tokens.json`.
+   *(Crosspoint: Cyan `#00BDE6` und Bernstein `#FEBD31` auf der dunklen Kachel,
+   siehe ADR 0008.)*
 6. **Erzeugen, nicht ablegen:**
 
    ```

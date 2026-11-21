@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Crosspoint (klein)</title>
+  <!-- Vereinfachtes Zeichen fuer 16, 24 und 32 Pixel: Raster 5x5 statt 7x7, -->
+  <!-- dickere Balken. Gleiche Farben und Formen wie das grosse Zeichen (ADR 0008). -->
+  <defs>
+    <linearGradient id="kachel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191E25"/>
+      <stop offset="1" stop-color="#0C0F14"/>
+    </linearGradient>
+    <radialGradient id="glut">
+      <stop offset="0" stop-color="#FEBD31" stop-opacity="0.55"/>
+      <stop offset="0.4" stop-color="#FEBD31" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#FEBD31" stop-opacity="0"/>
+    </radialGradient>
+    <rect id="punkt" width="48" height="48" rx="15"/>
+  </defs>
+  <g id="kachel">
+    <rect x="1.5" y="1.5" width="509" height="509" rx="81" fill="url(#kachel)"/>
+    <rect x="1.5" y="1.5" width="509" height="509" rx="81" fill="none" stroke="#485163" stroke-width="3"/>
+  </g>
+  <g id="matrix" fill="#404856">
+    <use href="#punkt" x="104" y="104"/>
+    <use href="#punkt" x="168" y="104"/>
+    <use href="#punkt" x="296" y="104"/>
+    <use href="#punkt" x="360" y="104"/>
+    <use href="#punkt" x="104" y="168"/>
+    <use href="#punkt" x="168" y="168"/>
+    <use href="#punkt" x="296" y="168"/>
+    <use href="#punkt" x="360" y="168"/>
+    <use href="#punkt" x="104" y="296"/>
+    <use href="#punkt" x="168" y="296"/>
+    <use href="#punkt" x="296" y="296"/>
+    <use href="#punkt" x="360" y="296"/>
+    <use href="#punkt" x="104" y="360"/>
+    <use href="#punkt" x="168" y="360"/>
+    <use href="#punkt" x="296" y="360"/>
+    <use href="#punkt" x="360" y="360"/>
+  </g>
+  <g id="kreuz" fill="#00BDE6">
+    <rect x="128" y="245" width="256" height="22"/>
+    <rect x="245" y="128" width="22" height="256"/>
+    <rect x="98" y="226" width="60" height="60" rx="17"/>
+    <rect x="354" y="226" width="60" height="60" rx="17"/>
+    <rect x="226" y="98" width="60" height="60" rx="17"/>
+    <rect x="226" y="354" width="60" height="60" rx="17"/>
+  </g>
+  <g id="punkt">
+    <circle cx="256" cy="256" r="76" fill="url(#glut)"/>
+    <rect x="230" y="230" width="52" height="52" rx="15" fill="#FEBD31"/>
+  </g>
+</svg>

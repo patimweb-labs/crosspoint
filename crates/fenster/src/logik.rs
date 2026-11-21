@@ -15,7 +15,7 @@ use crosspoint::vban_io::{VbanControl, VbanRecvControl};
 use crosspoint::{BUSES, BUS_NAMES, STRIP_NAMES};
 
 use crate::geraete::{self, Zuordner};
-use crate::modell::{Aktion, Dichte, Meldung, Oberflaeche, Tape, Umbenennen, Ziel};
+use crate::modell::{Aktion, Geraete, Meldung, Oberflaeche, Tape, Umbenennen, Ziel};
 use crate::thema;
 
 /// Was eine Aktion im Kern erreichen kann. In Tests sind Tape und Makros
@@ -89,10 +89,6 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
         }
         Aktion::Thema(t) => {
             o.thema = t;
-            true
-        }
-        Aktion::Dichte(d) => {
-            o.dichte = d;
             true
         }
         Aktion::Dialog(d) => {
@@ -175,12 +171,16 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
                     o.echo_geraete = liste;
                     Meldung::Hinweis(format!(
                         "Echo-Referenz: {}{}",
-                        geraete::kurzname(&name),
+                        geraete_anzeige(&name, o),
                         if an { " an" } else { " aus" }
                     ))
                 }
                 Err(e) => Meldung::Fehler(format!("Echo-Referenz: {e}")),
             };
+            false
+        }
+        Aktion::PresetSeite(s) => {
+            o.preset_seite = s;
             false
         }
         Aktion::PresetName(n) => {
@@ -266,6 +266,13 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
         Aktion::MidiSeite(s) => {
             if let Some(m) = o.midi.as_mut() {
                 m.seite = s % crate::midimonster::SEITEN;
+                m.blatt = 0;
+            }
+            false
+        }
+        Aktion::MidiBlatt(b) => {
+            if let Some(m) = o.midi.as_mut() {
+                m.blatt = b.min(crate::midimonster::seiten_blaetter(m.seite) - 1);
             }
             false
         }
@@ -337,6 +344,7 @@ fn dialog_oeffnen(d: Option<crate::modell::Dialog>, o: &mut Oberflaeche, k: &Ker
             o.midi = Some(crate::modell::MidiDialog {
                 karte,
                 seite: 0,
+                blatt: 0,
                 lernt: None,
                 geraete,
                 status: String::new(),
@@ -404,6 +412,28 @@ pub fn name(ziel: Ziel, o: &Oberflaeche, k: &Kern) -> String {
     }
 }
 
+/// Der gesetzte eigene Name eines Zugs (`None`, solange keiner gesetzt ist).
+/// [`name`] liefert dagegen immer einen – notfalls die Vorgabe.
+pub fn eigener_name(ziel: Ziel, o: &Oberflaeche, k: &Kern) -> Option<String> {
+    if ziel == Ziel::Master {
+        return None;
+    }
+    let (t, i) = kern_ziel(ziel, o.master_bus);
+    k.params.label(t, i).filter(|l| !l.is_empty())
+}
+
+/// Anzeigename eines Geräts für Meldungen: die Beschreibung aus dem Bestand
+/// („HDMI (AG326UD)“), sonst der technische Kurzname. Die Kennung allein
+/// (`0000_03_00`) sagt niemandem etwas.
+pub fn geraete_anzeige(name: &str, o: &Oberflaeche) -> String {
+    if let Geraete::Fertig(b) = &o.geraete {
+        if let Some(e) = b.senken.iter().find(|e| e.name == name) {
+            return e.anzeige.clone();
+        }
+    }
+    geraete::kurzname(name)
+}
+
 /// Kurzname für Meldungen.
 pub fn zug_kurz(ziel: Ziel) -> String {
     match ziel {
@@ -468,7 +498,8 @@ pub fn zug_werte(p: &Params, ziel: Ziel, master_bus: usize) -> ZugWerte {
     }
 }
 
-/// Filterstand eines virtuellen Busses.
+/// Filterstand eines virtuellen Busses – alles, was das FILTER-Modal zeigt
+/// und die Lämpchenreihe am Knopf zusammenfasst.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FilterWerte {
     pub gate: bool,
@@ -477,13 +508,77 @@ pub struct FilterWerte {
     pub gate_attack: f32,
     pub gate_hold: f32,
     pub gate_release: f32,
+    /// Low-Cut (Hochpass) an und seine Grenze in Hz.
+    pub lc: bool,
+    pub lc_freq: f32,
     pub aec: bool,
-    /// Rauschunterdrückung hinter der Echounterdrückung (`aec_ns`).
-    pub aec_ns: bool,
+    /// Rauschunterdrückung und ihre Stufe (0..3).
+    pub nr: bool,
+    pub nr_stufe: u32,
+    pub comp: bool,
+    pub comp_schwelle: f32,
+    pub comp_ratio: f32,
+    pub comp_attack: f32,
+    pub comp_release: f32,
+    pub comp_makeup: f32,
+    pub limiter: bool,
+    pub limiter_decke: f32,
+    pub agc: bool,
+    pub agc_ziel: f32,
+    pub duck: bool,
+    pub duck_ziel: usize,
+    pub duck_tiefe: f32,
+    pub duck_schwelle: f32,
+    pub duck_attack: f32,
+    pub duck_release: f32,
+    pub ptt: bool,
+    pub ptt_offen: bool,
+}
+
+/// Buchstabe eines Filters in der Lämpchenzeile: der erste; die Anfänge
+/// sind alle verschieden (L E N G C A D P), der Test hält das fest.
+pub fn filter_buchstabe(kuerzel: &str) -> char {
+    kuerzel.chars().next().unwrap_or('?')
+}
+
+/// Die acht Lämpchen am FILTER-Knopf: Kürzel und ob der Filter an ist.
+pub const LAEMPCHEN: [&str; 8] = ["LC", "ECHO", "NR", "GATE", "COMP", "AGC", "DUCK", "PTT"];
+
+impl FilterWerte {
+    /// Stand der acht Filter, in der Reihenfolge der Signalkette.
+    pub fn laempchen(&self) -> [(&'static str, bool); 8] {
+        [
+            (LAEMPCHEN[0], self.lc),
+            (LAEMPCHEN[1], self.aec),
+            (LAEMPCHEN[2], self.nr),
+            (LAEMPCHEN[3], self.gate),
+            (LAEMPCHEN[4], self.comp),
+            (LAEMPCHEN[5], self.agc),
+            (LAEMPCHEN[6], self.duck),
+            (LAEMPCHEN[7], self.ptt),
+        ]
+    }
+
+    /// Ist irgendein Filter an? (Füllt den FILTER-Knopf.)
+    pub fn irgendwas_an(&self) -> bool {
+        self.laempchen().iter().any(|(_, an)| *an)
+    }
+
+    /// „LC an · ECHO aus · …“ für Tooltip und Screenreader.
+    pub fn stand(&self) -> String {
+        let teile: Vec<String> = self
+            .laempchen()
+            .iter()
+            .map(|(k, an)| format!("{k} {}", if *an { "an" } else { "aus" }))
+            .collect();
+        teile.join(" · ")
+    }
 }
 
 pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
     let g = &f.gate;
+    let c = &f.comp;
+    let d = &f.duck;
     FilterWerte {
         gate: an(&g.on),
         gate_schwelle: fget(&g.threshold),
@@ -491,8 +586,38 @@ pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
         gate_attack: fget(&g.attack),
         gate_hold: fget(&g.hold),
         gate_release: fget(&g.release),
+        lc: an(&f.lc.on),
+        lc_freq: fget(&f.lc.freq),
         aec: an(&f.aec),
-        aec_ns: an(&f.aec_ns),
+        nr: an(&f.nr.on),
+        nr_stufe: f.nr.stufe.load(Relaxed),
+        comp: an(&c.on),
+        comp_schwelle: fget(&c.schwelle),
+        comp_ratio: fget(&c.ratio),
+        comp_attack: fget(&c.attack),
+        comp_release: fget(&c.release),
+        comp_makeup: fget(&c.makeup),
+        limiter: an(&c.limiter),
+        limiter_decke: fget(&c.decke),
+        agc: an(&f.agc.on),
+        agc_ziel: fget(&f.agc.ziel),
+        duck: an(&d.on),
+        duck_ziel: d.ziel.load(Relaxed) as usize,
+        duck_tiefe: fget(&d.tiefe),
+        duck_schwelle: fget(&d.schwelle),
+        duck_attack: fget(&d.attack),
+        duck_release: fget(&d.release),
+        ptt: an(&f.ptt.on),
+        ptt_offen: an(&f.ptt.offen),
+    }
+}
+
+/// Pegel der Bus-Summe **vor** den Filtern (linear) und der Bus-Pegel
+/// **nachher** (aus `Params`, wie die Pegelanzeige im Pult).
+pub fn filter_pegel(p: &Params, bus: usize) -> (f32, f32) {
+    match p.buses.get(bus) {
+        Some(b) => (fget(&b.roh), fget(&b.level)),
+        None => (0.0, 0.0),
     }
 }
 
@@ -508,26 +633,252 @@ pub fn trim_delay(p: &Params, bus: usize) -> (f32, f32) {
 }
 
 // ---------------------------------------------------------------- Maße ----
+//
+// Alle Maße, aus denen sich die Mindestgröße des Fensters ergibt, stehen
+// hier: Darstellung (`ansichten`) und `mindestfenster` rechnen mit denselben
+// Zahlen. Kein Scrollen, kein Abschneiden – was nicht passt, passt nicht ins
+// Fenster, und das Fenster lässt sich nicht kleiner ziehen (ADR 0007).
 
-/// Breite eines Zugs je Dichte (aus den Tokens).
-pub fn zug_breite(d: Dichte) -> f32 {
-    match d {
-        Dichte::Kompakt => thema::SIZE_ZUG_KOMPAKT,
-        Dichte::Normal => thema::SIZE_ZUG_BREITE,
-        Dichte::Breit => thema::SIZE_ZUG_BREIT,
-    }
+/// Abstand zwischen den Gruppen (Kanäle | Busse | Master).
+pub const GRUPPE: f32 = thema::SPACE_3;
+
+/// Lücken zwischen den 17 Zügen: [`thema::SPACE_1`] zwischen zwei Zügen,
+/// [`GRUPPE`] zwischen den Gruppen.
+pub fn zugluecken() -> f32 {
+    2.0 * GRUPPE + 16.0 * thema::SPACE_1
 }
 
 /// Busse und Master sind schmaler als Kanäle (kein Pan, keine Zuordnung).
 pub const BUS_ANTEIL: f32 = 0.82;
 
-/// Breiten (Kanal, Bus) für eine verfügbare Breite: so breit, dass alle 17
-/// Züge passen, nie schmaler als die Dichte vorgibt (dann scrollt das Pult).
-pub fn zugbreiten(d: Dichte, verfuegbar: f32, luecken: f32) -> (f32, f32) {
+/// Breiten (Kanal, Bus) für eine verfügbare Breite: die 17 Züge füllen sie
+/// genau, ohne Untergrenze. Dass die Züge dabei nicht zu schmal werden, hält
+/// die Mindestbreite des Fensters ([`mindestfenster`]) fest.
+pub fn zugbreiten(verfuegbar: f32, luecken: f32) -> (f32, f32) {
     let einheiten = crosspoint::STRIPS as f32 + (BUSES + 1) as f32 * BUS_ANTEIL;
-    let mindest = zug_breite(d);
-    let kanal = ((verfuegbar - luecken) / einheiten).clamp(mindest, mindest * 1.4);
+    let kanal = ((verfuegbar - luecken) / einheiten).max(1.0);
     (kanal, kanal * BUS_ANTEIL)
+}
+
+/// Innenabstand in einem Zug.
+pub const ZUG_RAND: f32 = thema::SPACE_1;
+/// Höhe der Gerätewahl-Zeile eines Zugs.
+pub const ZUG_GERAET: f32 = thema::SIZE_CONTROL_SM;
+/// Höhe des Zugkopfs (Name, Nummer, Unterzeile).
+pub const ZUG_KOPF: f32 = thema::SPACE_6 + thema::SPACE_2;
+/// Höhe einer Schalterreihe (M, S, MONO, FILTER …).
+pub const ZUG_REIHE: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_1;
+/// Höhe einer Zuordnungsreihe (A1..A4, A5..B3).
+pub const ZUG_ZUORDNUNG: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_2;
+/// Höhe der Lämpchenzeile am FILTER-Knopf.
+pub const ZUG_LAEMPCHEN: f32 = thema::FONT_SIZE_SM + thema::SPACE_2;
+/// Rahmenlinie eines Zugs (oben und unten je einmal).
+pub const ZUG_RAHMEN: f32 = thema::SIZE_BORDER;
+
+/// Was ein Zug über und unter dem Fader braucht; den Rest der Höhe bekommt
+/// der Fader. `ansichten::zug` setzt die Zeilen damit untereinander, und
+/// [`pult_mindesthoehe`] rechnet daraus die Mindesthöhe des Fensters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZugMass {
+    /// Pan und Zuordnung (nur Kanäle, sonst 0).
+    pub kanal_teil: f32,
+    /// Zwei Reihen Schalter mit ihren Lücken.
+    pub schalter: f32,
+    /// Lämpchenzeile der Filterbusse und des Masters daran (sonst 0).
+    pub lampen: f32,
+}
+
+impl ZugMass {
+    /// `filterbus`: der Zug zeigt am FILTER-Knopf eine Lämpchenzeile.
+    /// `kanal`: der Zug hat Pan und die Zuordnung A1..B3.
+    pub fn fuer(filterbus: bool, kanal: bool) -> Self {
+        ZugMass {
+            kanal_teil: if kanal {
+                thema::SIZE_PAN + thema::SPACE_5 + ZUG_RAND + 2.0 * (ZUG_ZUORDNUNG + ZUG_RAND)
+            } else {
+                0.0
+            },
+            schalter: 2.0 * (ZUG_REIHE + ZUG_RAND),
+            lampen: if filterbus { ZUG_LAEMPCHEN } else { 0.0 },
+        }
+    }
+
+    /// Höhe vom oberen Rand bis zum Fader: Gerätewahl und Zugkopf.
+    fn oben() -> f32 {
+        ZUG_RAND + ZUG_GERAET + ZUG_RAND + ZUG_KOPF + ZUG_RAND
+    }
+
+    /// Alles, was im Zug nicht Fader ist (die Zeilen unter ihm inklusive
+    /// ihrer Abstände).
+    pub fn fest(&self) -> f32 {
+        Self::oben() + ZUG_RAND + self.kanal_teil + self.schalter + self.lampen + ZUG_RAND
+    }
+
+    /// Höhe des Faderblocks in einem Zug dieser Höhe (Innenmaß ohne Rahmen).
+    pub fn fader(&self, zug_hoehe: f32) -> f32 {
+        zug_hoehe - self.fest()
+    }
+}
+
+/// Länge der Faderbahn in einem Block dieser Höhe: der Rest sind der Rand
+/// und die Zahlenzeile darunter.
+pub fn fader_laenge(block_hoehe: f32) -> f32 {
+    let werte = thema::FONT_SIZE_SM + thema::SPACE_1;
+    (block_hoehe - 2.0 * thema::SPACE_1 - thema::SPACE_2 - werte - thema::SPACE_2).max(20.0)
+}
+
+/// Mindestabstand zweier Skalenzahlen in Schriftgrößen. Der engste Schritt
+/// der Skala sind 6 dB (zwischen +12 und +6).
+pub const SKALA_ABSTAND: f32 = 1.15;
+
+/// Länge der Faderbahn, bei der alle neun Zahlen der Skala mit
+/// [`SKALA_ABSTAND`] Abstand untereinander stehen.
+pub fn fader_mindestlaenge() -> f32 {
+    let spanne = crate::fmt::DB_MAX - crate::fmt::DB_MIN;
+    SKALA_ABSTAND * thema::FONT_SIZE_SM * spanne / 6.0
+}
+
+/// Höhe des Faderblocks, bei der die Skalenzahlen nicht übereinander liegen.
+pub fn fader_block_mindesthoehe() -> f32 {
+    let werte = thema::FONT_SIZE_SM + thema::SPACE_1;
+    fader_mindestlaenge() + 2.0 * thema::SPACE_1 + thema::SPACE_2 + werte + thema::SPACE_2
+}
+
+/// Kleinste Schrift der Faderskala: die Zahlen fallen nie weg, sie werden
+/// höchstens kleiner (wie in der GTK-Oberfläche).
+pub const SKALA_SCHRIFT_MIN: f32 = thema::FONT_SIZE_SM * 0.75;
+/// Platz für eine Skalenzahl je Schriftgröße („-12“: drei Zeichen).
+const SKALA_JE_SCHRIFT: f32 = 1.9;
+/// Strich der Skala an der Bahn (der längste, für 0 dB).
+pub const SKALA_STRICH: f32 = 5.0;
+
+/// Was im Faderblock rechts von den Skalenzahlen steht: Bahn, Pegelsäule,
+/// Striche und die Luft dazwischen.
+fn fader_rechts() -> f32 {
+    thema::SPACE_1
+        + thema::SIZE_PEGEL_BREITE
+        + thema::SPACE_1
+        + thema::SIZE_FADER_BAHN
+        + 2.0 * thema::SPACE_1
+        + SKALA_STRICH
+}
+
+/// Platz für die Skalenzahlen in einem Faderblock dieser Breite.
+pub fn fader_zahlenbreite(block_breite: f32) -> f32 {
+    (block_breite - fader_rechts()).max(0.0)
+}
+
+/// Schrift der Skalenzahlen in einem Faderblock dieser Breite: die kleine
+/// Schrift, wenn sie passt, sonst kleiner. Dass sie nicht unter
+/// [`SKALA_SCHRIFT_MIN`] fällt, hält die Mindestbreite des Fensters fest.
+pub fn fader_skala_schrift(block_breite: f32) -> f32 {
+    (fader_zahlenbreite(block_breite) / SKALA_JE_SCHRIFT).min(thema::FONT_SIZE_SM)
+}
+
+/// Mindestbreite eines Faderblocks, damit die Zahlen in
+/// [`SKALA_SCHRIFT_MIN`] stehen.
+pub fn fader_block_mindestbreite() -> f32 {
+    fader_rechts() + SKALA_JE_SCHRIFT * SKALA_SCHRIFT_MIN
+}
+
+/// Mindestbreite eines Kanals: die Zuordnungsknöpfe A1..B3 brauchen Platz für
+/// zwei Zeichen (15,6 px bei [`thema::FONT_SIZE_SM`]), der Fader seine Skala.
+/// [`thema::SIZE_ZUG_KOMPAKT`] ist der kleinste Zug der Tokens und reicht für
+/// beides.
+pub fn kanal_mindestbreite() -> f32 {
+    thema::SIZE_ZUG_KOMPAKT
+}
+
+/// Mindesthöhe des Pults: der höchste Zug, bei dem die Skala noch lesbar ist.
+pub fn pult_mindesthoehe() -> f32 {
+    let varianten = [
+        ZugMass::fuer(false, true),  // Kanal
+        ZugMass::fuer(true, false),  // virtueller Bus (Lämpchen am FILTER)
+        ZugMass::fuer(false, false), // Bus ohne Filter (Master an A1..A5)
+    ];
+    varianten
+        .iter()
+        .map(|m| m.fest() + fader_block_mindesthoehe() + 2.0 * ZUG_RAHMEN)
+        .fold(0.0, f32::max)
+}
+
+/// Zeilenhöhe einer Schriftzeile in egui: die Schrift plus Luft darüber und
+/// darunter. Die Kopf- und Tapezeile bekommen ihre Höhe vom Inhalt.
+const fn zeile(schrift: f32) -> f32 {
+    schrift * 1.5
+}
+
+/// Höhe der Kopfleiste (Marke, Status und Tape) samt ihren Rändern.
+pub const KOPF_HOEHE: f32 = 2.0 * thema::SPACE_2
+    + (2.0 * thema::SIZE_BORDER + 2.0 * thema::SPACE_1 + thema::SIZE_CONTROL_MD + thema::SPACE_3)
+    + thema::SPACE_2
+    + (2.0 * thema::SIZE_BORDER + 2.0 * 3.0 + TAPE_ZEILE);
+
+/// Höhe der Tapezeile: der höhere von Knopf und Laufzeit in großer Schrift.
+const TAPE_ZEILE: f32 = if thema::SIZE_CONTROL_MD > zeile(thema::FONT_SIZE_LG) {
+    thema::SIZE_CONTROL_MD
+} else {
+    zeile(thema::FONT_SIZE_LG)
+};
+
+/// Kante eines Makrofelds.
+pub const MAKRO_FELD: f32 = thema::SPACE_6 * 3.0;
+
+/// Höhe der Makroleiste: Kopfzeile und, wenn aufgeklappt, das Raster.
+pub fn makros_hoehe(eingeklappt: bool, anzahl: usize) -> f32 {
+    let kopfzeile = thema::SIZE_CONTROL_MD;
+    let raster = if eingeklappt {
+        0.0
+    } else {
+        let reihen = anzahl.div_ceil(makro_spalten(anzahl)).max(1) as f32;
+        thema::SPACE_1 + reihen * MAKRO_FELD + (reihen - 1.0) * thema::SPACE_2
+    };
+    // Rand der Leiste und Rahmen der Leiste
+    2.0 * thema::SPACE_2 + 2.0 * thema::SIZE_BORDER + 2.0 * thema::SPACE_2 + kopfzeile + raster
+}
+
+/// Höhe, ab der die Makroleiste aufgeklappt stehen darf: erst dann bleibt
+/// dem Pult seine Mindesthöhe. Darunter zeigt sie nur ihre Kopfzeile.
+pub fn makros_offen_ab(anzahl: usize) -> f32 {
+    KOPF_HOEHE + pult_mindesthoehe() + makros_hoehe(false, anzahl)
+}
+
+/// Ob die Makroleiste nur die Kopfzeile zeigt: bei zu wenig Platz immer. Der
+/// gespeicherte Wunsch des Nutzers (`gewuenscht`) bleibt davon unberührt und
+/// gilt wieder, sobald das Fenster hoch genug ist.
+pub fn makros_eingeklappt(gewuenscht: bool, fensterhoehe: f32, anzahl: usize) -> bool {
+    gewuenscht || fensterhoehe < makros_offen_ab(anzahl)
+}
+
+/// Mindestgröße des Fensters (Innenmaß): die 17 Züge nebeneinander und
+/// untereinander so, dass alles zu sehen ist, dazu Kopf- und Makroleiste.
+pub fn mindestfenster() -> egui::Vec2 {
+    let kanal = kanal_mindestbreite();
+    egui::Vec2::new(
+        crosspoint::STRIPS as f32 * kanal
+            + (BUSES + 1) as f32 * kanal * BUS_ANTEIL
+            + zugluecken()
+            + 2.0 * thema::SPACE_2,
+        // Zuschlag: die Zeilen runden sich auf ganze Punkte auf.
+        KOPF_HOEHE + pult_mindesthoehe() + makros_hoehe(true, 0) + thema::SPACE_2,
+    )
+}
+
+/// Was die Kopfleiste bei einer Breite zeigt; Marke, Status und Knöpfe
+/// stehen immer da, Zusatzangaben fallen bei wenig Platz zuerst weg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KopfTeile {
+    pub meldung: bool,
+    pub untertitel: bool,
+    pub kennzahlen: bool,
+}
+
+pub fn kopf_teile(breite: f32) -> KopfTeile {
+    KopfTeile {
+        meldung: breite >= 1000.0,
+        untertitel: breite >= 1250.0,
+        kennzahlen: breite >= 1500.0,
+    }
 }
 
 /// Skala der Fader: (dB, Beschriftung).
@@ -675,6 +1026,45 @@ pub fn makro_leuchtet(o: &Oberflaeche, i: usize, jetzt: Instant) -> bool {
 /// Ein Presetname taugt als Dateiname.
 pub fn preset_name_gueltig(n: &str) -> bool {
     !n.is_empty() && !n.contains(['/', '\\', '\0']) && n != "." && n != ".."
+}
+
+/// Zeilen der Presetliste je Seite: mehr passen im kleinsten Fenster nicht
+/// hin, ohne zu scrollen (ADR 0007).
+pub const PRESET_ZEILEN: usize = 10;
+
+/// Seiten der Presetliste (mindestens eine, auch ohne Presets).
+pub fn preset_seiten(anzahl: usize) -> usize {
+    anzahl.div_ceil(PRESET_ZEILEN).max(1)
+}
+
+/// Nächstes oder voriges Blatt einer Liste mit `anzahl` Einträgen; am Rand
+/// geht es vorn wieder los.
+pub fn blaettern(blatt: usize, blaetter: usize, vor: bool) -> usize {
+    let blaetter = blaetter.max(1);
+    if vor {
+        (blatt + 1) % blaetter
+    } else {
+        (blatt + blaetter - 1) % blaetter
+    }
+}
+
+/// Nächstes Blatt im MIDI-Dialog: innerhalb der Seite weiter, am Rand auf die
+/// Nachbarseite (und von der ersten zurück auf die letzte).
+pub fn midi_blaettern(seite: usize, blatt: usize, vor: bool) -> (usize, usize) {
+    use crate::midimonster::{seiten_blaetter, SEITEN};
+    let seite = seite % SEITEN;
+    if vor {
+        if blatt + 1 < seiten_blaetter(seite) {
+            (seite, blatt + 1)
+        } else {
+            ((seite + 1) % SEITEN, 0)
+        }
+    } else if blatt > 0 {
+        (seite, blatt - 1)
+    } else {
+        let zurueck = (seite + SEITEN - 1) % SEITEN;
+        (zurueck, seiten_blaetter(zurueck) - 1)
+    }
 }
 
 /// Presets im Ordner, nach Namen sortiert: (Name, Pfad).
@@ -887,17 +1277,138 @@ mod tests {
         assert_eq!(fader_ziehen(0.0, -500.0, 500.0, 0.0), 12.0);
         assert_eq!(fader_ziehen(0.0, 500.0, 500.0, 0.0), -60.0);
         assert_eq!(fader_ziehen(0.0, 1.0, 500.0, 0.0), 0.0);
-        assert!(zug_breite(Dichte::Kompakt) < zug_breite(Dichte::Breit));
-        let (k, b) = zugbreiten(Dichte::Normal, 2540.0, 100.0);
-        assert!(8.0 * k + 9.0 * b <= 2440.5, "passt nicht: {k} {b}");
-        // Full HD: alle 17 Züge ohne Scrollen.
-        let (k, b) = zugbreiten(Dichte::Normal, 1900.0, 100.0);
-        assert!(8.0 * k + 9.0 * b <= 1800.5, "1920 px scrollt: {k} {b}");
-        let (k, _) = zugbreiten(Dichte::Normal, 800.0, 100.0);
+        // Lämpchenzeile: jeder Filter hat einen eigenen Buchstaben.
+        let buchstaben: Vec<char> = LAEMPCHEN.iter().map(|k| filter_buchstabe(k)).collect();
+        assert_eq!(buchstaben.iter().collect::<String>(), "LENGCADP");
         assert_eq!(
-            k,
-            zug_breite(Dichte::Normal),
-            "zu schmal: Mindestbreite, Pult scrollt"
+            kopf_teile(900.0),
+            KopfTeile {
+                meldung: false,
+                untertitel: false,
+                kennzahlen: false
+            }
         );
+        assert!(kopf_teile(1920.0).kennzahlen);
+        // Die 17 Züge füllen die verfügbare Breite genau, ohne Klemme.
+        for breite in [1400.0, 1920.0, 2560.0] {
+            let luecken = zugluecken();
+            let (k, b) = zugbreiten(breite, luecken);
+            assert!(
+                (8.0 * k + 9.0 * b + luecken - breite).abs() < 0.01,
+                "{breite}: {k} {b} füllt nicht"
+            );
+            assert!((b - k * BUS_ANTEIL).abs() < 0.01);
+        }
+    }
+
+    /// Die Mindestgröße des Fensters ist die Zusage „kein Scrollen, kein
+    /// Abschneiden": Kanalbreite, Faderskala und Faderlänge müssen darin
+    /// über ihren Grenzen liegen.
+    #[test]
+    fn mindestgroesse_haelt_alle_masse() {
+        let min = mindestfenster();
+        let luecken = zugluecken();
+        let (kanal, bus) = zugbreiten(min.x - 2.0 * thema::SPACE_2, luecken);
+        assert!(
+            (kanal - kanal_mindestbreite()).abs() < 0.01,
+            "Kanal {kanal} bei Mindestbreite"
+        );
+        assert!(8.0 * kanal + 9.0 * bus + luecken <= min.x - 2.0 * thema::SPACE_2 + 0.01);
+
+        // Zuordnungsknöpfe A1..B3: vier nebeneinander unter dem Fader, „A1“
+        // misst 15,6 px bei 13 px Schrift – zwei Pixel Luft müssen bleiben.
+        let innen = kanal - 2.0 * ZUG_RAHMEN - 2.0 * ZUG_RAND;
+        let knopf = (innen - 3.0 * ZUG_RAND) / 4.0;
+        assert!(knopf >= 15.6 + 2.0, "Zuordnungsknopf {knopf} px");
+
+        // Faderskala: in der Mindestbreite stehen die Zahlen in der kleinen
+        // Schrift, niemals kleiner als SKALA_SCHRIFT_MIN (kein Ausdünnen).
+        for breite in [bus, kanal] {
+            let fader = breite - 2.0 * ZUG_RAHMEN - 2.0 * ZUG_RAND;
+            assert!(fader >= fader_block_mindestbreite(), "Fader {fader} px");
+            assert!(
+                fader_skala_schrift(fader) >= thema::FONT_SIZE_SM,
+                "Skala nur {:.1} px",
+                fader_skala_schrift(fader)
+            );
+        }
+
+        // Faderlänge: neun Zahlen mit 1,15 Schrift Abstand, engster Schritt
+        // 6 dB (zwischen +12 und +6).
+        for mass in [
+            ZugMass::fuer(false, true),
+            ZugMass::fuer(true, false),
+            ZugMass::fuer(false, false),
+        ] {
+            let zug = pult_mindesthoehe() - 2.0 * ZUG_RAHMEN;
+            let laenge = fader_laenge(mass.fader(zug));
+            assert!(
+                laenge >= fader_mindestlaenge(),
+                "Faderlänge {laenge} px (mindestens {})",
+                fader_mindestlaenge()
+            );
+            let sechs_db = laenge * 6.0 / (crate::fmt::DB_MAX - crate::fmt::DB_MIN);
+            assert!(
+                sechs_db >= SKALA_ABSTAND * thema::FONT_SIZE_SM,
+                "+12 bis +6 nur {sechs_db:.1} px"
+            );
+        }
+
+        // Ziel war 1280 × 720. In der Höhe ist es gehalten; die Breite geben
+        // die 17 Züge vor (je mindestens kanal_mindestbreite) – schmaler
+        // ginge nur, wenn A1..B3 oder die Skala verschwinden (ADR 0007).
+        assert!(min.y <= 720.0, "Mindesthöhe {} px", min.y);
+        assert!(
+            min.x >= 8.0 * kanal + 9.0 * bus + luecken + 2.0 * thema::SPACE_2 - 0.01,
+            "Mindestbreite {} px trägt die Züge nicht",
+            min.x
+        );
+    }
+
+    /// Listen in Dialogen kommen in Blättern, nicht in Scrollbereichen
+    /// (ADR 0007): kein Blatt hat mehr Zeilen, als ins kleinste Fenster passen.
+    #[test]
+    fn dialoglisten_blaettern_statt_zu_scrollen() {
+        use crate::midimonster::{seiten_blaetter, BLATT_ZEILEN, SEITEN};
+        const { assert!(PRESET_ZEILEN >= 5 && PRESET_ZEILEN <= 12) };
+        assert_eq!(preset_seiten(0), 1);
+        assert_eq!(preset_seiten(PRESET_ZEILEN), 1);
+        assert_eq!(preset_seiten(PRESET_ZEILEN + 1), 2);
+        // Blättern läuft im Kreis, vorwärts wie rückwärts.
+        assert_eq!(blaettern(0, 3, true), 1);
+        assert_eq!(blaettern(2, 3, true), 0);
+        assert_eq!(blaettern(0, 3, false), 2);
+        assert_eq!(blaettern(2, 3, false), 1);
+        // MIDI: die letzte Seite (Control Change 0..55) braucht mehrere
+        // Blätter, jede Seite mindestens eins.
+        for seite in 0..SEITEN {
+            assert!(seiten_blaetter(seite) >= 1);
+            let zeilen = crate::midimonster::seiten_ziele(seite).len();
+            assert!(zeilen <= seiten_blaetter(seite) * BLATT_ZEILEN);
+        }
+        assert_eq!(seiten_blaetter(5), 6);
+        // Vorwärts über das Seitenende: nächste Seite, erstes Blatt.
+        assert_eq!(midi_blaettern(5, 5, true), (0, 0));
+        // Rückwärts vom ersten Blatt: letzte Seite, letztes Blatt.
+        assert_eq!(midi_blaettern(0, 0, false), (5, 5));
+        assert_eq!(midi_blaettern(5, 0, false), (4, seiten_blaetter(4) - 1));
+        // Innerhalb der Seite bleibt es bei der Seite.
+        assert_eq!(midi_blaettern(5, 1, true), (5, 2));
+        assert_eq!(midi_blaettern(5, 2, false), (5, 1));
+    }
+
+    #[test]
+    fn makroleiste_klappt_bei_knapper_hoehe_ein() {
+        let min = mindestfenster().y;
+        let anzahl = 5;
+        // Bei Mindesthöhe nur die Kopfzeile, der Wunsch bleibt gespeichert.
+        assert!(makros_eingeklappt(false, min, anzahl));
+        assert!(makros_eingeklappt(true, min + 600.0, anzahl));
+        // Genug Platz: der Wunsch des Nutzers gilt.
+        assert!(!makros_eingeklappt(false, 1080.0, anzahl));
+        assert!(makros_offen_ab(anzahl) > min);
+        assert!(makros_hoehe(false, anzahl) > makros_hoehe(true, anzahl));
+        // Mehr Felder brauchen mehr Platz und damit ein höheres Fenster.
+        assert!(makros_offen_ab(80) > makros_offen_ab(5));
     }
 }

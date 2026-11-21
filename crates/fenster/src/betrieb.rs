@@ -85,7 +85,7 @@ pub fn args_lesen() -> Args {
     args_aus(std::env::args().skip(1))
 }
 
-/// Symbol des Fensters (aus dem Raster erzeugt, siehe AGENTS.md §8).
+/// Symbol des Fensters (PNG aus `assets/crosspoint-logo.svg`, ADR 0008).
 fn symbol() -> egui::IconData {
     eframe::icon_data::from_png_bytes(include_bytes!(
         "../../../data/icons/hicolor/256x256/apps/de.weppelmann.Crosspoint.png"
@@ -175,6 +175,7 @@ pub fn starten(app_id: &str, a: Args) {
         if zeigen {
             let mut o = Oberflaeche::default();
             konfig::Datei::laden(&konfig::pfad()).anwenden(&mut o);
+            o.echo_geraete = crosspoint::echo::auswahl();
             if let Some(t) = a.theme.as_deref() {
                 o.thema = Thema::aus_name(t);
             }
@@ -254,7 +255,9 @@ fn fenster_laufen(
             .with_app_id(app_id)
             .with_icon(Arc::new(symbol()))
             .with_inner_size([a.breite, a.hoehe])
-            .with_min_inner_size([720.0, 480.0]),
+            // Kein Scrollen (ADR 0007): die Mindestgröße kommt aus den Maßen
+            // des Pults (`logik`), nicht aus einer geratenen Zahl.
+            .with_min_inner_size(crate::logik::mindestfenster()),
         // Erlaubt einen zweiten Lauf im selben Prozess (Tray → Fenster).
         run_and_return: true,
         ..Default::default()
@@ -263,7 +266,7 @@ fn fenster_laufen(
         "Crosspoint",
         optionen,
         Box::new(move |cc| {
-            thema::schriften(&cc.egui_ctx);
+            crate::einrichten(&cc.egui_ctx);
             Ok(app(&cc.egui_ctx))
         }),
     );

@@ -3,58 +3,69 @@
     "$type": "color",
     "bg": {
       "canvas": {
-        "$value": "{color.papier.100}"
+        "$value": "{color.tinte.50}"
       },
       "panel": {
-        "$value": "{color.papier.50}"
+        "$value": "{color.tinte.200}"
       },
       "raised": {
-        "$value": "{color.papier.200}"
+        "$value": "{color.tinte.100}"
       },
       "input": {
-        "$value": "{color.papier.0}"
+        "$value": "{color.weiss.0}"
       },
       "hover": {
-        "$value": "{color.papier.250}"
+        "$value": "{color.tinte.300}"
       },
       "selected": {
-        "$value": "{color.papier.300}"
+        "$value": "{color.tinte.400}"
       }
     },
     "border": {
       "subtle": {
-        "$value": "{color.papier.300}"
+        "$value": "{color.tinte.400}"
       },
       "strong": {
-        "$value": "{color.papier.400}"
+        "$value": "{color.tinte.700}"
       }
     },
     "text": {
       "default": {
-        "$value": "{color.papier.900}"
+        "$value": "{color.tinte.900}"
       },
       "muted": {
-        "$value": "{color.papier.700}"
+        "$value": "{color.tinte.700}"
       },
       "faint": {
-        "$value": "{color.papier.600}"
+        "$value": "{color.tinte.600}"
       },
       "on-accent": {
-        "$value": "{color.papier.50}"
+        "$value": "{color.weiss.0}"
       }
     },
     "accent": {
+      "default": {
+        "$value": "{color.tinte.900}"
+      },
+      "hover": {
+        "$value": "{color.tinte.800}"
+      },
+      "pressed": {
+        "$value": "{color.tinte.1000}"
+      },
+      "deep": {
+        "$value": "{color.tinte.400}"
+      }
+    },
+    "signal": {
       "default": {
         "$value": "{color.bernstein.700}"
       },
       "hover": {
         "$value": "{color.bernstein.900}"
       },
-      "pressed": {
-        "$value": "{color.bernstein.500}"
-      },
       "deep": {
-        "$value": "{color.bernstein.500}"
+        "$value": "{color.bernstein.400}"
       }
     },
     "status": {
@@ -62,7 +73,7 @@
         "$value": "{color.gruen.700}"
       },
       "warn": {
-        "$value": "{color.ocker}"
+        "$value": "{color.ocker.700}"
       },
       "error": {
         "$value": "{color.rot.700}"
@@ -70,7 +81,7 @@
     },
     "focus": {
       "ring": {
-        "$value": "{color.bernstein.700}"
+        "$value": "{color.tinte.900}"
       }
     }
   }
