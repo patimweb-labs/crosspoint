@@ -275,6 +275,23 @@ mod tests {
         }
     }
 
+    /// Die Schiene eines Reglers liegt auf der Karte: sie muss sich von der
+    /// Kartenfläche abheben (sonst ist nur der gefüllte Teil zu sehen), und die
+    /// Füllung muss sich von der Schiene unterscheiden.
+    #[test]
+    fn reglerschiene_hebt_sich_von_der_karte_ab() {
+        for (name, f) in [("dark", &DUNKEL), ("light", &HELL), ("mono", &MONO)] {
+            assert!(
+                kontrast(f.border_strong, f.bg_raised) >= 1.5,
+                "{name}: Schiene auf der Karte unsichtbar"
+            );
+            assert!(
+                kontrast(f.accent_default, f.border_strong) >= 1.5,
+                "{name}: Füllung hebt sich nicht von der Schiene ab"
+            );
+        }
+    }
+
     #[test]
     fn eckig_wie_die_marke() {
         assert_eq!(RADIUS_MD, 0.0);

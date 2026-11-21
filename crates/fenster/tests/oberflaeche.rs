@@ -143,6 +143,19 @@ fn harness(f: Fenster, groesse: (f32, f32)) -> Harness<'static, Fenster> {
         .build_ui_state(|ui, f: &mut Fenster| f.bild(ui), f)
 }
 
+/// Alle Flächen einer Farbe, die im letzten Bild gezeichnet wurden. Geprüft
+/// wird damit, was gemalt ist – ohne Bildschirm und ohne GPU.
+fn gezeichnete_flaechen(h: &Harness<'static, Fenster>, farbe: egui::Color32) -> Vec<egui::Rect> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r) if r.fill == farbe => Some(r.rect),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn mute_und_routing_schreiben_in_den_kern() {
     let (f, params) = beispiel(Thema::Dunkel);
@@ -370,9 +383,13 @@ fn bilder_in_allen_themes() {
     let min = mindestgroesse();
     for thema in Thema::ALLE {
         // Zwei große Fenster und das kleinste, das das Pult zulässt.
+        // Das Fenster, in dem das Pult im Alltag steht (1590×640 auf einem
+        // 2560×1440-Bildschirm), dazu die Mindestgröße – die drei Größen, an
+        // denen die Maße geprüft werden.
         for (breite, hoehe, name) in [
             (2560.0, 1440.0, "2560"),
             (1920.0, 1080.0, "1920"),
+            (ALLTAG.x, ALLTAG.y, "1590"),
             (min.x, min.y, "min"),
         ] {
             let (f, _) = beispiel(thema);
@@ -397,9 +414,14 @@ fn bilder_in_allen_themes() {
                     .unwrap();
             }
         }
-        // Das FILTER-Modal: die ganze Kette in drei Spalten, bei 1920 und im
-        // kleinsten Fenster (die Lämpchenreihe am Zug ist mit drauf).
-        for (breite, hoehe, name) in [(1920.0, 1080.0, ""), (min.x, min.y, "-min")] {
+        // Das FILTER-Modal: die ganze Kette in vier Spalten, bei 1920 und im
+        // Alltagsfenster und im kleinsten Fenster (die Lämpchenreihe am Zug
+        // ist mit drauf).
+        for (breite, hoehe, name) in [
+            (1920.0, 1080.0, ""),
+            (ALLTAG.x, ALLTAG.y, "-1590"),
+            (min.x, min.y, "-min"),
+        ] {
             let (mut f, params) = beispiel(thema);
             // Ein paar Filter an, ein paar aus: die Bilder sollen zeigen, wie
             // An und Aus am Schalter aussehen (das Beispielmodell hat LC, AGC
@@ -484,6 +506,11 @@ fn mindestgroesse() -> egui::Vec2 {
     egui::vec2(min.x + 16.0, min.y + 16.0)
 }
 
+/// Das Fenster, in dem das Pult beim Nutzer steht: 1590×640 auf einem
+/// 2560×1440-Bildschirm – knapp über der Mindestgröße und damit die Lage, in
+/// der sich alles drängen muss.
+const ALLTAG: egui::Vec2 = egui::vec2(1590.0, 640.0);
+
 /// Alle Knoten, die zu einem Namen gehören, liegen im Fenster; es gibt keinen
 /// Scrollbalken.
 fn liegt_im_fenster(h: &Harness<'static, Fenster>, namen: &[&str]) -> egui::Rect {
@@ -509,64 +536,80 @@ fn liegt_im_fenster(h: &Harness<'static, Fenster>, namen: &[&str]) -> egui::Rect
     fenster
 }
 
-/// Das FILTER-Modal in drei Spalten: im kleinsten Fenster steht die ganze
-/// Kette ohne Scrollen da.
+/// Das FILTER-Modal steht im Fenster: bei der Alltagsgröße (1590×640) und im
+/// kleinsten Fenster liegt der ganze Dialog mit Rand im Fenster, jede Karte im
+/// Dialog und jede Zeile in ihrer Karte – ohne Scrollbalken. Dazu vier Spalten,
+/// die die Innenbreite genau füllen und zwei volle Zeilen ergeben.
 #[test]
-fn filter_modal_passt_ins_kleinste_fenster() {
-    use crosspoint_fenster::modell::{Aktion, Aufklapp};
-    let (mut f, params) = beispiel(Thema::Dunkel);
-    for (k, v) in [
-        ("lc", 1.0),
-        ("nr", 1.0),
-        ("comp", 1.0),
-        ("limiter", 1.0),
-        ("agc", 1.0),
-        ("duck", 1.0),
-        ("ptt", 1.0),
-    ] {
-        params.set("bus", 5, k, v);
+fn filter_modal_passt_ins_fenster() {
+    use egui_kittest::kittest::NodeT;
+    let min = mindestgroesse();
+    for (breite, hoehe, name) in [(ALLTAG.x, ALLTAG.y, "1590"), (min.x, min.y, "Mindestgröße")] {
+        let (f, _) = filter_offen(Thema::Dunkel);
+        let mut h = harness(f, (breite, hoehe));
+        h.run_steps(6);
+        assert_eq!(
+            h.query_all_by_role(egui::accesskit::Role::ScrollBar)
+                .count(),
+            0,
+            "{name}: Scrollbalken"
+        );
+        // Der Dialog steht mit Luft zum Fensterrand, nicht am Anschlag.
+        let fenster = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(breite, hoehe));
+        let dialog = h.get_by_label("Dialog FILTER · B1 · Discord").rect();
+        let rand = crosspoint_fenster::thema::SPACE_2;
+        assert!(
+            dialog.min.x >= rand && dialog.min.y >= rand,
+            "{name}: Dialog beginnt bei {dialog:?} (Fenster {fenster:?})"
+        );
+        assert!(
+            dialog.max.x <= fenster.max.x - rand && dialog.max.y <= fenster.max.y - rand,
+            "{name}: Dialog endet bei {dialog:?} (Fenster {fenster:?})"
+        );
+        // Jede Karte steht ganz im Dialog …
+        let karten: Vec<egui::Rect> = h
+            .get_all_by_label_contains("Filterkarte ")
+            .map(|n| n.rect())
+            .collect();
+        assert_eq!(karten.len(), 8, "{name}: nicht acht Karten");
+        for karte in &karten {
+            assert!(
+                dialog.contains_rect(*karte),
+                "{name}: Karte {karte:?} ragt aus dem Dialog {dialog:?}"
+            );
+        }
+        // … und alles, was in einer Karte bedient wird, in seiner Karte: kein
+        // Regler, kein Wertfeld, kein Schalter steht auf dem Rahmen. Was unter
+        // dem Dialog liegt (das Pult), zählt nicht mit.
+        let dialog_knoten = h.get_by_label("Dialog FILTER · B1 · Discord");
+        let drin: Vec<(egui::accesskit::Role, egui::Rect)> = dialog_knoten
+            .children_recursive()
+            .filter_map(|n| {
+                let rolle = NodeT::accesskit_node(&n).role();
+                matches!(
+                    rolle,
+                    egui::accesskit::Role::Slider
+                        | egui::accesskit::Role::SpinButton
+                        | egui::accesskit::Role::ComboBox
+                        | egui::accesskit::Role::CheckBox
+                )
+                .then(|| (rolle, n.rect()))
+            })
+            .collect();
+        assert!(
+            drin.len() >= 40,
+            "{name}: nur {} Bedienelemente",
+            drin.len()
+        );
+        for (rolle, r) in &drin {
+            if let Some(karte) = karten.iter().find(|k| k.intersects(*r)) {
+                assert!(
+                    karte.contains_rect(*r),
+                    "{name}: {rolle:?} {r:?} ragt aus der Karte {karte:?}"
+                );
+            }
+        }
     }
-    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(5))));
-    let g = mindestgroesse();
-    let mut h = harness(f, (g.x, g.y));
-    h.run_steps(6);
-    liegt_im_fenster(
-        &h,
-        &[
-            "FILTER · B1 · Discord",
-            "SCHLIESSEN",
-            "LC",
-            "ECHO",
-            "NR",
-            "GATE",
-            "COMP",
-            "LIMITER",
-            "AGC",
-            "DUCK",
-            "PTT",
-            "OFFEN",
-            "Make-up",
-            "Decke",
-            "Release",
-        ],
-    );
-    // Drei Spalten: die Karten der ersten Zeile stehen nebeneinander, die
-    // zweite Zeile beginnt wieder links (Reihenfolge der Signalkette).
-    let spalte = |name: &str| h.get_by_label(name).rect().min.x;
-    let (lc, echo, nr, gate) = (
-        spalte("LC · LOW-CUT"),
-        spalte("ECHO · ECHOUNTERDRÜCKUNG"),
-        spalte("NR · RAUSCHUNTERDRÜCKUNG"),
-        spalte("GATE · NOISE GATE"),
-    );
-    assert!(
-        lc < echo && echo < nr,
-        "nicht drei Spalten: {lc} {echo} {nr}"
-    );
-    assert!(
-        (lc - gate).abs() < 0.5,
-        "zweite Zeile beginnt nicht links: {lc} {gate}"
-    );
 }
 
 /// Presets: mehr Einträge als eine Seite – geblättert wird, nicht gescrollt.
@@ -624,18 +667,33 @@ fn midi_liste_kommt_in_blaettern() {
     liegt_im_fenster(&h, &["SEITE 1/6 · BLATT 1/1"]);
 }
 
-/// Auch die übrigen Dialoge stehen im kleinsten Fenster ohne Scrollen da.
+/// Auch die übrigen Dialoge stehen im kleinsten Fenster und im
+/// Alltagsfenster ohne Scrollen da – und mit Luft zum Fensterrand.
 #[test]
-fn dialoge_passen_ins_kleinste_fenster() {
+fn dialoge_passen_ins_fenster() {
     use crosspoint_fenster::modell::{Aktion, Dialog};
-    for d in Dialog::ALLE {
-        let (mut f, _) = beispiel(Thema::Dunkel);
-        f.ausfuehren(Aktion::Dialog(Some(d)));
-        let g = mindestgroesse();
-        let mut h = harness(f, (g.x, g.y));
-        h.run_steps(6);
-        assert!(h.query_by_label("SCHLIESSEN").is_some(), "{d:?}");
-        liegt_im_fenster(&h, &["SCHLIESSEN"]);
+    use crosspoint_fenster::thema;
+    let min = mindestgroesse();
+    for (breite, hoehe, name) in [(ALLTAG.x, ALLTAG.y, "1590"), (min.x, min.y, "Mindestgröße")] {
+        for d in Dialog::ALLE {
+            let (mut f, _) = beispiel(Thema::Dunkel);
+            f.ausfuehren(Aktion::Dialog(Some(d)));
+            let mut h = harness(f, (breite, hoehe));
+            h.run_steps(6);
+            assert!(h.query_by_label("SCHLIESSEN").is_some(), "{d:?}");
+            liegt_im_fenster(&h, &["SCHLIESSEN"]);
+            // Der ganze Dialog steht im Fenster, mit einem Rand.
+            let dialog = h.get_by_label(&format!("Dialog {}", d.titel())).rect();
+            let fenster = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(breite, hoehe));
+            let rand = thema::SPACE_2;
+            assert!(
+                dialog.min.x >= rand
+                    && dialog.min.y >= rand
+                    && dialog.max.x <= fenster.max.x - rand
+                    && dialog.max.y <= fenster.max.y - rand,
+                "{name}/{d:?}: Dialog {dialog:?} steht nicht mit Rand im Fenster {fenster:?}"
+            );
+        }
     }
 }
 
@@ -731,11 +789,13 @@ fn jeder_dialog_hat_dasselbe_schliessen_x() {
 }
 
 /// Das Raster im FILTER-Modal: gleiche Spaltenbreiten, und jede Zeile füllt
-/// die Innenbreite des Modals von der ersten bis zur letzten Karte.
+/// die Innenbreite des Modals von der ersten bis zur letzten Karte – ohne
+/// Lücke am rechten Rand und ohne leere Zelle.
 #[test]
 fn filter_raster_hat_gleiche_spalten_und_fuellt_die_breite() {
     let min = mindestgroesse();
     for (breite, hoehe, name) in [
+        (ALLTAG.x, ALLTAG.y, "1590"),
         (min.x, min.y, "Mindestgröße"),
         (1920.0, 1080.0, "1920"),
         (2560.0, 1440.0, "2560"),
@@ -749,6 +809,21 @@ fn filter_raster_hat_gleiche_spalten_und_fuellt_die_breite() {
             .map(|n| n.rect())
             .collect();
         assert_eq!(karten.len(), 8, "{name}: nicht acht Karten");
+        // Das Raster füllt die Innenbreite des Dialogs: gleiche Kante links
+        // und rechts, keine Lücke zum Rahmen.
+        let dialog = h.get_by_label("Dialog FILTER · B1 · Discord").rect();
+        assert!(
+            (raster.left() - dialog.left()).abs() < 0.5,
+            "{name}: Raster beginnt bei {} statt {}",
+            raster.left(),
+            dialog.left()
+        );
+        assert!(
+            (raster.right() - dialog.right()).abs() < 0.5,
+            "{name}: Raster endet bei {} statt {}",
+            raster.right(),
+            dialog.right()
+        );
         // Alle Karten gleich breit.
         let kante = karten[0].width();
         for r in &karten {
@@ -817,12 +892,17 @@ fn filter_raster_hat_gleiche_spalten_und_fuellt_die_breite() {
             voll.last().unwrap().max.x,
             raster.max.x
         );
-        if name == "Mindestgröße" {
-            assert_eq!(zeilen[0].len(), 3, "nicht drei Spalten bei Mindestgröße");
+        // Vier Spalten überall: acht Karten sind dann zwei volle Zeilen, keine
+        // Zelle bleibt leer.
+        for zeile in &zeilen {
+            assert_eq!(
+                zeile.len(),
+                4,
+                "{name}: Zeile mit {} Karten statt vier",
+                zeile.len()
+            );
         }
-        if name == "1920" {
-            assert!(zeilen[0].len() >= 3, "zu wenige Spalten bei 1920");
-        }
+        assert_eq!(zeilen.len(), 2, "{name}: nicht zwei Zeilen");
     }
 }
 
@@ -1044,6 +1124,351 @@ fn filter_schalter_melden_an_und_aus() {
             NodeT::accesskit_node(&knoten).toggled(),
             Some(erwartet),
             "{name}"
+        );
+    }
+}
+
+/// Die Schiene eines Reglers ist gezeichnet, und zwar über die **ganze**
+/// Spalte: vom Ende der Beschriftung bis an die Wertspalte. Vorher malte der
+/// Standardregler von egui seine Schiene in der Fläche der Karte und sie
+/// verschwand darin – sichtbar blieb nur der gefüllte Teil bis zum Griff.
+///
+/// Geprüft wird, was gezeichnet wurde (`FullOutput`), nicht was ein Bildschirm
+/// daraus macht: kein GPU, kein Bild.
+#[test]
+fn filter_schiene_ist_ueber_die_ganze_spalte_gezeichnet() {
+    use crosspoint_fenster::thema;
+    use egui_kittest::kittest::NodeT;
+    let (f, _) = filter_offen(Thema::Dunkel);
+    let mut h = harness(f, (ALLTAG.x, ALLTAG.y));
+    h.run_steps(6);
+    let farben = Thema::Dunkel.farben();
+    let schienen = gezeichnete_flaechen(&h, farben.border_strong);
+    let fuellungen = gezeichnete_flaechen(&h, farben.accent_default);
+    let regler: Vec<egui::Rect> = h
+        .query_all_by_role(egui::accesskit::Role::Slider)
+        .filter(|n| {
+            NodeT::accesskit_node(n)
+                .label()
+                .is_some_and(|l| l == "Grenze" || l == "Schwelle" || l == "Zielpegel")
+        })
+        .map(|n| n.rect())
+        .collect();
+    // Grenze (LC), Schwelle (GATE, COMP, DUCK), Zielpegel (AGC): fünf Zeilen
+    // mit Reglern, verteilt über alle vier Spalten.
+    assert_eq!(regler.len(), 5, "nicht fünf Regler: {}", regler.len());
+    for r in &regler {
+        // Dieselbe Spalte und dieselbe Zeile: die Karten einer Spalte haben
+        // gleiche Kanten, nur die Höhe unterscheidet die Regler.
+        let schiene = schienen.iter().find(|s| {
+            (s.left() - r.left()).abs() < 0.5
+                && (s.right() - r.right()).abs() < 0.5
+                && (s.center().y - r.center().y).abs() < 0.5
+        });
+        let schiene = schiene.unwrap_or_else(|| {
+            panic!("keine Schiene über die ganze Spalte bei {r:?} (gefunden: {schienen:?})")
+        });
+        // Die Schiene ist so hoch wie die Bahn des Faders.
+        assert!(
+            (schiene.height() - thema::SIZE_FADER_BAHN).abs() < 0.5,
+            "Schiene {schiene:?} ist nicht {0} hoch",
+            thema::SIZE_FADER_BAHN
+        );
+        // Der gefüllte Teil steht im Akzent und beginnt an der Schiene.
+        assert!(
+            fuellungen
+                .iter()
+                .any(|f| (f.left() - schiene.left()).abs() < 0.5
+                    && (f.top() - schiene.top()).abs() < 0.5
+                    && f.right() <= schiene.right()),
+            "keine Füllung auf der Schiene {schiene:?}"
+        );
+    }
+}
+
+/// Die Zeilen, die keine Regler sind, stehen in derselben Spalte: die vier
+/// Stufen der Rauschunterdrückung teilen sich die Breite gleichmäßig, und die
+/// Zielbus-Auswahl im DUCKING ist so breit wie die Regler darüber und darunter.
+#[test]
+fn filter_stufen_und_auswahl_stehen_in_der_reglerspalte() {
+    use crosspoint_fenster::thema;
+    use egui_kittest::kittest::NodeT;
+    let (f, _) = filter_offen(Thema::Dunkel);
+    let mut h = harness(f, (ALLTAG.x, ALLTAG.y));
+    h.run_steps(6);
+    let karten: Vec<egui::Rect> = h
+        .get_all_by_label_contains("Filterkarte ")
+        .map(|n| n.rect())
+        .collect();
+    let raster = h.get_by_label("Filterraster").rect();
+    // NR: vier Stufenknöpfe, gleich breit, vom Ende der Beschriftung bis an
+    // den Innenrand der Karte.
+    let stufen: Vec<egui::Rect> = ["niedrig", "mittel", "hoch", "sehr hoch"]
+        .iter()
+        .map(|name| h.get_by_label(name).rect())
+        .collect();
+    let breite = stufen[0].width();
+    for r in &stufen {
+        assert!(
+            (r.width() - breite).abs() < 0.5,
+            "Stufen sind {} und {breite} breit",
+            r.width()
+        );
+    }
+    assert!(
+        stufen[0].left() < stufen[1].left() && stufen[1].left() < stufen[2].left(),
+        "Stufen stehen nicht nebeneinander"
+    );
+    let nr = karten
+        .iter()
+        .find(|k| k.contains_rect(stufen[0]))
+        .expect("Stufen stehen in keiner Karte");
+    assert!(
+        (stufen[3].right() - (nr.right() - thema::SPACE_2)).abs() < 0.5,
+        "Stufen enden bei {} statt am Kartenrand {}",
+        stufen[3].right(),
+        nr.right() - thema::SPACE_2
+    );
+    // Die Zielbus-Auswahl nimmt dieselbe Spalte ein wie die Regler der Karte.
+    let auswahl = h
+        .query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| NodeT::accesskit_node(n).label().as_deref() == Some("Zielbus"))
+        .expect("Zielbus-Auswahl fehlt")
+        .rect();
+    let duck = karten
+        .iter()
+        .find(|k| k.contains_rect(auswahl))
+        .expect("Auswahl steht in keiner Karte");
+    let schieber = h
+        .query_all_by_role(egui::accesskit::Role::Slider)
+        .map(|n| n.rect())
+        .find(|r| duck.contains_rect(*r))
+        .expect("kein Regler neben der Auswahl");
+    assert!(
+        (auswahl.width() - schieber.width()).abs() < 0.5
+            && (auswahl.left() - schieber.left()).abs() < 0.5,
+        "Auswahl {auswahl:?} steht nicht in der Reglerspalte {schieber:?}"
+    );
+    // Auch die PTT-Zeile endet am Innenrand ihrer Karte.
+    let offen = h.get_by_label("OFFEN").rect();
+    let ptt = karten
+        .iter()
+        .find(|k| k.contains_rect(offen))
+        .expect("OFFEN steht in keiner Karte");
+    assert!(
+        offen.left() >= ptt.left() && offen.right() < ptt.right(),
+        "OFFEN {offen:?} steht nicht in der Karte {ptt:?}"
+    );
+    let _ = raster;
+}
+
+/// DARSTELLUNG nimmt seine Breite aus dem Inhalt: der längste Text (Autostart)
+/// endet mit Abstand vor dem Rahmen, die Bedienung steht in einem Raster auf
+/// einer Kante, und die Makrofeld-Knöpfe sind gleich breit.
+#[test]
+fn darstellung_hat_rand_und_gleiche_kanten() {
+    use crosspoint_fenster::modell::{Aktion, Dialog};
+    use crosspoint_fenster::thema;
+    let min = mindestgroesse();
+    for (breite, hoehe, name) in [(ALLTAG.x, ALLTAG.y, "1590"), (min.x, min.y, "Mindestgröße")] {
+        let (mut f, _) = beispiel(Thema::Dunkel);
+        f.ausfuehren(Aktion::Dialog(Some(Dialog::Darstellung)));
+        let mut h = harness(f, (breite, hoehe));
+        h.run_steps(6);
+        let dialog = h.get_by_label("Dialog DARSTELLUNG").rect();
+        // Der Autostart-Text stößt nirgends an: er endet mit einem Rand vor
+        // der Kante des Dialogs.
+        let text = h
+            .get_all_by_label_contains("Beim Anmelden starten")
+            .next()
+            .expect("Autostart-Text fehlt")
+            .rect();
+        assert!(
+            text.right() <= dialog.right() - thema::SPACE_2,
+            "{name}: Text endet bei {} (Dialog bis {})",
+            text.right(),
+            dialog.right()
+        );
+        assert!(
+            text.left() > dialog.left(),
+            "{name}: Text beginnt vor dem Dialog"
+        );
+        // Theme-Knöpfe und Makrofelder: eine linke Kante, gleiche Breite je
+        // Reihe, und beide Reihen enden auf derselben Kante.
+        let themen: Vec<egui::Rect> = ["dunkel", "hell", "mono"]
+            .iter()
+            .map(|n| h.get_by_label(n).rect())
+            .collect();
+        let makros: Vec<egui::Rect> = ["5", "8", "10", "16", "40", "80"]
+            .iter()
+            .map(|n| h.get_by_label(n).rect())
+            .collect();
+        for reihe in [&themen, &makros] {
+            let kante = reihe[0].left();
+            let breite_je = reihe[0].width();
+            for r in reihe.iter() {
+                assert!(
+                    (r.left() - kante).abs() < 0.5 || r.left() > kante,
+                    "{name}: Reihe steht nicht von links nach rechts"
+                );
+                assert!(
+                    (r.width() - breite_je).abs() < 0.5,
+                    "{name}: Knöpfe sind {} und {breite_je} breit",
+                    r.width()
+                );
+                assert!(
+                    (r.center().y - reihe[0].center().y).abs() < 0.5,
+                    "{name}: Knopf steht nicht in seiner Reihe"
+                );
+            }
+        }
+        let links = [themen[0].left(), makros[0].left(), text.left()];
+        for x in links {
+            assert!(
+                (x - links[0]).abs() < 0.5,
+                "{name}: die Zeilen beginnen bei {links:?}"
+            );
+        }
+        let rechts = [themen[2].right(), makros[5].right(), text.right()];
+        for x in rechts {
+            assert!(
+                (x - rechts[0]).abs() < 0.5,
+                "{name}: die Zeilen enden bei {rechts:?}"
+            );
+        }
+        assert!(
+            rechts[0] <= dialog.right() - thema::SPACE_2,
+            "{name}: die Knöpfe enden am Rahmen"
+        );
+    }
+}
+
+/// Viele Ausgabegeräte: die ECHO-Karte zeigt so viele Zeilen, wie ins Fenster
+/// passen, und nennt den Rest – das Modal bleibt im Fenster, statt unten
+/// herauszulaufen.
+#[test]
+fn filter_echo_liste_kuerzt_sich_statt_aus_dem_fenster_zu_laufen() {
+    use crosspoint_fenster::modell::Geraete;
+    let (mut f, _) = filter_offen(Thema::Dunkel);
+    if let Geraete::Fertig(b) = &mut f.o.geraete {
+        let mut bestand = (**b).clone();
+        for i in 0..12 {
+            bestand.senken.push(eintrag(
+                &format!("alsa_output.geraet{i}"),
+                &format!("Ausgabegerät {i} mit einem langen Namen"),
+            ));
+        }
+        f.o.geraete = Geraete::Fertig(Box::new(bestand));
+    }
+    let g = mindestgroesse();
+    let mut h = harness(f, (g.x, g.y));
+    h.run_steps(6);
+    let fenster = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(g.x, g.y));
+    let dialog = h.get_by_label("Dialog FILTER · B1 · Discord").rect();
+    assert!(
+        dialog.max.y <= fenster.max.y - crosspoint_fenster::thema::SPACE_2,
+        "Dialog {dialog:?} läuft unten aus dem Fenster {fenster:?}"
+    );
+    // Die Geräte, die Platz haben, stehen da; der Rest wird gezählt.
+    let gezeigt = (0..20)
+        .filter(|i| {
+            h.query_by_label(&format!("Ausgabegerät {i} mit einem langen Namen"))
+                .is_some()
+        })
+        .count();
+    let hinweis = (0..20)
+        .filter_map(|rest| {
+            h.query_by_label(&format!("… {rest} weitere Geräte"))
+                .map(|_| rest)
+        })
+        .next();
+    assert!(
+        gezeigt < 12,
+        "alle zwölf Geräte in der Karte, obwohl das Fenster klein ist"
+    );
+    assert_eq!(
+        hinweis,
+        Some(12 - gezeigt),
+        "der Hinweis nennt nicht den Rest ({gezeigt} gezeigt)"
+    );
+}
+
+/// Der Regler im FILTER-Modal lässt sich bedienen: ein Klick setzt den Wert an
+/// die Stelle des Zeigers, die Pfeiltasten gehen in kleinen Schritten weiter.
+/// Die Schiene ist also nicht nur gemalt, sie trägt auch die Bedienung.
+#[test]
+fn filter_regler_setzt_den_wert() {
+    use crosspoint_fenster::logik::filter_werte;
+    use egui_kittest::kittest::NodeT;
+    let (f, p) = filter_offen(Thema::Dunkel);
+    let mut h = harness(f, (ALLTAG.x, ALLTAG.y));
+    h.run_steps(6);
+    let wert = || filter_werte(p.buses[5].filter.as_ref().unwrap()).lc_freq;
+    let vorher = wert();
+    // Grenze steht auf 80 Hz (40..200): ein Klick in die Mitte setzt sie
+    // dorthin, nicht an den Anfang. Gesucht ist der Regler, nicht die
+    // Beschriftung daneben – beide heißen „Grenze“.
+    let regler = h
+        .query_all_by_role(egui::accesskit::Role::Slider)
+        .find(|n| NodeT::accesskit_node(n).label().as_deref() == Some("Grenze"))
+        .expect("Regler Grenze fehlt");
+    regler.click();
+    h.run_steps(3);
+    let nach_klick = wert();
+    assert!(
+        (nach_klick - 120.0).abs() <= 12.0,
+        "Klick setzt {nach_klick} Hz statt etwa 120 (vorher {vorher})"
+    );
+    // Pfeiltasten: ein Schritt ist der hundertste Teil der Spanne.
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert!(
+        wert() > nach_klick,
+        "Pfeil rechts erhöht nicht: {} nach {nach_klick}",
+        wert()
+    );
+    h.key_press(egui::Key::ArrowLeft);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(3);
+    assert!(
+        wert() < nach_klick,
+        "Pfeil links senkt nicht: {} nach {nach_klick}",
+        wert()
+    );
+}
+
+/// Das TRIM·DELAY-Menü am Master: beide Regler tragen einen Namen (vorher
+/// meldete egui sie ohne Beschriftung, weil das Wort nur in der Überschrift
+/// stand), und ihre Schiene ist gezeichnet wie im FILTER-Modal. Der Lauf prüft
+/// über `Harness`, dass jedes Bedienelement einen Namen hat.
+#[test]
+fn trim_delay_menue_hat_namen_und_schienen() {
+    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    use crosspoint_fenster::thema;
+    use egui_kittest::kittest::NodeT;
+    let (mut f, _) = beispiel(Thema::Dunkel);
+    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::TrimDelay)));
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(6);
+    assert!(h.unnamed_widgets().is_empty(), "{:?}", h.unnamed_widgets());
+    let farben = Thema::Dunkel.farben();
+    let schienen = gezeichnete_flaechen(&h, farben.border_strong);
+    for name in ["TRIM", "DELAY"] {
+        let regler = h
+            .query_all_by_role(egui::accesskit::Role::Slider)
+            .find(|n| NodeT::accesskit_node(n).label().as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("{name}: Regler fehlt oder hat keinen Namen"))
+            .rect();
+        // Die Schiene beginnt an der linken Kante des Reglers; rechts endet
+        // sie, wo das Wertfeld des Menüs anfängt.
+        assert!(
+            schienen
+                .iter()
+                .any(|s| (s.left() - regler.left()).abs() < 0.5
+                    && (s.center().y - regler.center().y).abs() < 0.5
+                    && s.width() > thema::SIZE_FADER_BAHN * 5.0
+                    && (s.height() - thema::SIZE_FADER_BAHN).abs() < 0.5),
+            "{name}: keine sichtbare Schiene ({regler:?}, {schienen:?})"
         );
     }
 }

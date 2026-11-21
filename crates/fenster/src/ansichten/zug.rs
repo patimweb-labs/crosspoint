@@ -347,31 +347,48 @@ fn aufklapp(
                 true,
             ));
             let mut t = trim;
-            if ui
-                .add(
-                    egui::Slider::new(&mut t, -24.0..=12.0)
-                        .suffix(" dB")
-                        .fixed_decimals(1),
-                )
-                .changed()
-            {
+            if regler_im_menue(ui, f, "TRIM", &mut t, -24.0..=12.0, " dB", 1) {
                 a.push(setzen(Ziel::Master, "trim", t));
             }
             let mut d = delay;
-            if ui
-                .add(
-                    egui::Slider::new(&mut d, 0.0..=500.0)
-                        .suffix(" ms")
-                        .fixed_decimals(0),
-                )
-                .changed()
-            {
+            if regler_im_menue(ui, f, "DELAY", &mut d, 0.0..=500.0, " ms", 0) {
                 a.push(setzen(Ziel::Master, "delay", d));
             }
         });
     if !offen {
         a.push(Aktion::Aufklappen(None));
     }
+}
+
+/// Ein Regler im Aufklappmenü (TRIM · DELAY): sichtbare Schiene in den Farben
+/// des Modals, Wert im Feld daneben. Der Name steht im Screenreader-Baum, denn
+/// „TRIM · DELAY B1“ ist die Überschrift über zwei baugleichen Reglern.
+///
+/// Gibt zurück, ob der Wert geändert wurde.
+fn regler_im_menue(
+    ui: &mut egui::Ui,
+    f: &Farben,
+    name: &str,
+    wert: &mut f32,
+    bereich: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    dezimal: usize,
+) -> bool {
+    let antwort = ui.scope(|ui| {
+        bausteine::sichtbare_schiene(ui, f);
+        let antwort = ui
+            .add(
+                egui::Slider::new(wert, bereich)
+                    .suffix(suffix)
+                    .fixed_decimals(dezimal),
+            )
+            .on_hover_text(name);
+        // Ohne eigenen Namen meldet egui den Regler ohne Beschriftung: das
+        // Wort steht im Menü nur in der Überschrift.
+        antwort.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), *wert as f64, name));
+        antwort
+    });
+    antwort.inner.changed()
 }
 
 fn zugkopf(

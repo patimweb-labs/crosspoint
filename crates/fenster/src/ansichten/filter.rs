@@ -7,7 +7,9 @@
 //! **Raster** mit je einer Karte pro Filter – in der Reihenfolge der
 //! Signalkette (ADR 0006). Die Spaltenzahl folgt aus der Breite des Fensters,
 //! alle Spalten sind gleich breit und füllen die Innenbreite des Modals; die
-//! Karten einer Zeile sind gleich hoch (ADR 0007: kein Scrollen).
+//! Karten einer Zeile sind gleich hoch (ADR 0007: kein Scrollen). Reicht die
+//! Höhe nicht, zeigt die ECHO-Karte weniger Geräte – lieber eine Zeile weniger
+//! als eine Karte, die aus dem Fenster läuft.
 //!
 //! Wie überall im Pult: gelesen wird aus [`Oberflaeche`] und [`Kern`],
 //! geschrieben nur als [`Aktion`] über `logik::ausfuehren`. Der offene Bus
@@ -20,7 +22,7 @@ use crosspoint::BUS_NAMES;
 
 use crate::bausteine::{self, Art};
 use crate::geraete::{self, Eintrag};
-use crate::logik::{self, Kern};
+use crate::logik::{self, Kern, PEGEL_SEGMENTE};
 use crate::modell::{Aktion, Aufklapp, Geraete, Oberflaeche, Ziel};
 use crate::thema::{self, Farben};
 
@@ -51,8 +53,11 @@ const KETTE: &str = "Eingänge und A1–A5 tragen das Rohsignal · Kette: LC · 
 const MODAL_BREITE: f32 = thema::SPACE_6 * 56.0;
 
 /// Kleinste Kartenbreite, ab der eine Reglerzeile mit Beschriftung und
-/// Wertfeld noch Platz hat.
-const KARTE_MINDESTBREITE: f32 = thema::SPACE_6 * 13.0;
+/// Wertfeld noch Platz hat. Sie entscheidet, wie viele Spalten nebeneinander
+/// stehen: bei der Mindestgröße des Fensters sind es vier, und vier ist auch
+/// die Regel – acht Karten füllen dann zwei volle Zeilen, keine Zelle bleibt
+/// leer.
+const KARTE_MINDESTBREITE: f32 = thema::SPACE_6 * 11.0;
 
 /// Höhe einer Zeile im Raster (Regler, Häkchen, Wahlfeld). Eine Stufe enger
 /// als ein Knopf im Pult – nur so passen die Karten auch im kleinsten Fenster
@@ -76,10 +81,10 @@ const LUECKE: f32 = thema::SPACE_2;
 /// [`thema::SPACE_2`]): enger, damit die Karten ins kleinste Fenster passen.
 const KARTE_RAND: f32 = thema::SPACE_1;
 
-/// Spalten aus der Breite: drei im kleinsten Fenster, vier bei breiterem.
+/// Spaltenzahl aus der Breite: vier ist die Regel (acht Karten sind dann zwei
+/// volle Zeilen), weniger nur, wenn die Karten sonst zu schmal würden. Mehr
+/// als vier verträgt keine Reglerzeile.
 const SPALTEN_MIN: usize = 3;
-/// Mehr als vier Spalten verträgt keine Reglerzeile – dann kommt lieber eine
-/// Zeile Karten dazu, als dass Beschriftung, Schieber und Wert zusammenrücken.
 const SPALTEN_MAX: usize = 4;
 
 /// Höchstens so viele Geräte in der ECHO-Karte. Mehr passt bei Mindestgröße
@@ -187,14 +192,16 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
         bus,
         ziel,
         fw,
-        // Kartenbreite und Spalten setzt `raster`: sie hängen an der Breite des
-        // Fensters und an der Schrift, also an dem, was erst im Dialog steht.
+        // Kartenbreite, Spalten und die Zahl der gezeigten Geräte setzt
+        // `raster`: sie hängen an der Fläche des Fensters und an der Schrift,
+        // also an dem, was erst im Dialog feststeht.
         breite: 0.0,
         spalten: Spalten {
             label: 0.0,
             regler: 0.0,
             wert: 0.0,
         },
+        echo_max: ECHO_ZEILEN,
     };
     // Titel ohne Dopplung: „FILTER · B1“, mit eigenem Namen „FILTER · B1 · Discord“.
     let titel = format!(
@@ -220,7 +227,10 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
                 Label::new(bausteine::text(f, KETTE, false, true).size(thema::FONT_SIZE_SM))
                     .truncate(),
             );
-            let innen = breite - 2.0 * bausteine::DIALOG_RAND;
+            // `breite` ist schon die Innenbreite des Rahmens (der Rand des
+            // Dialogs steckt im Frame) – sie wird nicht noch einmal um den Rand
+            // gekürzt, sonst bliebe rechts eine Lücke.
+            let innen = breite;
             // Die festen Spalten einmal für alle Karten messen: die breiteste
             // Beschriftung und der längste Wert.
             let (label, wert) = spalten_masse(ui);
@@ -241,30 +251,36 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
     }
 }
 
-/// Pegel vor und nach den Filtern als eigene Zeile unter dem Titel, über die
-/// volle Innenbreite: je eine Hälfte mit Beschriftung, Balken und Wert. Die
-/// beiden Hälften tragen dieselben Spalten wie die Karten, damit Balken und
-/// Werte untereinander stehen.
+/// Pegel vor und nach den Filtern als eigene Zeile unter dem Titel: zwei
+/// gleich breite Hälften mit einer Lücke dazwischen, je Beschriftung, Balken
+/// und Wert. Die Hälften tragen dieselben Spalten wie die Karten und stehen
+/// auf denselben Kanten – der Balken reicht von der Beschriftung bis an die
+/// Wertspalte, der Wert endet unter den Werten der Karten.
 fn pegelzeile(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize, breite: f32, spalten: Spalten) {
     let (roh, nachher) = logik::filter_pegel(&k.params, bus);
-    // Eine Lücke zwischen den beiden Hälften, damit der Wert nicht an der
-    // nächsten Beschriftung klebt.
-    let halb = (breite - thema::SPACE_6) * 0.5;
+    // Die Zeile steht auf den Innenkanten der Karten: links und rechts ein
+    // Kartenrand, dazwischen zwei Hälften und eine Lücke.
+    let innen = (breite - 2.0 * thema::SPACE_2).max(spalten.label + spalten.wert);
+    let luecke = thema::SPACE_6;
+    let halb = (innen - luecke) * 0.5;
     ui.allocate_ui_with_layout(
         Vec2::new(breite, ZEILE),
         Layout::left_to_right(egui::Align::Center),
         |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(thema::SPACE_2);
+            ui.spacing_mut().item_spacing.x = luecke;
             for (titel, linear) in [("ROH", roh), ("NACHHER", nachher)] {
                 ui.allocate_ui_with_layout(
                     Vec2::new(halb, ZEILE),
                     Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        ui.spacing_mut().item_spacing.x = thema::SPACE_1;
                         label_zelle(ui, f, spalten.label, titel);
                         let db = crate::fmt::lin_to_db(linear);
                         let rest =
                             (halb - spalten.label - spalten.wert - 2.0 * thema::SPACE_1).max(0.0);
-                        let segmente = ((rest / 4.0) as usize).max(4);
-                        bausteine::segmentleiste(ui, f, db, segmente);
+                        bausteine::segmentleiste_breit(ui, f, db, rest, PEGEL_SEGMENTE);
                         ui.allocate_ui_with_layout(
                             Vec2::new(spalten.wert, ZEILE),
                             Layout::right_to_left(egui::Align::Center),
@@ -301,6 +317,8 @@ struct Karten<'a> {
     fw: logik::FilterWerte,
     breite: f32,
     spalten: Spalten,
+    /// Wie viele Geräte die ECHO-Karte zeigt (höchstens [`ECHO_ZEILEN`]).
+    echo_max: usize,
 }
 
 /// Eine Karte der Kette: Titel, Beschreibung, Schalter und was sie zeichnet.
@@ -359,7 +377,7 @@ fn kette(k: &Karten) -> Vec<Kette> {
             "Rechnet den Ton der Boxen aus dem Mikrofon heraus.",
             "aec",
             fw.aec,
-            echo_zeilen(k.o),
+            echo_zeilen(k),
             echo,
         ),
         karte(
@@ -419,12 +437,14 @@ fn kette(k: &Karten) -> Vec<Kette> {
     ]
 }
 
-/// Das stehende Raster: Spaltenzahl, Kartenbreite und die Höhe je Zeile.
+/// Das stehende Raster: Spaltenzahl, Kartenbreite, die Höhe je Zeile und wie
+/// viele Geräte die ECHO-Karte zeigt.
 struct Raster {
     spalten: usize,
     breite: f32,
     zeilen: Vec<f32>,
     inhalt: Vec<Kette>,
+    echo_max: usize,
 }
 
 impl Raster {
@@ -439,6 +459,12 @@ fn raster(ui: &mut Ui, f: &Farben, k: &Karten, innen: f32, fensterhoehe: f32, a:
     let plan = raster_plan(ui, f, k, innen, platz_hoehe(fensterhoehe));
     let (bereich, antwort) = ui.allocate_exact_size(Vec2::new(innen, plan.hoehe()), Sense::hover());
     antwort.widget_info(|| WidgetInfo::labeled(egui::Role::Group, true, "Filterraster"));
+    // Gezeichnet wird mit dem Stand des Plans: dieselbe Zahl Geräte in der
+    // ECHO-Karte, mit der gerechnet wurde.
+    let k = Karten {
+        echo_max: plan.echo_max,
+        ..*k
+    };
     let mut y = bereich.top();
     for (zeile, hoehe) in plan.zeilen.iter().enumerate() {
         for spalte in 0..plan.spalten {
@@ -449,30 +475,60 @@ fn raster(ui: &mut Ui, f: &Farben, k: &Karten, innen: f32, fensterhoehe: f32, a:
                 Pos2::new(bereich.left() + spalte as f32 * (plan.breite + LUECKE), y),
                 Vec2::new(plan.breite, *hoehe),
             );
-            karte_zeichnen(ui, k, info, rect, a);
+            karte_zeichnen(ui, &k, info, rect, a);
         }
         y += hoehe + LUECKE;
     }
 }
 
-/// Spaltenzahl und Höhen. Aus der Breite folgen drei oder vier Spalten; reicht
-/// die Höhe des Fensters nicht (viele Geräte in der ECHO-Karte), kommt eine
-/// Spalte dazu – lieber schmaler als abgeschnitten.
+/// Spaltenzahl und Höhen. Die Spalten folgen aus der Breite (so viele, wie ohne
+/// zu enge Karten passen, höchstens vier); reicht die Höhe des Fensters nicht,
+/// zeigt die ECHO-Karte weniger Geräte – lieber eine Gerätezeile weniger als
+/// eine Karte, die unten aus dem Fenster läuft.
 fn raster_plan(ui: &Ui, f: &Farben, k: &Karten, innen: f32, verfuegbar: f32) -> Raster {
-    let inhalt = kette(k);
-    let aus_breite = ((innen + LUECKE) / (KARTE_MINDESTBREITE + LUECKE)) as usize;
-    let mut spalten = aus_breite.clamp(SPALTEN_MIN, SPALTEN_MAX);
-    loop {
-        let plan = plan_mit(ui, f, &inhalt, innen, spalten);
-        if plan.hoehe() <= verfuegbar || spalten >= SPALTEN_MAX {
-            return plan;
-        }
-        spalten += 1;
+    let spalten = spalten_fuer(innen);
+    let moeglich = echo_zeilen(&Karten {
+        echo_max: ECHO_ZEILEN,
+        ..*k
+    });
+    let mut plan = plan_mit(ui, f, k, innen, spalten, moeglich);
+    let mut zeilen = moeglich;
+    while plan.hoehe() > verfuegbar && zeilen > 1 {
+        zeilen -= 1;
+        plan = plan_mit(ui, f, k, innen, spalten, zeilen);
     }
+    plan
 }
 
-fn plan_mit(ui: &Ui, f: &Farben, inhalt: &[Kette], innen: f32, spalten: usize) -> Raster {
+/// Die Spaltenzahl zur Innenbreite: vier, solange die Karten nicht zu schmal
+/// werden, sonst eine weniger.
+fn spalten_fuer(innen: f32) -> usize {
+    let mut spalten = SPALTEN_MAX;
+    while spalten > SPALTEN_MIN {
+        let breite = (innen - (spalten as f32 - 1.0) * LUECKE) / spalten as f32;
+        if breite >= KARTE_MINDESTBREITE {
+            break;
+        }
+        spalten -= 1;
+    }
+    spalten
+}
+
+fn plan_mit(
+    ui: &Ui,
+    f: &Farben,
+    k: &Karten,
+    innen: f32,
+    spalten: usize,
+    echo_max: usize,
+) -> Raster {
     let breite = (innen - (spalten as f32 - 1.0) * LUECKE) / spalten as f32;
+    let karten = Karten {
+        breite,
+        echo_max,
+        ..*k
+    };
+    let inhalt = kette(&karten);
     let braucht: Vec<f32> = inhalt
         .iter()
         .map(|i| karte_hoehe(ui, f, i, breite))
@@ -485,7 +541,8 @@ fn plan_mit(ui: &Ui, f: &Farben, inhalt: &[Kette], innen: f32, spalten: usize) -
         spalten,
         breite,
         zeilen,
-        inhalt: inhalt.to_vec(),
+        inhalt,
+        echo_max,
     }
 }
 
@@ -503,7 +560,9 @@ fn platz_hoehe(fensterhoehe: f32) -> f32 {
 }
 
 /// Höhe, die eine Karte braucht: Kopf, Beschreibung (in der Kartenbreite
-/// umbrochen) und ihre Zeilen. Dieselben Maße, mit denen sie gezeichnet wird.
+/// umbrochen) und ihre Zeilen. Dieselben Maße, mit denen sie gezeichnet wird:
+/// die Beschreibung wird als fertiger Textblock in genau dieser Höhe gezeichnet
+/// und die Zeilen sind fest hoch – so kann keine Karte ihre Zeile sprengen.
 fn karte_hoehe(ui: &Ui, f: &Farben, k: &Kette, breite: f32) -> f32 {
     let innen = breite - 2.0 * thema::SPACE_2;
     2.0 * KARTE_RAND
@@ -515,16 +574,25 @@ fn karte_hoehe(ui: &Ui, f: &Farben, k: &Kette, breite: f32) -> f32 {
         + k.zeilen.saturating_sub(1) as f32 * thema::SPACE_1
 }
 
+/// Der umbrochene Text der Beschreibung – einmal für das Maß, einmal fürs
+/// Zeichnen. Beide nehmen dieselbe Funktion: so können Plan und Bild nicht
+/// auseinanderlaufen.
+fn beschreibung_galley(
+    ui: &Ui,
+    f: &Farben,
+    text: &str,
+    breite: f32,
+) -> std::sync::Arc<egui::Galley> {
+    ui.painter().layout(
+        text.to_string(),
+        egui::FontId::monospace(thema::FONT_SIZE_SM),
+        f.text_muted,
+        breite.max(1.0),
+    )
+}
+
 fn beschreibung_hoehe(ui: &Ui, f: &Farben, text: &str, breite: f32) -> f32 {
-    ui.painter()
-        .layout(
-            text.to_string(),
-            egui::FontId::monospace(thema::FONT_SIZE_SM),
-            f.text_muted,
-            breite.max(1.0),
-        )
-        .size()
-        .y
+    beschreibung_galley(ui, f, text, breite).size().y
 }
 
 /// Eine Karte in ihrem Rechteck: Fläche, Rahmen, Kopf mit Schalter,
@@ -612,17 +680,18 @@ fn karten_kopf(ui: &mut Ui, k: &Karten, info: &Kette, a: &mut Vec<Aktion>) {
     );
 }
 
-/// Beschreibung der Karte: linksbündig umbrochen, keine gestreckten Zeilen.
+/// Beschreibung der Karte: linksbündig umbrochen, in **genau** der Höhe, die
+/// das Raster eingeplant hat. Gezeichnet wird der fertige Textblock statt eines
+/// Labels: ein Label wächst mit seinem Text, und dann schöbe es die Zeilen
+/// darunter aus der Karte (der Regler der letzten Zeile lag auf dem Rahmen).
+/// Für Screenreader bleibt der Text als Beschriftung da.
 fn beschreibung(ui: &mut Ui, k: &Karten, text: &str) {
     let (f, breite) = (k.f, k.breite);
-    ui.allocate_ui_with_layout(
-        Vec2::new(breite, 0.0),
-        Layout::top_down(egui::Align::LEFT),
-        |ui| {
-            ui.set_width(breite);
-            ui.add(Label::new(bausteine::text(f, text, false, true)).wrap());
-        },
-    );
+    let galley = beschreibung_galley(ui, f, text, breite);
+    let hoehe = galley.size().y;
+    let (rect, antwort) = ui.allocate_exact_size(Vec2::new(breite, hoehe), Sense::hover());
+    antwort.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, text));
+    ui.painter().galley(rect.min, galley, f.text_muted);
 }
 
 // ---------------------------------------------------------------- Zeilen ----
@@ -658,10 +727,29 @@ fn label_zelle(ui: &mut Ui, f: &Farben, breite: f32, text: &str) -> egui::Respon
 }
 
 /// Der Schieber einer Zeile: er füllt die Reglerspalte genau, damit alle
-/// Schieber einer Karte gleich lang sind und bis an die Wertspalte reichen.
-fn schieber(ui: &mut Ui, breite: f32, wert: &mut f32, von: f32, bis: f32) -> egui::Response {
-    ui.spacing_mut().slider_width = breite;
-    ui.add(egui::Slider::new(wert, von..=bis).show_value(false))
+/// Schieber einer Karte gleich lang sind und bis an die Wertspalte reichen –
+/// mit sichtbarer Schiene ([`bausteine::schieber`]).
+fn schieber(
+    ui: &mut Ui,
+    k: &Karten,
+    titel: &str,
+    wert: f32,
+    von: f32,
+    bis: f32,
+    dezimal: usize,
+) -> Option<f32> {
+    let f = k.f;
+    bausteine::schieber(
+        ui,
+        f,
+        titel,
+        k.spalten.regler,
+        ZEILE,
+        wert,
+        von,
+        bis,
+        dezimal,
+    )
 }
 
 /// Das feste Wertfeld rechts einer Zeile: feste Breite, rechte Kante am
@@ -712,12 +800,10 @@ fn regler(ui: &mut Ui, k: &Karten, r: Regler, a: &mut Vec<Aktion>) {
     let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
         label_zelle(ui, f, spalten.label, r.titel);
-        let mut v = r.wert;
-        let schieber = schieber(ui, spalten.regler, &mut v, r.von, r.bis);
-        let name = r.titel.to_string();
-        schieber.widget_info(|| WidgetInfo::slider(true, v as f64, name.clone()));
+        let gezogen = schieber(ui, k, r.titel, r.wert, r.von, r.bis, r.dezimal);
+        let mut v = gezogen.unwrap_or(r.wert);
         let feld = wert_zelle(ui, spalten.wert, &mut v, r.von, r.bis, r.suffix, r.dezimal);
-        if schieber.changed() || feld.changed() {
+        if gezogen.is_some() || feld.changed() {
             a.push(setzen(k.ziel, r.param, v));
         }
     });
@@ -759,7 +845,8 @@ fn echo(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
         });
         return;
     }
-    for e in liste.iter().take(ECHO_ZEILEN) {
+    let zeigen = liste.len().min(k.echo_max.max(1));
+    for e in liste.iter().take(zeigen) {
         zeile(ui, k.breite, |ui| {
             let mut an = k.o.echo_geraete.contains(&e.name);
             // Einzeilig gekürzt, damit die Zeile in die Karte passt; der volle
@@ -787,7 +874,7 @@ fn echo(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             }
         });
     }
-    let rest = liste.len().saturating_sub(ECHO_ZEILEN);
+    let rest = liste.len().saturating_sub(zeigen);
     if rest > 0 {
         zeile(ui, k.breite, |ui| {
             ui.add(
@@ -802,7 +889,7 @@ fn echo(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             .on_hover_text(
                 liste
                     .iter()
-                    .skip(ECHO_ZEILEN)
+                    .skip(zeigen)
                     .map(|e| e.anzeige.clone())
                     .collect::<Vec<_>>()
                     .join("\n"),
@@ -816,18 +903,46 @@ fn nr(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
         label_zelle(ui, f, spalten.label, wort::STUFE);
-        // Die vier Stufen füllen die Reglerspalte genau.
-        let zelle = (spalten.regler - 3.0 * thema::SPACE_1) / 4.0;
+        // Die vier Stufen teilen sich, was rechts von der Beschriftung übrig
+        // ist – Regler- und Wertspalte zusammen, damit die Reihe am selben Rand
+        // endet wie die Zeilen mit Regler. Gleiche Stücke; passt das längste
+        // Wort nicht in sein Stück, wird die Schrift kleiner.
+        let breite = spalten.regler + thema::SPACE_1 + spalten.wert;
+        let zelle =
+            (breite - (NR_STUFEN.len() as f32 - 1.0) * thema::SPACE_1) / NR_STUFEN.len() as f32;
+        let schrift = stufen_schrift(ui, zelle);
         for (i, stufe) in NR_STUFEN.iter().enumerate() {
             let gewaehlt = k.fw.nr_stufe as usize == i;
             let groesse = Vec2::new(zelle, ZEILE - thema::SPACE_1);
-            if bausteine::schalter(ui, f, stufe, gewaehlt, Art::Akzent, groesse).clicked()
+            if bausteine::schalter_schrift(ui, f, stufe, gewaehlt, Art::Akzent, groesse, schrift)
+                .clicked()
                 && !gewaehlt
             {
                 a.push(setzen(k.ziel, "nr_stufe", i as f32));
             }
         }
     });
+}
+
+/// Die Schriftgröße der Stufenknöpfe: so groß wie üblich, wenn das längste Wort
+/// in seine Zelle passt, sonst kleiner – aber nicht unter
+/// [`logik::SKALA_SCHRIFT_MIN`], denn lesbar muss es bleiben.
+fn stufen_schrift(ui: &Ui, zelle: f32) -> f32 {
+    let font = egui::FontId::new(thema::FONT_SIZE_SM, thema::fett());
+    let breiteste = NR_STUFEN
+        .iter()
+        .map(|wort| {
+            ui.painter()
+                .layout_no_wrap(wort.to_string(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    if breiteste <= 0.0 {
+        return thema::FONT_SIZE_SM;
+    }
+    let platz = (zelle - 2.0 * thema::SPACE_1).max(thema::FONT_SIZE_SM);
+    (thema::FONT_SIZE_SM * platz / breiteste).clamp(logik::SKALA_SCHRIFT_MIN, thema::FONT_SIZE_SM)
 }
 
 fn gate(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
@@ -961,12 +1076,10 @@ fn comp(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
         if bausteine::schalter(ui, f, wort::LIMITER, fw.limiter, Art::Akzent, groesse).clicked() {
             a.push(setzen(k.ziel, "limiter", schalter_wert(!fw.limiter)));
         }
-        let mut v = fw.limiter_decke;
-        let schieber =
-            schieber(ui, spalten.regler, &mut v, -12.0, 0.0).on_hover_text("Decke des Limiters");
-        schieber.widget_info(|| WidgetInfo::slider(true, v as f64, "Decke"));
+        let gezogen = schieber(ui, k, "Decke", fw.limiter_decke, -12.0, 0.0, 1);
+        let mut v = gezogen.unwrap_or(fw.limiter_decke);
         let feld = wert_zelle(ui, spalten.wert, &mut v, -12.0, 0.0, " dBFS", 1);
-        if schieber.changed() || feld.changed() {
+        if gezogen.is_some() || feld.changed() {
             a.push(setzen(k.ziel, "limiter_decke", v));
         }
     });
@@ -1135,8 +1248,11 @@ fn ausgabegeraete(o: &Oberflaeche) -> Vec<Eintrag> {
 }
 
 /// Zeilen der ECHO-Karte: eine je Gerät, dazu der Hinweis, wenn nicht alle
-/// Platz haben.
-fn echo_zeilen(o: &Oberflaeche) -> usize {
-    let n = ausgabegeraete(o).len();
-    n.clamp(1, ECHO_ZEILEN) + usize::from(n > ECHO_ZEILEN)
+/// Platz haben. `k.echo_max` ist die Zahl der Geräte, die in dieses Fenster
+/// passen – zeigt die Karte weniger als der Bestand hergibt, steht der Rest im
+/// Hinweis.
+fn echo_zeilen(k: &Karten) -> usize {
+    let n = ausgabegeraete(k.o).len();
+    let zeigen = n.clamp(1, ECHO_ZEILEN).min(k.echo_max.max(1));
+    zeigen + usize::from(n > zeigen)
 }

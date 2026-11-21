@@ -79,7 +79,19 @@ pub fn dialog_rahmen<R>(
             ui.set_width(breite);
             ui.spacing_mut().item_spacing = Vec2::splat(thema::SPACE_1);
             titelleiste(ui, f, titel, &mut schliessen);
-            inhalt(ui)
+            // Die Fläche des Dialogs als eigener Knoten: die Tests prüfen
+            // daran, dass der Inhalt im Fenster und mit Abstand zum Rand steht,
+            // und ein Screenreader liest den Dialog als Ganzes.
+            let inhalt = ui.scope_builder(
+                egui::UiBuilder::new()
+                    .sense(egui::Sense::hover())
+                    .id_salt(("dialoginhalt", titel)),
+                inhalt,
+            );
+            inhalt.response.widget_info(|| {
+                WidgetInfo::labeled(egui::Role::Group, true, format!("Dialog {titel}"))
+            });
+            inhalt.inner
         });
     let zu = antwort.should_close() || schliessen;
     DialogAntwort {
@@ -340,6 +352,153 @@ pub fn fader(
     FaderAntwort { response, neu }
 }
 
+/// Ein waagerechter Regler für die Zeilen im FILTER-Modal.
+///
+/// Die **ganze** Schiene ist zu sehen – von der Beschriftungsspalte bis an die
+/// Wertspalte –, der gefüllte Teil bis zum Griff steht im Akzent, der Griff
+/// sitzt als Knopf darauf. Gezeichnet wie der Fader: der Standardregler von
+/// egui malt seine Schiene in der Fläche, auf der er steht, und die
+/// verschwindet dann in der Karte.
+///
+/// Bedienung: Klick oder Ziehen setzt den Wert an den Zeiger, Pfeiltasten bei
+/// Fokus (mit Umschalt zehn Schritte), Mausrad fein. Für Screenreader ist er
+/// ein Regler mit Namen und Wert. Gibt den neuen Wert zurück, wenn sich einer
+/// ergibt – sonst `None`.
+#[allow(clippy::too_many_arguments)]
+pub fn schieber(
+    ui: &mut Ui,
+    f: &Farben,
+    name: &str,
+    breite: f32,
+    hoehe: f32,
+    wert: f32,
+    von: f32,
+    bis: f32,
+    dezimal: usize,
+) -> Option<f32> {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(breite, hoehe), Sense::click_and_drag());
+    let stellen = 10f32.powi(dezimal as i32);
+    let runden = |v: f32| (v * stellen).round() / stellen;
+    // Ein Schritt ist der hundertste Teil der Spanne, aber nie feiner als die
+    // letzte Stelle, die die Zeile zeigt.
+    let fein = (((bis - von) * 0.01) * stellen).round().max(1.0) / stellen;
+    let spanne = bis - von;
+    // Der Griff läuft von links nach rechts über die ganze Breite: an beiden
+    // Enden steht seine Mitte, damit er nicht über die Schiene hinausragt.
+    let griff = Vec2::new(
+        thema::SPACE_3,
+        (hoehe - 2.0 * thema::SIZE_BORDER).max(thema::SPACE_2),
+    );
+    let weg = (rect.width() - griff.x).max(1.0);
+
+    let mut neu = None;
+    if response.clicked() || response.dragged() {
+        if let Some(zeiger) = response.interact_pointer_pos() {
+            let t = ((zeiger.x - rect.left() - griff.x * 0.5) / weg).clamp(0.0, 1.0);
+            neu = Some(runden(von + t * spanne));
+        }
+    }
+    if response.has_focus() {
+        // Pfeiltasten gehören dem Regler, solange er den Fokus hat – sonst
+        // springt der Fokus im Modal weiter, statt den Wert zu ändern.
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+        let (links, rechts, weit) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.modifiers.shift,
+            )
+        });
+        let schritt = if weit { fein * 10.0 } else { fein };
+        if links {
+            neu = Some(runden(wert - schritt));
+        } else if rechts {
+            neu = Some(runden(wert + schritt));
+        }
+    }
+    if response.hovered() {
+        let rad = ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y);
+        if rad.abs() > 0.5 {
+            neu = Some(runden(wert + rad.signum() * fein));
+        }
+    }
+    if response.clicked() {
+        response.request_focus();
+    }
+    let neu = neu.map(|v| v.clamp(von.min(bis), von.max(bis)));
+    let anzeige = neu.unwrap_or(wert);
+    response.widget_info(|| WidgetInfo::slider(true, anzeige as f64, name));
+
+    let p = ui.painter_at(rect);
+    let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
+    // Die Schiene: die ganze Spalte, nicht nur der gefüllte Teil.
+    let bahn = schiene(rect);
+    p.rect_filled(bahn, ecke, f.border_strong);
+    let t = ((anzeige - von) / spanne).clamp(0.0, 1.0);
+    let x = rect.left() + griff.x * 0.5 + t * weg;
+    if x > bahn.left() + 1.0 {
+        p.rect_filled(
+            Rect::from_min_max(bahn.min, Pos2::new(x, bahn.max.y)),
+            ecke,
+            f.accent_default,
+        );
+    }
+    // Der Griff: Fläche der Karte, Rahmen wie am Fader.
+    let kopf = Rect::from_center_size(Pos2::new(x, rect.center().y), griff);
+    p.rect_filled(kopf, ecke, f.bg_raised);
+    let rand = if response.hovered() || response.dragged() || response.has_focus() {
+        f.accent_default
+    } else {
+        f.text_default
+    };
+    p.rect_stroke(
+        kopf,
+        ecke,
+        Stroke::new(thema::SIZE_BORDER, rand),
+        StrokeKind::Inside,
+    );
+    if response.has_focus() {
+        p.rect_stroke(
+            rect,
+            ecke,
+            Stroke::new(thema::SIZE_FOCUS, f.focus_ring),
+            StrokeKind::Inside,
+        );
+    }
+    neu.filter(|v| *v != wert)
+}
+
+/// Schiene eines Reglers: die ganze Breite seines Rechtecks, in der Höhe von
+/// [`thema::SIZE_FADER_BAHN`] mittig darin.
+pub fn schiene(rect: Rect) -> Rect {
+    let dick = thema::SIZE_FADER_BAHN;
+    Rect::from_min_max(
+        Pos2::new(rect.left(), rect.center().y - dick * 0.5),
+        Pos2::new(rect.right(), rect.center().y + dick * 0.5),
+    )
+}
+
+/// Gibt dem Standardregler von egui eine sichtbare Schiene: die ganze Schiene
+/// in der Rahmenfarbe, der gefüllte Teil im Akzent – dieselben Farben wie
+/// [`schieber`]. Für die wenigen Stellen, an denen der Regler seine Zahl
+/// selbst mitbringt (TRIM · DELAY im Kopf); überall sonst gilt [`schieber`].
+pub fn sichtbare_schiene(ui: &mut Ui, f: &Farben) {
+    let v = ui.visuals_mut();
+    v.widgets.inactive.bg_fill = f.border_strong;
+    v.selection.bg_fill = f.accent_default;
+    // Dieselbe Schienenhöhe wie [`schieber`] – egui hätte sonst eine eigene.
+    ui.spacing_mut().slider_rail_height = thema::SIZE_FADER_BAHN;
+}
+
 /// Senkrechte Pegelsäule mit Segmenten und Spitzenmarke.
 pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32) {
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
@@ -505,7 +664,24 @@ pub fn schalter(
     art: Art,
     groesse: Vec2,
 ) -> Response {
-    schalter_icon(ui, f, None, text, an, art, groesse)
+    schalter_gross(ui, f, None, text, an, art, groesse, thema::FONT_SIZE_SM)
+}
+
+/// Wie [`schalter`], aber mit eigener Schriftgröße – für Reihen, in denen
+/// mehrere Wörter in einer schmalen Spalte Platz haben müssen (die vier Stufen
+/// der Rauschunterdrückung). Reicht es auch in kleiner Schrift nicht, wird das
+/// Wort gekürzt statt über den Nachbarn zu laufen; der volle Text bleibt der
+/// Name für den Screenreader.
+pub fn schalter_schrift(
+    ui: &mut Ui,
+    f: &Farben,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+    schriftgroesse: f32,
+) -> Response {
+    schalter_gross(ui, f, None, text, an, art, groesse, schriftgroesse)
 }
 
 /// Wie [`schalter`], aber mit einem Icon vor dem Wort (`FILTER`). Das Wort
@@ -518,6 +694,23 @@ pub fn schalter_icon(
     an: bool,
     art: Art,
     groesse: Vec2,
+) -> Response {
+    schalter_gross(ui, f, icon, text, an, art, groesse, thema::FONT_SIZE_SM)
+}
+
+/// Der gemeinsame Bau aller Schalter: Fläche, Rahmen, Schrift (und Icon) –
+/// nur die Schriftgröße kommt von außen, damit enge Reihen sie verkleinern
+/// können.
+#[allow(clippy::too_many_arguments)]
+fn schalter_gross(
+    ui: &mut Ui,
+    f: &Farben,
+    icon: Option<Icon>,
+    text: &str,
+    an: bool,
+    art: Art,
+    groesse: Vec2,
+    schriftgroesse: f32,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(groesse, Sense::click());
     response.widget_info(|| WidgetInfo::selected(egui::Role::CheckBox, true, an, text));
@@ -542,20 +735,25 @@ pub fn schalter_icon(
         Stroke::new(thema::SIZE_BORDER, linie),
         StrokeKind::Inside,
     );
+    // Platz für das Wort: die Fläche minus Rand – was nicht passt, wird
+    // gekürzt.
+    let font = fett(schriftgroesse);
     match icon {
         None => {
-            p.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                text,
-                fett(thema::FONT_SIZE_SM),
+            let passend = kuerzen(ui, text, rect.width() - 2.0 * thema::SPACE_1, font.clone());
+            let galley = p.layout_no_wrap(passend, font, schrift);
+            p.galley(
+                Pos2::new(
+                    rect.center().x - galley.size().x * 0.5,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
                 schrift,
             );
         }
         Some(icon) => {
-            let font = fett(thema::FONT_SIZE_SM);
             let galley = p.layout_no_wrap(text.to_string(), font, schrift);
-            let kante = thema::FONT_SIZE_SM * 0.8;
+            let kante = schriftgroesse * 0.8;
             let luecke = thema::SPACE_1;
             let gesamt = kante + luecke + galley.size().x;
             let links = rect.center().x - gesamt * 0.5;
@@ -1004,8 +1202,20 @@ pub fn chip(ui: &mut Ui, f: &Farben, schluessel: &str, wert: &str) {
 /// Waagerechte Segmentleiste (Tape-Pegel).
 pub fn segmentleiste(ui: &mut Ui, f: &Farben, db: f32, segmente: usize) {
     let seg_w = 3.0;
-    let groesse = Vec2::new(segmente as f32 * (seg_w + 1.0), thema::SPACE_3 - 3.0);
-    let (rect, _) = ui.allocate_exact_size(groesse, Sense::hover());
+    let breite = segmente as f32 * (seg_w + 1.0) - 1.0;
+    segmentleiste_breit(ui, f, db, breite, segmente);
+}
+
+/// Waagerechte Segmentleiste, die **genau** `breite` füllt: die Segmente
+/// teilen sich die Breite, dazwischen steht eine Lücke von
+/// [`thema::SIZE_BORDER`]. So reicht der Balken von der Beschriftung bis an die
+/// Wertspalte, statt mitten in der Zeile aufzuhören.
+pub fn segmentleiste_breit(ui: &mut Ui, f: &Farben, db: f32, breite: f32, segmente: usize) {
+    let segmente = segmente.max(1);
+    let hoehe = thema::SPACE_3 - 3.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(breite, hoehe), Sense::hover());
+    let luecke = thema::SIZE_BORDER;
+    let seg_w = ((breite - (segmente as f32 - 1.0) * luecke) / segmente as f32).max(1.0);
     let p = ui.painter();
     for i in 0..segmente {
         let seg_db = pos_db((i as f32 + 1.0) / segmente as f32);
@@ -1015,7 +1225,7 @@ pub fn segmentleiste(ui: &mut Ui, f: &Farben, db: f32, segmente: usize) {
             (true, false) => f.accent_default,
             _ => f.border_subtle,
         };
-        let x = rect.left() + i as f32 * (seg_w + 1.0);
+        let x = rect.left() + i as f32 * (seg_w + luecke);
         p.rect_filled(
             Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(seg_w, rect.height())),
             CornerRadius::ZERO,

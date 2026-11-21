@@ -17,6 +17,60 @@ use crate::thema::{self, Farben, Thema};
 /// Breite einer Beschriftungsspalte in den Dialogen.
 const LABEL_BREITE: f32 = thema::SPACE_6 * 4.0;
 
+/// Was im Autostart-Kästchen steht – der längste Text des Dialogs und damit
+/// das Maß, aus dem er seine Breite nimmt.
+const AUTOSTART: &str = "Beim Anmelden starten (nur Tray-Icon)";
+
+/// Die Makrofeld-Zahlen, die zur Wahl stehen.
+const MAKROFELDER: [usize; 6] = [5, 8, 10, 16, 40, 80];
+
+/// Breite eines Textes in der Schrift der Beschriftungen – gemessen, nicht
+/// geschätzt: die Dialoge nehmen ihre Breite aus ihrem Inhalt, damit kein Text
+/// am Rand klebt.
+fn text_breite(ctx: &egui::Context, text: &str, font: egui::FontId) -> f32 {
+    ctx.fonts_mut(|f| {
+        f.layout(text.to_owned(), font, egui::Color32::WHITE, f32::INFINITY)
+            .size()
+            .x
+    })
+}
+
+/// Inhaltbreite des DARSTELLUNG-Dialogs: so breit, wie die breiteste Zeile
+/// (das Autostart-Kästchen samt Häkchen) ist, plus die Beschriftungsspalte und
+/// Luft rechts – kein Text stößt an den Rand.
+pub fn darstellung_breite(ctx: &egui::Context) -> f32 {
+    // Gemessen wird in den Schriften, in denen die Bausteine wirklich
+    // schreiben: das Häkchen seinen Text in der Textschrift, die Knöpfe in der
+    // Knopfschrift.
+    let stil = ctx.global_style();
+    let knopfschrift = stil.text_styles[&egui::TextStyle::Button].clone();
+    let textschrift = stil.text_styles[&egui::TextStyle::Body].clone();
+    let kaestchen = stil.spacing.icon_width
+        + stil.spacing.item_spacing.x
+        + text_breite(ctx, AUTOSTART, textschrift)
+        // Das Kästchen bringt seine eigene Polsterung mit (Widget-Stil von
+        // egui): hier steht die Luft, die den Text vom Rand fernhält.
+        + thema::SPACE_4;
+    // Was die beiden Knopfreihen mindestens brauchen, wenn jeder Knopf nur so
+    // breit wäre wie sein Wort und seine Polsterung.
+    let themen = Thema::ALLE
+        .iter()
+        .map(|t| {
+            text_breite(ctx, t.anzeige(), knopfschrift.clone())
+                + thema::FONT_SIZE_MD
+                + thema::SPACE_1
+                + 2.0 * thema::SPACE_2
+        })
+        .sum::<f32>()
+        + 2.0 * thema::SPACE_1;
+    let makros = MAKROFELDER
+        .iter()
+        .map(|n| text_breite(ctx, &n.to_string(), knopfschrift.clone()) + 2.0 * thema::SPACE_2)
+        .sum::<f32>()
+        + 5.0 * thema::SPACE_1;
+    LABEL_BREITE + thema::SPACE_2 + kaestchen.max(themen).max(makros)
+}
+
 pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a: &mut Vec<Aktion>) {
     let Some(d) = o.dialog else { return };
     let (breite, unter) = match d {
@@ -26,7 +80,7 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
             "Audio übers Netz senden und empfangen",
         ),
         Dialog::Midi => (thema::SPACE_6 * 26.0, "MIDIMonster übersetzt MIDI nach OSC"),
-        Dialog::Darstellung => (thema::SPACE_6 * 12.0, "Theme, Makros, Autostart"),
+        Dialog::Darstellung => (darstellung_breite(ctx), "Theme, Makros, Autostart"),
     };
     let breite = breite.min(ctx.content_rect().width() - 2.0 * thema::SPACE_4);
     let antwort = bausteine::dialog_rahmen(
@@ -41,7 +95,7 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
                 Dialog::Presets => presets(ui, f, o, k, a, breite),
                 Dialog::Vban => vban(ui, f, o, k, a),
                 Dialog::Midi => midi(ui, f, o, a, breite),
-                Dialog::Darstellung => darstellung(ui, f, o, a),
+                Dialog::Darstellung => darstellung(ui, f, o, a, breite),
             }
         },
     );
@@ -377,9 +431,12 @@ fn midi(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>, breit
     }
 }
 
-fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
+fn darstellung(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>, breite: f32) {
     // Zwei Spalten: links die Beschriftung, rechts die Bedienung – alles
-    // untereinander auf einer Kante.
+    // untereinander auf einer Kante. Die Knopfreihen enden auf derselben Kante
+    // wie der Autostart-Text: eine Luft vor dem Rand, damit nichts am Rahmen
+    // klebt.
+    let regler = (breite - LABEL_BREITE - thema::SPACE_2 - thema::SPACE_4).max(thema::SPACE_6);
     egui::Grid::new("darstellung")
         .num_columns(2)
         .spacing(Vec2::new(thema::SPACE_2, thema::SPACE_2))
@@ -387,6 +444,7 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
         .show(ui, |ui| {
             ui.add(Label::new(bausteine::text(f, "THEME", true, false)));
             ui.horizontal(|ui| {
+                let je = (regler - 2.0 * thema::SPACE_1) / 3.0;
                 for t in Thema::ALLE {
                     let gewaehlt = o.thema == t;
                     let knopf = egui::Button::image_and_text(
@@ -395,7 +453,7 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
                     )
                     .selected(gewaehlt)
                     .frame_when_inactive(gewaehlt);
-                    if ui.add(knopf).clicked() {
+                    if ui.add_sized([je, thema::SIZE_CONTROL_SM], knopf).clicked() {
                         a.push(Aktion::Thema(t));
                     }
                 }
@@ -403,11 +461,11 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
             ui.end_row();
             ui.add(Label::new(bausteine::text(f, "MAKROFELDER", true, false)));
             ui.horizontal(|ui| {
-                for n in [5, 8, 10, 16, 40, 80] {
-                    if ui
-                        .selectable_label(o.makro_anzahl == n, n.to_string())
-                        .clicked()
-                    {
+                let je = (regler - 5.0 * thema::SPACE_1) / MAKROFELDER.len() as f32;
+                for n in MAKROFELDER {
+                    let gewaehlt = o.makro_anzahl == n;
+                    let knopf = egui::Button::selectable(gewaehlt, n.to_string());
+                    if ui.add_sized([je, thema::SIZE_CONTROL_SM], knopf).clicked() && !gewaehlt {
                         a.push(Aktion::MakroAnzahl(n));
                     }
                 }
@@ -415,10 +473,7 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &Oberflaeche, a: &mut Vec<Aktion>) {
             ui.end_row();
             ui.add(Label::new(bausteine::text(f, "AUTOSTART", true, false)));
             let mut autostart = o.autostart;
-            if ui
-                .checkbox(&mut autostart, "Beim Anmelden starten (nur Tray-Icon)")
-                .changed()
-            {
+            if ui.checkbox(&mut autostart, AUTOSTART).changed() {
                 a.push(Aktion::Autostart(autostart));
             }
             ui.end_row();
