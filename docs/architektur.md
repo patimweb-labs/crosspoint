@@ -35,9 +35,12 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
    Fernbedienung/Tests       MIDI über MIDIMonster   Netzwerk-Audio
 ```
 
-Signalweg (ADR 0002): Eingänge und Hardware-Busse tragen das Rohsignal;
-Noise Gate und Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`)
-sitzen nur an den virtuellen Bussen B1–B3. Die Echounterdrückung nimmt den
+Signalweg (ADR 0002/0006): Eingänge und Hardware-Busse tragen das Rohsignal;
+die Filterkette sitzt nur an den virtuellen Bussen B1–B3 – Low-Cut,
+Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`),
+Rauschunterdrückung (dieselbe Instanz), Noise Gate, Kompressor und Limiter
+(`crates/core/src/dsp.rs`), AGC (`crates/core/src/agc.rs`, AGC2 aus `sonora`),
+Ducking und Push-to-Talk. Die Echounterdrückung nimmt den
 Ton der gewählten Ausgabegeräte (`crates/core/src/echo.rs` legt deren Monitore
 auf `crosspoint:echo_ref_L/R`) und rechnet ihn aus dem Mikrofon. Der frühere
 Weg – der fertige Ausgang eines Hardware-Busses als Referenz – ist mit

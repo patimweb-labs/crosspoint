@@ -1,6 +1,9 @@
 # 0005 – Echounterdrückung mit AEC3, Referenz vom Ausgabegerät
 
 Stand: 2026-11-21 · entschieden · löst Teile von [ADR 0002](0002-rohsignal-und-ausgangsfilter.md) ab
+· Punkt 5 (Rauschunterdrückung nur zusammen mit `aec`, Häkchen im ECHO-Menü)
+ist mit [ADR 0006](0006-filterkette-und-modal.md) überholt: NR ist ein eigener
+Filter mit eigener Stufe, `aec_ns` schaltet ihn weiter ein
 
 ## Kontext
 
