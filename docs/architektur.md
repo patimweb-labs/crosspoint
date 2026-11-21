@@ -177,9 +177,14 @@ Grenze aus ADR 0010 macht es später leichter, entscheidet aber nichts darüber.
 
 ### macOS (ADR 0010)
 
-Kein Kernel-Treiber: virtuelle Geräte sind ein userspace *Audio Server Plug-in*
-in `/Library/Audio/Plug-Ins/HAL`, gebaut mit `libASPL`, das mit der App über
-Shared Memory und zwei lock-freie Ringpuffer spricht. Audio läuft über die
+Kein Kernel-Treiber: virtuelle Geräte kommen von **BlackHole** (kostenlos,
+signiert, vom Nutzer per `brew install blackhole-2ch` installiert) und werden
+im Modell auf B1–B3 abgebildet. Ein eigenes *Audio Server Plug-in* in
+`/Library/Audio/Plug-Ins/HAL` (userspace, `libASPL`, Shared Memory und zwei
+lock-freie Ringpuffer) bleibt als Option – aber ohne Entwicklerkonto gibt es
+keine Developer ID, und ein nur ad-hoc signiertes Plugin lädt nach den
+vorliegenden Berichten nicht zuverlässig (AMFI, `-423`; der Befund ist
+unsicher, siehe [plan-macos.md](plan-macos.md) §3.2). Audio läuft über die
 Core-Audio-HAL-API (`objc2-core-audio`, nicht `cpal` – cpal verbirgt Aggregat-
 Geräte und IOProc). Die **Echo-Referenz** aus ADR 0005 wird auf macOS nicht aus
 Monitor-Ports gebaut, sondern aus einem globalen **Core-Audio-Tap**
@@ -190,11 +195,17 @@ jeweils **aktuelle macOS-Version** (Frage 1, beantwortet am 2026-11-21), die
 Taps sind damit immer vorhanden – und damit **nur Apple Silicon**: macOS 26
 (Tahoe) war die letzte Version für Intel-Macs.
 
-Aufwand **174–278 h** in sechs Schritten, jeder einzeln lauffähig; ohne eigenes
-Plugin 114–178 h. Dazu 99 €/Jahr Developer Program und Testhardware. Die Zahl
-liegt über den früher genannten 170–240 h, weil dort die Trait-Grenze (a) und
-der Ersatz für `echo.rs` (e) fehlten. Risiko: das Plugin läuft im `coreaudiod`,
-ein Absturz dort nimmt den Ton des ganzen Macs mit.
+Aufwand **104–164 h** in sechs Schritten, jeder einzeln lauffähig; mit dem
+optionalen eigenen Plugin 164–264 h. **Geld: 0 €** – kein Apple Developer
+Program, kein Zertifikat. Die App wird **ad hoc** signiert und über
+GitHub-Releases verteilt; der Preis dafür ist eine Gatekeeper-Warnung beim
+ersten Start (seit macOS 15 führt kein Rechtsklick mehr daran vorbei, sondern
+nur *Systemeinstellungen › Datenschutz & Sicherheit › Trotzdem öffnen*) und
+damit eine Anleitung im README. Die Zahl liegt über den früher genannten
+170–240 h, weil dort die Trait-Grenze (a) und der Ersatz für `echo.rs` (e)
+fehlten. Risiko: ein eigenes Plugin liefe im `coreaudiod`, ein Absturz dort
+nimmt den Ton des ganzen Macs mit – ein weiterer Grund, warum BlackHole
+trägt.
 
 ### Regel für später
 
