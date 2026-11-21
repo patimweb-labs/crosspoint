@@ -85,7 +85,7 @@ pub fn args_lesen() -> Args {
     args_aus(std::env::args().skip(1))
 }
 
-/// Symbol des Fensters (aus dem Raster erzeugt, siehe AGENTS.md §8).
+/// Symbol des Fensters (PNG aus `assets/crosspoint-logo.svg`, ADR 0008).
 fn symbol() -> egui::IconData {
     eframe::icon_data::from_png_bytes(include_bytes!(
         "../../../data/icons/hicolor/256x256/apps/de.weppelmann.Crosspoint.png"

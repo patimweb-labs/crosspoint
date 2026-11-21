@@ -10,7 +10,6 @@ use crate::bausteine::{self, alpha};
 use crate::logik::{self, Kern};
 use crate::modell::{Aktion, Dialog, Meldung, Oberflaeche, Tape};
 use crate::thema::{self, Farben, Thema};
-
 pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a: &mut Vec<Aktion>) {
     bausteine::rahmen(f, f.bg_panel)
         .inner_margin(egui::Margin::symmetric(
@@ -28,18 +27,7 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.spacing_mut().item_spacing.x = thema::SPACE_3;
-                    ui.label(
-                        RichText::new("crosspoint")
-                            .font(egui::FontId::new(thema::FONT_SIZE_LG, thema::fett()))
-                            .color(f.text_default),
-                    );
-                    bausteine::zeichen_text(
-                        ui,
-                        "▪",
-                        egui::FontId::monospace(thema::FONT_SIZE_SM),
-                        f.accent_default,
-                        f.accent_default,
-                    );
+                    marke(ui, f);
                     if teile.untertitel {
                         ui.separator();
                         ui.vertical(|ui| {
@@ -133,6 +121,30 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                 },
             );
         });
+}
+
+/// Die Marke im Kopf: das Zeichen auf der Kachel und die Wortmarke. Beides
+/// sind SVGs aus `assets/` (ADR 0008), keine Schrift und kein Text: die
+/// Wortmarke wird mit der Textfarbe eingefärbt, das Zeichen bringt seine
+/// Farben selbst mit.
+pub fn marke(ui: &mut Ui, f: &Farben) {
+    // In der Vorlage ist das Zeichen zweimal so hoch wie die Großbuchstaben.
+    let hoehe = thema::FONT_SIZE_LG * 0.75;
+    ui.add(
+        egui::Image::new(egui::include_image!(
+            "../../../../assets/crosspoint-logo.svg"
+        ))
+        .fit_to_exact_size(egui::Vec2::splat(hoehe * 2.0))
+        .alt_text("Crosspoint-Zeichen"),
+    );
+    ui.add(
+        egui::Image::new(egui::include_image!(
+            "../../../../assets/crosspoint-schriftzug.svg"
+        ))
+        .tint(f.text_default)
+        .fit_to_exact_size(egui::Vec2::new(hoehe * 8.6625, hoehe))
+        .alt_text("Crosspoint"),
+    );
 }
 
 /// Das Icon eines Dialogs für den Kopfknopf: Ordner (Presets), Netzwerk
