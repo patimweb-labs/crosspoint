@@ -33,7 +33,9 @@ install -Dm755 scripts/crosspoint-launch.sh "$stufe/usr/bin/crosspoint-launch"
 install -Dm755 scripts/crosspoint-wire.sh "$stufe/usr/bin/crosspoint-wire.sh"
 install -Dm644 packaging/linux/$ID.desktop "$stufe/usr/share/applications/$ID.desktop"
 install -Dm644 packaging/linux/$ID.metainfo.xml "$stufe/usr/share/metainfo/$ID.metainfo.xml"
-for n in 16 24 32 48 64 128 256 512 1024; do
+# hicolor kennt nur 16 bis 512; die 1024er Fassung in data/icons ist Vorlage
+# fuer Laden und Dokumentation, kein installiertes Symbol.
+for n in 16 24 32 48 64 128 256 512; do
   install -Dm644 "data/icons/hicolor/${n}x${n}/apps/$ID.png" \
     "$stufe/usr/share/icons/hicolor/${n}x${n}/apps/$ID.png"
 done

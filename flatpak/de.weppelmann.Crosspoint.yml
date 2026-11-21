@@ -70,8 +70,12 @@ modules:
         chmod 644 /app/share/applications/de.weppelmann.Crosspoint.desktop
       - install -Dm644 packaging/linux/de.weppelmann.Crosspoint.metainfo.xml
           /app/share/metainfo/de.weppelmann.Crosspoint.metainfo.xml
+      # hicolor kennt nur 16 bis 512; AppStream weist groessere Icons ab
+      # ("Image too large (1024x1024). Max. size 512x512"), der Export scheitert.
+      # Die 1024er Fassung bleibt als Vorlage in data/icons, wird aber nicht
+      # installiert.
       - |
-        for n in 16 24 32 48 64 128 256 512 1024; do
+        for n in 16 24 32 48 64 128 256 512; do
           install -Dm644 "data/icons/hicolor/${n}x${n}/apps/de.weppelmann.Crosspoint.png" \
             "/app/share/icons/hicolor/${n}x${n}/apps/de.weppelmann.Crosspoint.png"
         done

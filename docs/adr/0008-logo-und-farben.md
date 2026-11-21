@@ -73,6 +73,11 @@ Zeichen nicht hat.
 Punkte je Kante mit dickeren Balken bleiben erkennbar. Gerendert wird mit
 `resvg`, `rsvg-convert` oder ImageMagick — was zuerst da ist.
 
+In die Pakete kommen nur 16 bis 512 px. `hicolor` und AppStream kennen keine
+1024er Größe; der Flatpak-Export bricht sonst mit „Image too large
+(1024x1024). Max. size 512x512“ ab. Die 1024er Fassung bleibt als Vorlage für
+Laden und Dokumentation in `data/icons/hicolor/1024x1024`.
+
 `assets/crosspoint.pm` ist entfallen: das Raster beschreibt dieses Logo nicht,
 und ein Lauf von `apps/markenwerk` würde das alte Zeichen zurückbringen.
 
