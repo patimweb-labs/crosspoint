@@ -39,10 +39,14 @@ pub fn pos_db(pos: f32) -> f32 {
     DB_MIN + pos.clamp(0.0, 1.0) * (DB_MAX - DB_MIN)
 }
 
-/// Pegeltext mit einer Nachkommastelle; unterhalb der Skala `-oo`.
+/// Pegeltext mit einer Nachkommastelle; unterhalb der Skala `-inf`.
+///
+/// ASCII statt „-∞": das Zeichen steht in jeder Schrift, ist so breit wie
+/// eine Zahl und wird nicht als zwei Buchstaben „oo" gelesen (die alten
+/// Bildschirme schrieben es so, und es sah aus wie ein Wort).
 pub fn db_text(db: f32) -> String {
     if db <= DB_MIN + 0.05 {
-        "-oo".to_string()
+        "-inf".to_string()
     } else {
         format!("{db:.1}")
     }
@@ -115,8 +119,8 @@ mod tests {
     fn stille_bleibt_an_der_untergrenze() {
         assert_eq!(lin_to_db(0.0), DB_MIN);
         assert_eq!(lin_to_db(-1.0), DB_MIN);
-        assert_eq!(db_text(DB_MIN), "-oo");
-        assert_eq!(db_text(-59.96), "-oo");
+        assert_eq!(db_text(DB_MIN), "-inf");
+        assert_eq!(db_text(-59.96), "-inf");
     }
 
     #[test]
