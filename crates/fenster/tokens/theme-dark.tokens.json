@@ -45,13 +45,24 @@
     },
     "accent": {
       "default": {
+        "$value": "{color.cyan.400}"
+      },
+      "hover": {
+        "$value": "{color.cyan.300}"
+      },
+      "pressed": {
+        "$value": "{color.cyan.500}"
+      },
+      "deep": {
+        "$value": "{color.cyan.900}"
+      }
+    },
+    "signal": {
+      "default": {
         "$value": "{color.bernstein.400}"
       },
       "hover": {
         "$value": "{color.bernstein.300}"
-      },
-      "pressed": {
-        "$value": "{color.bernstein.500}"
       },
       "deep": {
         "$value": "{color.bernstein.900}"
@@ -70,7 +81,7 @@
     },
     "focus": {
       "ring": {
-        "$value": "{color.bernstein.400}"
+        "$value": "{color.cyan.400}"
       }
     }
   }

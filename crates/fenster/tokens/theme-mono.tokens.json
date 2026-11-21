@@ -45,16 +45,27 @@
     },
     "accent": {
       "default": {
-        "$value": "{color.grau.100}"
+        "$value": "{color.weiss.0}"
       },
       "hover": {
-        "$value": "{color.grau.200}"
+        "$value": "{color.weiss.0}"
       },
       "pressed": {
-        "$value": "{color.grau.250}"
+        "$value": "{color.grau.200}"
       },
       "deep": {
-        "$value": "{color.grau.250}"
+        "$value": "{color.grau.600}"
+      }
+    },
+    "signal": {
+      "default": {
+        "$value": "{color.grau.200}"
+      },
+      "hover": {
+        "$value": "{color.weiss.0}"
+      },
+      "deep": {
+        "$value": "{color.grau.400}"
       }
     },
     "status": {

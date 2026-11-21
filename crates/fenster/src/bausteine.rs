@@ -241,9 +241,11 @@ pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32)
         let seg_db = pos_db((i as f32 + 1.0) / PEGEL_SEGMENTE as f32);
         let y = r.bottom() - (i as f32 + 1.0) * seg_h;
         let farbe = if seg_db <= db {
+            // Oben am Anschlag wird das Signal bernsteinfarben – die Farbe des
+            // Kreuzungspunkts im Zeichen (ADR 0008).
             match segment_stufe(seg_db) {
-                Stufe::Spitze => f.status_warn,
-                Stufe::Laut => alpha(f.status_warn, 0.9),
+                Stufe::Spitze => f.signal_default,
+                Stufe::Laut => alpha(f.signal_default, 0.9),
                 Stufe::Normal => f.accent_default,
             }
         } else {
@@ -259,7 +261,7 @@ pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32)
         let y = r.top() + (1.0 - fader_pos(spitze)) * r.height();
         p.line_segment(
             [Pos2::new(r.left() + 1.0, y), Pos2::new(r.right() - 1.0, y)],
-            Stroke::new(1.5, alpha(f.text_default, 0.85)),
+            Stroke::new(1.5, alpha(f.signal_default, 0.9)),
         );
     }
 }
@@ -376,8 +378,10 @@ pub fn pan(ui: &mut Ui, f: &Farben, name: &str, breite: f32, pan: f32) -> (Respo
 /// Farbe eines eingeschalteten Schalters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Art {
-    /// Akzent (M, GATE, ECHO, Zuordnung).
+    /// Akzent (M, GATE, ECHO, Filterlämpchen).
     Akzent,
+    /// Zweites Signal, Bernstein: der Kreuzungspunkt der Zuordnung (ADR 0008).
+    Signal,
     /// Schrift auf Grund (S).
     Solo,
     /// Dunkler Akzent (MONO).
@@ -412,6 +416,7 @@ pub fn schalter_icon(
     let (flaeche, linie, schrift) = if an {
         match art {
             Art::Akzent => (f.accent_default, f.accent_default, f.text_on_accent),
+            Art::Signal => (f.signal_default, f.signal_default, f.text_on_accent),
             Art::Solo => (f.text_default, f.text_default, f.bg_canvas),
             Art::Tief => (f.accent_deep, f.accent_deep, f.text_default),
         }
@@ -729,51 +734,6 @@ impl Zeichen {
     }
 }
 
-/// Text mit gezeichnetem Zeichen davor (`● LAEUFT`, Marke `▪`).
-pub fn zeichen_text(
-    ui: &mut Ui,
-    text: &str,
-    font: FontId,
-    farbe: Color32,
-    zeichen_farbe: Color32,
-) -> Response {
-    let (zeichen, rest) = Zeichen::aus_text(text);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(rest.to_string(), font.clone(), farbe);
-    let kante = font.size * 0.6;
-    let luecke = if zeichen.is_some() && !rest.is_empty() {
-        thema::SPACE_1
-    } else {
-        0.0
-    };
-    let z_breite = if zeichen.is_some() {
-        kante + luecke
-    } else {
-        0.0
-    };
-    let groesse = Vec2::new(z_breite + galley.size().x, galley.size().y.max(kante));
-    let (rect, r) = ui.allocate_exact_size(groesse, Sense::hover());
-    r.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, rest));
-    if let Some(z) = zeichen {
-        z.malen(
-            ui.painter(),
-            Pos2::new(rect.left() + kante * 0.5, rect.center().y),
-            kante,
-            zeichen_farbe,
-        );
-    }
-    ui.painter().galley(
-        Pos2::new(
-            rect.left() + z_breite,
-            rect.center().y - galley.size().y * 0.5,
-        ),
-        galley,
-        farbe,
-    );
-    r
-}
-
 /// Text mit Icon davor (`LAEUFT`, `BEREIT`).
 pub fn icon_text(
     ui: &mut Ui,
@@ -943,7 +903,7 @@ pub fn segmentleiste(ui: &mut Ui, f: &Farben, db: f32, segmente: usize) {
         let seg_db = pos_db((i as f32 + 1.0) / segmente as f32);
         let spitze = i + 3 >= segmente;
         let farbe = match (seg_db <= db, spitze) {
-            (true, true) => f.status_warn,
+            (true, true) => f.signal_default,
             (true, false) => f.accent_default,
             _ => f.border_subtle,
         };

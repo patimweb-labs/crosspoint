@@ -161,7 +161,9 @@ fn inhalt(
             );
             let an = crate::state::send_an(&k.params, kanal, bus);
             ui.scope_builder(UiBuilder::new().max_rect(rb), |ui| {
-                let resp = bausteine::schalter(ui, f, bus_name, an, Art::Akzent, rb.size())
+                // An ist der Kreuzungspunkt Kanal → Bus: bernsteinfarben, das
+                // zweite Signal der Marke (ADR 0008).
+                let resp = bausteine::schalter(ui, f, bus_name, an, Art::Signal, rb.size())
                     .on_hover_text(format!("{name} → {}", *bus_name));
                 if resp.clicked() {
                     a.push(Aktion::Routing {
