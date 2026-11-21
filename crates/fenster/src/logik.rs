@@ -162,6 +162,27 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
             o.geraete = crate::modell::Geraete::Laedt;
             false
         }
+        Aktion::EchoGeraet { name, an } => {
+            // Die Auswahl ist eine Liste von Ausgabegeraeten; an- und abwaehlen
+            // aendert genau einen Eintrag, die anderen bleiben.
+            let mut liste = o.echo_geraete.clone();
+            liste.retain(|n| *n != name);
+            if an {
+                liste.push(name.clone());
+            }
+            o.meldung = match k.zuordner.echo(&liste) {
+                Ok(()) => {
+                    o.echo_geraete = liste;
+                    Meldung::Hinweis(format!(
+                        "Echo-Referenz: {}{}",
+                        geraete::kurzname(&name),
+                        if an { " an" } else { " aus" }
+                    ))
+                }
+                Err(e) => Meldung::Fehler(format!("Echo-Referenz: {e}")),
+            };
+            false
+        }
         Aktion::PresetName(n) => {
             o.preset_name = n;
             false
@@ -457,7 +478,6 @@ pub struct FilterWerte {
     pub gate_hold: f32,
     pub gate_release: f32,
     pub aec: bool,
-    pub aec_ref: usize,
 }
 
 pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
@@ -470,7 +490,6 @@ pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
         gate_hold: fget(&g.hold),
         gate_release: fget(&g.release),
         aec: an(&f.aec),
-        aec_ref: f.aec_ref.load(Relaxed) as usize,
     }
 }
 
@@ -684,6 +703,13 @@ mod tests {
             Ok(())
         }
         fn lautstaerke(&self, _: &str, _: Option<f32>, _: Option<bool>) -> Result<(), String> {
+            Ok(())
+        }
+        fn echo(&self, geraete: &[String]) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("echo={}", geraete.join(",")));
             Ok(())
         }
     }

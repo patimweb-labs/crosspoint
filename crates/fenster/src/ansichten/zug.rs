@@ -277,10 +277,8 @@ fn filter_knoepfe(
     if gate.secondary_clicked() {
         a.push(Aktion::Aufklappen(Some(Aufklapp::Gate(bus))));
     }
-    let echo = knopf(ui, rechts, "ECHO", fw.aec, Art::Akzent).on_hover_text(format!(
-        "Echounterdrückung · Boxen auf {} · Rechtsklick: Einstellungen",
-        BUS_NAMES[fw.aec_ref]
-    ));
+    let echo = knopf(ui, rechts, "ECHO", fw.aec, Art::Akzent)
+        .on_hover_text("PC-Ton aus dem Mikro herausrechnen (Echounterdrückung)");
     if echo.clicked() {
         a.push(setzen(ziel, "aec", schalter_wert(!fw.aec)));
     }
@@ -356,24 +354,33 @@ fn filter_menue(
                     }
                 }
                 Aufklapp::Echo(_) => {
-                    ui.label(bausteine::text(
-                        f,
-                        "ECHO · SYSTEMTON AUS DEM MIKROFON",
-                        false,
-                        true,
-                    ));
-                    ui.label(bausteine::text(f, "Boxen hängen an", false, false));
-                    ui.horizontal(|ui| {
-                        for (b, bus_name) in BUS_NAMES.iter().enumerate().take(ERSTER_VIRTUELLER) {
-                            if ui.selectable_label(fw.aec_ref == b, *bus_name).clicked() {
-                                a.push(setzen(ziel, "aec_ref", b as f32));
-                            }
+                    ui.label(bausteine::text(f, "ECHOUNTERDRÜCKUNG", false, true));
+                    ui.label(bausteine::text(f, "Was spielt auf:", false, false));
+                    let (senken, gewaehlt) = ausgabegeraete(o);
+                    if senken.is_empty() {
+                        ui.label(
+                            bausteine::text(f, "Kein Ausgabegerät gefunden.", false, true)
+                                .size(thema::FONT_SIZE_SM),
+                        );
+                    }
+                    for eintrag in senken {
+                        let an = gewaehlt.contains(&eintrag.name);
+                        let text = geraete::eintrag_text(&eintrag.anzeige, eintrag.fehlt);
+                        if ui
+                            .add(egui::Checkbox::new(&mut { an }, text))
+                            .on_hover_text(&eintrag.name)
+                            .clicked()
+                        {
+                            a.push(Aktion::EchoGeraet {
+                                name: eintrag.name.clone(),
+                                an: !an,
+                            });
                         }
-                    });
+                    }
                     ui.label(
                         bausteine::text(
                             f,
-                            "Was dieser Bus spielt, wird aus dem Mikrofon gerechnet.",
+                            "Der Ton dieser Geräte wird aus dem Mikrofon gerechnet.",
                             false,
                             true,
                         )
@@ -386,6 +393,28 @@ fn filter_menue(
     if !offen {
         a.push(Aktion::Aufklappen(None));
     }
+}
+
+/// Ausgabegeräte für das Echo-Menü: alle Sinks aus dem Bestand, dazu die
+/// gemerkten, die gerade fehlen. Zurück kommt (Liste, Auswahl).
+fn ausgabegeraete(o: &Oberflaeche) -> (Vec<geraete::Eintrag>, Vec<String>) {
+    let bestand = match &o.geraete {
+        crate::modell::Geraete::Fertig(b) => Some(b.as_ref()),
+        crate::modell::Geraete::Laedt => None,
+    };
+    let mut liste = bestand.map(|b| b.senken.clone()).unwrap_or_default();
+    // Gemerkte Geräte, die gerade nicht im Graphen stehen, bleiben sichtbar.
+    for name in &o.echo_geraete {
+        if liste.iter().any(|e| e.name == *name) {
+            continue;
+        }
+        liste.push(geraete::Eintrag {
+            name: name.clone(),
+            anzeige: geraete::kurzname(name),
+            fehlt: true,
+        });
+    }
+    (liste, o.echo_geraete.clone())
 }
 
 /// Trim/Delay des Master-Busses.

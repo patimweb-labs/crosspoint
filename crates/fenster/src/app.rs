@@ -58,6 +58,10 @@ impl Fenster {
     fn geraete(&mut self, ctx: &egui::Context, jetzt: Instant) {
         if let Some(rx) = &self.geraete_rx {
             while let Ok(b) = rx.try_recv() {
+                // Die Echo-Auswahl gehoert zum Kern (`echo.json`); der Bestand
+                // bringt sie mit, damit eine Änderung von außen (API) im Menü
+                // ankommt.
+                self.o.echo_geraete = b.echo.clone();
                 self.o.geraete = Geraete::Fertig(Box::new(b));
             }
         }

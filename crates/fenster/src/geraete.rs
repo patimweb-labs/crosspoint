@@ -76,6 +76,9 @@ pub struct Bestand {
     pub busse_lautstaerke: Vec<Option<Lautstaerke>>,
     /// Klartext der fehlenden Geraete (fuer die Hinweiszeile).
     pub fehlend: Vec<String>,
+    /// Ausgabegeraete, deren Ton aus dem Mikrofon gerechnet wird
+    /// (`echo.json` im Kern).
+    pub echo: Vec<String>,
     pub fehler: Option<String>,
 }
 
@@ -126,6 +129,8 @@ pub fn bestand_aus(
             fehlt: false,
         })
         .collect();
+
+    b.echo = crosspoint::echo::auswahl();
 
     // Gemerkte, aber fehlende Geraete: in die Liste aufnehmen und markieren.
     b.streifen_fehlt = streifen
@@ -212,6 +217,9 @@ pub trait Zuordner {
         volumen: Option<f32>,
         stumm: Option<bool>,
     ) -> Result<(), String>;
+    /// Echo-Referenz: die vollstaendige Liste der Ausgabegeraete, deren Ton
+    /// aus dem Mikrofon gerechnet wird (`echo.json` im Kern).
+    fn echo(&self, geraete: &[String]) -> Result<(), String>;
 }
 
 /// Der echte Weg in den Kern.
@@ -239,6 +247,14 @@ impl Zuordner for KernZuordner {
         // Derselbe Weg wie die Zuordnung: ein Auftrag an den Registry-Thread,
         // kein wpctl von aussen.
         Zugriff::lautstaerke_setzen(&PipeWire::new(), senke, volumen, stumm)
+    }
+
+    fn echo(&self, geraete: &[String]) -> Result<(), String> {
+        match crosspoint::echo::setzen(&PipeWire::new(), geraete) {
+            Ok(fehler) if fehler.is_empty() => Ok(()),
+            Ok(fehler) => Err(fehler.join("; ")),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -339,6 +355,13 @@ mod tests {
                 .push(format!("lautstaerke {senke} {:?} {:?}", volumen, stumm));
             Ok(())
         }
+
+        fn echo(&self, geraete: &[String]) -> Result<(), String> {
+            self.aufrufe
+                .borrow_mut()
+                .push(format!("echo {}", geraete.join(",")));
+            Ok(())
+        }
     }
 
     #[test]
@@ -395,6 +418,9 @@ mod tests {
             ) -> Result<(), String> {
                 Err("Knoten nicht im Graph".into())
             }
+            fn echo(&self, _g: &[String]) -> Result<(), String> {
+                Err("Monitor nicht im Graph".into())
+            }
         }
         let e = auswahl_anwenden(&Kaputt, Ziel::Bus("A1"), KEIN_AUSGANG).unwrap_err();
         assert!(e.contains("Sink"));
@@ -404,6 +430,7 @@ mod tests {
             .lautstaerke("x", Some(1.0), Some(false))
             .unwrap_err()
             .contains("Knoten"));
+        assert!(Kaputt.echo(&[]).unwrap_err().contains("Monitor"));
     }
 
     #[test]

@@ -30,6 +30,9 @@ impl Zuordner for OhnePipeWire {
     fn lautstaerke(&self, _: &str, _: Option<f32>, _: Option<bool>) -> Result<(), String> {
         Ok(())
     }
+    fn echo(&self, _: &[String]) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn eintrag(name: &str, anzeige: &str) -> Eintrag {
@@ -177,6 +180,46 @@ fn hand_ueber_klickbarem_pfeil_sonst() {
     }
     h.get_by_label("Mikro Fader dB").hover();
     assert_eq!(zeiger(&mut h), egui::CursorIcon::ResizeVertical, "Fader");
+}
+
+#[test]
+fn echo_menue_waehlt_ausgabegeraete_aus() {
+    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    let (f, _) = beispiel(Thema::Dunkel);
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    // Rechtsklick auf ECHO oeffnet die Auswahl (nur an B1..B3).
+    h.get_all_by_label("ECHO")
+        .next()
+        .expect("ECHO")
+        .click_secondary();
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("ECHOUNTERDRÜCKUNG").is_some(),
+        "Menütitel fehlt"
+    );
+    assert!(h.query_by_label("Was spielt auf:").is_some());
+    assert!(
+        h.query_by_label("Lautsprecher").is_some(),
+        "Ausgabegerät fehlt"
+    );
+    // Häkchen setzen: genau dieses Gerät kommt in die Auswahl.
+    h.get_by_label("Lautsprecher").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().o.echo_geraete,
+        vec!["alsa_output.pci-0000_00_1f.3.analog-stereo".to_string()]
+    );
+    // Noch einmal klicken nimmt es wieder heraus; die anderen bleiben.
+    let mut h = h;
+    h.get_by_label("Lautsprecher").click();
+    h.run_steps(3);
+    assert!(h.state().o.echo_geraete.is_empty());
+    // Das Menü bleibt offen (kein Schließen beim Ankreuzen).
+    assert!(h.query_by_label("ECHOUNTERDRÜCKUNG").is_some());
+    // Und der Titel der Aktion bleibt die Summe in `Aufklapp`.
+    assert_eq!(h.state().o.offen, Some(Aufklapp::Echo(5)));
+    let _ = Aktion::Aufklappen(None);
 }
 
 #[test]

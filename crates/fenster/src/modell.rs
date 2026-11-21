@@ -200,6 +200,10 @@ pub struct Oberflaeche {
     pub midi: Option<MidiDialog>,
     /// Autostart-Eintrag vorhanden (beim Öffnen der Darstellung gelesen).
     pub autostart: bool,
+    /// Ausgabegeräte, deren Ton aus dem Mikrofon gerechnet wird
+    /// (`echo.json` im Kern). Wird beim Laden des Bestands und nach jeder
+    /// Änderung nachgeführt.
+    pub echo_geraete: Vec<String>,
 }
 
 impl Default for Oberflaeche {
@@ -223,6 +227,7 @@ impl Default for Oberflaeche {
             vban: None,
             midi: None,
             autostart: false,
+            echo_geraete: crosspoint::echo::auswahl(),
         }
     }
 }
@@ -262,6 +267,11 @@ pub enum Aktion {
     Geraet {
         ziel: Ziel,
         name: Option<String>,
+    },
+    /// Ausgabegerät als Echo-Referenz an- oder abwählen.
+    EchoGeraet {
+        name: String,
+        an: bool,
     },
     PresetName(String),
     PresetSpeichern,
