@@ -33,10 +33,14 @@ install -Dm755 scripts/crosspoint-launch.sh "$stufe/usr/bin/crosspoint-launch"
 install -Dm755 scripts/crosspoint-wire.sh "$stufe/usr/bin/crosspoint-wire.sh"
 install -Dm644 packaging/linux/$ID.desktop "$stufe/usr/share/applications/$ID.desktop"
 install -Dm644 packaging/linux/$ID.metainfo.xml "$stufe/usr/share/metainfo/$ID.metainfo.xml"
-for n in 16 32 48 64 128 256 512; do
+for n in 16 24 32 48 64 128 256 512 1024; do
   install -Dm644 "data/icons/hicolor/${n}x${n}/apps/$ID.png" \
     "$stufe/usr/share/icons/hicolor/${n}x${n}/apps/$ID.png"
 done
+install -Dm644 "data/icons/hicolor/scalable/apps/$ID.svg" \
+  "$stufe/usr/share/icons/hicolor/scalable/apps/$ID.svg"
+install -Dm644 "data/icons/symbolic/apps/$ID-symbolic.svg" \
+  "$stufe/usr/share/icons/symbolic/apps/$ID-symbolic.svg"
 install -Dm644 LICENSE "$stufe/usr/share/doc/crosspoint/LICENSE"
 # IBM Plex ist im Fenster eingebettet (die OFL verlangt die Beilage).
 install -Dm644 crates/fenster/schriften/OFL.txt "$stufe/usr/share/doc/crosspoint/IBM-Plex-OFL.txt"
