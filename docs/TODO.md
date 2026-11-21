@@ -70,29 +70,32 @@ Nachgezogen am 2026-11-15:
 
 ## 3. Effekte
 
-- [ ] **LV2-Inserts über mod-host**: je Streifen und Bus ein Insert-Slot,
+- [x] **LV2-Inserts über mod-host** (2026-11-17: Insert-Ports je Streifen/Bus,
+      Ketten verkabelt, Plugin-Verzeichnis ohne lilv, Editor im FX-Menü): je Streifen und Bus ein Insert-Slot,
       mod-host als betreuter Kindprozess (Socket 5555), Plugin-Liste aus
       `lv2ls`, Zustand im Preset.
       Abnahme: Kompressor-Plugin geladen, Pegel vor/nach messbar.
-- [ ] **Carla als VST-Brücke** (optional, nur wenn installiert): Erkennung,
+- [x] **Carla als VST-Brücke** (2026-11-17: Erkennung, Start-Knopf, Verkabelung
+      von Hand über die Insert-Ports; Insert wird aktiv, sobald der Rückweg steht) (optional, nur wenn installiert): Erkennung,
       Start, Rack je Streifen, Parameter über OSC; im UI als „externer Host"
       gekennzeichnet. VST2/VST3 laufen dort, nicht in Crosspoint.
       Abnahme: Carla-Rack mit einem VST, Signal läuft durch den Streifen.
 
 ## 4. Parität zum Original (aus `docs/04-abgleich-original.md`)
 
-- [ ] Intellipan / Voice Color (`paneltype`, `Panel3Dx/y`, `ColorPanel*`)
-- [ ] Sends `R`, `D`, `Fx1`, `Fx2` mit Pre/Post-Schalter
-- [ ] Bus-Returns `retR`, `retD`, `retFx1`, `retFx2`
-- [ ] `SEL` und `monitor` je Bus
-- [ ] FX-Preset-Programme `prg_c`, `prg_g`, `prg_d`
-- [ ] `vaio` — Bus als eigenes virtuelles Gerät
-- [ ] `muc`, `karaoke`, `stripmode`, `greenmode`
+- [x] Voice Color als `farbe` (Kippfilter ±6 dB); Pan bleibt der Pan-Regler,
+      ein 2D-Feld wie im Original gibt es nicht
+- [x] Sends `R`, `D`, `Fx1`, `Fx2` mit Pre/Post-Schalter (Hall und Echo eingebaut)
+- [x] Bus-Returns `retR`, `retD`, `retFx1`, `retFx2`
+- [x] `SEL` (im Modell, Master folgt) und `monitor` (A1 hört den Bus ab)
+- [x] Programme `prg_c`, `prg_g`, `prg_d` (5/4/4 Programme)
+- [x] `vaio` — A1–A5 zusätzlich als virtuelles Gerät
+- [x] `muc`, `karaoke`, `greenmode` (`green`); `stripmode` bleibt offen:
+      Bedeutung im Original nicht belegt, nichts erfunden
 
 ## 5. Verpackung und Vertrieb
 
-- [ ] **macOS**: CoreAudio-Backend statt JACK, `.dmg`-Job, Signierung
-      (ohne Signatur „Right-click → Open" dokumentieren)
+- [~] **macOS**: gestrichen (2026-11-17) – Crosspoint bleibt ein Linux-Werkzeug
 - [ ] **Flathub-Einreichung**: Metainfo ist da, Screenshots im Repo,
       Einreichung als PR gegen `flathub/flathub`
 - [x] **Host-Betrieb ohne Flatpak** ebenfalls nativ: `crosspoint-launch.sh`

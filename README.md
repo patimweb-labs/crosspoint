@@ -36,9 +36,25 @@ keine Konten, keine Cloud-Verbindung. Konfiguration und Presets liegen unter
 ## Signalkette
 
 ```
-Streifen 1..8:  Eingang → 6-Band-EQ → Compressor → Gate → Denoiser → Gain → Pan → Routing
-Busse A1..A5 / B1..B3:  Summe → Limiter → Delay je Kanal → Trim → Gain/Mute → Ausgang
+Streifen 1..8:  Eingang → Mono → Karaoke/MC → Lowcut → TK → Gate → NR → EQ → Klangfarbe
+                → Compressor → Denoiser → [Insert] → Fader → Pan → Routing + Sends (Hall, Echo, FX1, FX2)
+Busse A1..A5 / B1..B3:  Summe + Effekt-Returns → Mono/Modus → EQ → [Insert] → Limiter → C5
+                → Delay je Kanal → Trim → Gain/Mute → Ausgang (A1 wahlweise: abgehörter Bus)
 ```
+
+**Effekte.** Jeder Streifen hat vier Sends (vor oder hinter dem Fader): Hall und
+Echo rechnet Crosspoint selbst, FX1/FX2 gehen über die Ports `fx1_L/R` →
+`fx1_ret_L/R` an einen beliebigen JACK-Effekt. Wo die Effekte ankommen, regeln
+die Returns je Bus (ab Werk A1). Dazu je Streifen und Bus ein **Insert-Weg**
+(`strip1_ins_L/R` → Effekt → `strip1_ret_L/R`): LV2-Ketten über mod-host
+verkabelt Crosspoint selbst, VST läuft über Carla. Ohne verbundenen Rückweg geht
+das Signal direkt durch – ein Insert macht nie stumm. Bedienung: Knopf **FX** am
+Kanal bzw. Bus, Fenster **EFFEKTE** in der Kopfleiste.
+
+**Weiter je Kanal:** Klangfarbe (Tiefen/Höhen gegeneinander), Karaoke (Stimme weg
+/ nur Mitte), Mitte stumm, Green Mode (Bearbeitung umgehen), Programme für
+Compressor, Gate und NR. **Je Bus:** auf A1 abhören, A1–A5 zusätzlich als
+virtuelles Gerät (`CROSSPOINT-Output-A2` …), Green Mode. Alles steht im Preset.
 
 Herleitung und Belege der Parameternamen: `docs/02-signalmodell.md`,
 `docs/03-ghidra-app.md`, `docs/04-abgleich-original.md`. Die dort untersuchte
@@ -269,6 +285,9 @@ vorhanden, ein Rückfall auf PulseAudio ist nicht nötig.
   Compressor, Gate, Limiter und Denoiser sind Standard-Implementierungen mit den
   Original-Parametern — klanglich nah, nicht bitgleich.
 - Pitch/Formant ist im Modell vorhanden, aber **nicht** verarbeitet (kein Pitch-Shifter).
-- Bus-Mix-Modi (Upmix/Downmix/Composite) sind als Modell vorhanden, aber nicht umgesetzt.
+- Busse sind stereo: Upmix 2.1/4.1/6.1 liefern die Monosumme auf beiden Kanälen.
+- LV2-Inserts brauchen `mod-host` (nicht in Fedora, aus dem Quellcode bauen);
+  ohne ihn werden Ketten nur gespeichert. Inserts und FX1/FX2 kosten eine
+  PipeWire-Periode Latenz (der Weg hinaus und zurück ist eine Schleife im Graphen).
 - Keine Latenz-Optimierung: die Engine erbt die PipeWire-Quantum (hier 1024 Frames ≈ 21 ms).
 - Nicht getestet: PipeWire-Neustart im Betrieb, mehrere Instanzen, Ratenwechsel.
