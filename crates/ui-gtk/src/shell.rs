@@ -607,6 +607,13 @@ impl Shell {
                 crate::dialogs::midi_fenster(&this2.fenster);
             });
         }
+        let effekte = bauen("EFFEKTE");
+        {
+            let this2 = Rc::clone(this);
+            effekte.connect_clicked(move |_| {
+                crate::fxui::effekte_fenster(&this2.fenster, this2.params.clone());
+            });
+        }
         let darstellung = bauen("DARSTELLUNG");
         {
             let this2 = Rc::clone(this);
@@ -615,6 +622,7 @@ impl Shell {
             });
         }
         kopf.append(&presets);
+        kopf.append(&effekte);
         kopf.append(&vban);
         kopf.append(&midi);
         kopf.append(&darstellung);
@@ -766,6 +774,7 @@ impl Shell {
                 })),
                 bus_waehlen: None,
                 pegel: Some(this.pegel.clone()),
+                inserts: Some(Shell::insert_oeffner(this)),
             };
             let z = strip::zug(
                 this.params.clone(),
@@ -798,6 +807,7 @@ impl Shell {
                 eq_editor: None,
                 bus_waehlen: Some(waehler.clone()),
                 pegel: Some(this.pegel.clone()),
+                inserts: Some(Shell::insert_oeffner(this)),
             };
             let z = strip::zug(
                 this.params.clone(),
@@ -856,11 +866,24 @@ impl Shell {
     /// Entspricht `selectBus(i)` im Web: Auswahl merken, Master-Felder mit den
     /// Werten dieses Busses fuellen, Buszuege markieren.
     fn bus_waehlen(this: &Rc<Shell>, i: usize) {
+        // Die Wahl steht im Modell (`bus.sel`): OSC, Presets und die
+        // Web-Oberflaeche sehen dieselbe Auswahl.
+        this.params.set("bus", i, "sel", 1.0);
         this.master.bus_setzen(i);
         for z in this.zuege.borrow().iter() {
             (z.sync)();
             z.view.queue_draw();
         }
+    }
+
+    /// Oeffnet den Insert-Editor eines Kanals (aus dem FX-Menue).
+    fn insert_oeffner(this: &Rc<Shell>) -> std::rc::Rc<dyn Fn(crosspoint::fx::Ziel)> {
+        let schwach = Rc::downgrade(this);
+        std::rc::Rc::new(move |ziel| {
+            if let Some(s) = schwach.upgrade() {
+                crate::fxui::insert_fenster(&s.fenster, s.params.clone(), ziel);
+            }
+        })
     }
 
     /// Callback-Version fuer `ZugUmfeld` (der Zug kennt die Shell nicht).
@@ -1325,6 +1348,11 @@ impl Shell {
                 this2.takt.audio_aktiv.store(false, Ordering::Relaxed);
             }
 
+            // Bus-Auswahl folgt dem Modell (z. B. nach Preset oder OSC).
+            let sel = this2.params.sel_bus();
+            if sel != this2.master.bus() {
+                this2.master.bus_setzen(sel);
+            }
             for z in this2.zuege.borrow().iter() {
                 z.view.ticken();
                 (z.sync)();

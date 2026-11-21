@@ -1285,6 +1285,8 @@ pub struct ZugUmfeld {
     pub bus_waehlen: Option<std::rc::Rc<dyn Fn(usize)>>,
     /// Pegelbank des Kerns (die Anzeige liest direkt daraus).
     pub pegel: Option<Arc<crosspoint::pegel::Pegelbank>>,
+    /// Oeffnet den Insert-Editor eines Kanals (FX-Menue → PLUGINS …).
+    pub inserts: Option<std::rc::Rc<dyn Fn(crosspoint::fx::Ziel)>>,
 }
 
 pub struct Zug {
@@ -1778,6 +1780,40 @@ pub fn zug(
     } else {
         None
     };
+    // FX: Sends, Klang, Karaoke, Green Mode und Insert (Kanal) bzw. Returns,
+    // Abhoeren, vaio, Green Mode und Insert (Bus). Klick oeffnet das Menue;
+    // ist dort etwas eingestellt, traegt der Knopf die Klasse `belegt`.
+    let fx_knopf = match rolle {
+        Rolle::Kanal(_) | Rolle::Bus(_) => {
+            let b = gtk::Button::with_label("FX");
+            b.add_css_class("knopf");
+            b.add_css_class("fx");
+            b.set_hexpand(true);
+            b.set_tooltip_text(Some(match rolle {
+                Rolle::Kanal(_) => "Effekt-Sends, Klangfarbe, Karaoke, Green Mode, Insert",
+                _ => "Effekt-Returns, Abhoeren, virtuelles Geraet, Green Mode, Insert",
+            }));
+            let pop = gtk::Popover::new();
+            pop.set_parent(&b);
+            pop.add_css_class("stufenmenue");
+            let p = params.clone();
+            let inserts: std::rc::Rc<dyn Fn(crosspoint::fx::Ziel)> = umfeld
+                .inserts
+                .clone()
+                .unwrap_or_else(|| std::rc::Rc::new(|_| {}));
+            b.connect_clicked(move |_| {
+                let inhalt = match rolle {
+                    Rolle::Kanal(i) => crate::fxui::streifen_menue(&p, i, inserts.clone()),
+                    Rolle::Bus(i) => crate::fxui::bus_menue(&p, i, inserts.clone()),
+                    Rolle::Master => return,
+                };
+                pop.set_child(Some(&inhalt));
+                pop.popup();
+            });
+            Some(b)
+        }
+        Rolle::Master => None,
+    };
 
     {
         let p = params.clone();
@@ -1977,6 +2013,10 @@ pub fn zug(
     if let (Some(b), true) = (&mono, mono_breit) {
         let (x, y) = naechster_platz();
         knopf_zeile.attach(b, x, y, 2 - x, 1);
+        // Volle Breite belegt auch die zweite Zelle der Reihe.
+        if x == 0 {
+            naechster_platz();
+        }
     }
     if let Some(b) = &trim_knopf {
         let (x, y) = naechster_platz();
@@ -2000,9 +2040,14 @@ pub fn zug(
         knopf_zeile.attach(b, x, y, 1, 1);
     }
     if let Some(b) = &comp_knopf {
-        // COMP bekommt eine eigene Reihe ueber die volle Breite.
+        // COMP und FX teilen sich die letzte Reihe.
         let (x, y) = naechster_platz();
-        knopf_zeile.attach(b, x, y, 2 - x, 1);
+        knopf_zeile.attach(b, x, y, 1, 1);
+    }
+    if let Some(b) = &fx_knopf {
+        let (x, y) = naechster_platz();
+        // Am Bus steht FX allein in seiner Reihe (volle Breite).
+        knopf_zeile.attach(b, x, y, if rolle.ist_kanal() { 1 } else { 2 - x }, 1);
     }
     box_.append(&knopf_zeile);
 
@@ -2077,10 +2122,25 @@ pub fn zug(
         let nr = nr.clone();
         let gate_knopf = gate_knopf.clone();
         let comp_knopf = comp_knopf.clone();
+        let fx_knopf = fx_knopf.clone();
         let lc_zelle = lc_zelle.clone();
         let nr_zelle = nr_zelle.clone();
         let m = master.clone();
         std::rc::Rc::new(move || {
+            if let Some(b) = &fx_knopf {
+                let belegt = match r {
+                    Rolle::Kanal(i) => p.strips[i].fx_belegt(),
+                    Rolle::Bus(i) => p.buses[i].fx_belegt(),
+                    Rolle::Master => false,
+                };
+                if b.has_css_class("belegt") != belegt {
+                    if belegt {
+                        b.add_css_class("belegt");
+                    } else {
+                        b.remove_css_class("belegt");
+                    }
+                }
+            }
             let (ziel, idx) = r.ziel();
             let name = if ziel == "master" {
                 // Wie im Web traegt der Master den Namen des gewaehlten
@@ -2219,7 +2279,7 @@ den aktuellen Wert (gesetzt in `sync`).
 ================================================================== */
 
 /// Wert eines Atoms als f32.
-fn f32_von(a: &AtomicU32) -> f32 {
+pub(crate) fn f32_von(a: &AtomicU32) -> f32 {
     f32::from_bits(a.load(Ordering::Relaxed))
 }
 
@@ -2313,7 +2373,7 @@ fn stufenmenue(knopf: &gtk::ToggleButton, bauen: impl Fn() -> gtk::Box + 'static
 }
 
 /// Schliesst das Popover, in dem `w` steckt (nach einer Auswahl).
-fn menue_zu(w: &impl IsA<gtk::Widget>) {
+pub(crate) fn menue_zu(w: &impl IsA<gtk::Widget>) {
     let oben: gtk::Widget = w.clone().upcast();
     if let Some(p) = oben
         .ancestor(gtk::Popover::static_type())
@@ -2324,7 +2384,7 @@ fn menue_zu(w: &impl IsA<gtk::Widget>) {
 }
 
 /// Eine Zeile „Titel + Wert" mit Schieberegler darunter.
-fn schieber(
+pub(crate) fn schieber(
     titel: &str,
     min: f64,
     max: f64,
@@ -2352,7 +2412,7 @@ fn schieber(
     (kasten, s, w)
 }
 
-fn kopfzeile(text: &str) -> gtk::Label {
+pub(crate) fn kopfzeile(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
     l.set_xalign(0.0);
     l.add_css_class("stufen-kopf");
@@ -2392,6 +2452,11 @@ fn nr_menue(p: &Arc<Params>, index: usize, staerke: std::rc::Rc<Cell<f32>>) -> g
     let kasten = gtk::Box::new(gtk::Orientation::Vertical, 5);
     kasten.add_css_class("stufenmenue");
     kasten.append(&kopfzeile("RAUSCHUNTERDRUECKUNG"));
+    kasten.append(&crate::fxui::programmwahl(
+        p,
+        index,
+        crosspoint::programme::Modul::Rauschen,
+    ));
 
     let st = nr_wert(p, index);
     let (k1, s1, w1) = schieber("Staerke", 0.0, 100.0, 10.0, st as f64 * 100.0, "");
@@ -2533,6 +2598,11 @@ fn gate_menue(p: &Arc<Params>, index: usize) -> gtk::Box {
     let kasten = gtk::Box::new(gtk::Orientation::Vertical, 5);
     kasten.add_css_class("stufenmenue");
     kasten.append(&kopfzeile("GATE · STILLE UNTER DER SCHWELLE"));
+    kasten.append(&crate::fxui::programmwahl(
+        p,
+        index,
+        crosspoint::programme::Modul::Gate,
+    ));
 
     let g = &p.strips[index].gate;
     let sch = f32_von(&g.threshold);
@@ -2671,6 +2741,11 @@ fn comp_menue(p: &Arc<Params>, index: usize) -> gtk::Box {
     let kasten = gtk::Box::new(gtk::Orientation::Vertical, 5);
     kasten.add_css_class("stufenmenue");
     kasten.append(&kopfzeile("COMP · KOMPRESSOR"));
+    kasten.append(&crate::fxui::programmwahl(
+        p,
+        index,
+        crosspoint::programme::Modul::Comp,
+    ));
     for r in &COMP_REGLER {
         let wert = comp_wert(p, index, r.param);
         let (k, s, w) = schieber(r.titel, r.min, r.max, r.schritt, wert as f64, r.einheit);

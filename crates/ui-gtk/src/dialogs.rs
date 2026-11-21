@@ -14,6 +14,12 @@ use crate::layout::{Bereich, Dichte, MasterPlatz, Seite};
 use crate::shell::Shell;
 use crosspoint::engine::Params;
 
+/// Kopfzeile eines Dialogs (Titel, Unterzeile, SCHLIESSEN) – auch fuer die
+/// Fenster aus anderen Modulen.
+pub(crate) fn kopf(fenster: &gtk::Window, titel: &str, unter: &str) -> gtk::Widget {
+    fenster_kopf(fenster, titel, unter)
+}
+
 fn fenster_kopf(fenster: &gtk::Window, titel: &str, unter: &str) -> gtk::Widget {
     let kopf = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     kopf.add_css_class("dialogkopf");

@@ -25,6 +25,7 @@ pub mod config;
 pub mod dialogs;
 pub mod draw;
 pub mod fmt;
+pub mod fxui;
 pub mod geraete;
 pub mod layout;
 pub mod midimonster;

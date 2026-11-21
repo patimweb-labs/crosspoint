@@ -517,6 +517,11 @@ button.knopf.lc:checked, button.knopf.tk:checked, button.knopf.nr:checked, butto
     border-color: {akzent};
 }}
 
+/* FX: etwas eingestellt (Send offen, Klang, Insert …) – Umriss im Akzent,
+   damit der Knopf nicht wie ein eingeschalteter Schalter aussieht. */
+button.knopf.fx.belegt {{ border-color: {akzent}; color: {akzent}; }}
+.insertzeile {{ border-bottom: 1px solid {linie}; padding-bottom: 4px; }}
+
 /* Popover der drei Stufen */
 .stufenmenue {{ padding: 6px; }}
 .stufen-kopf {{
