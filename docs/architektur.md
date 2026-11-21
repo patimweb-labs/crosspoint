@@ -129,28 +129,73 @@ Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
   zeigt die Leiste nur ihre Kopfzeile. Wählbar bleiben Theme und Zahl der
   Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
 
-## Plattformen: nur Linux
+## Plattformen: Linux ausgeliefert, macOS im Unterbau
 
-Ausgeliefert wird als Flatpak, AppImage und tar.gz (ADR 0004) – damit ist
+Ausgeliefert wird heute als Flatpak, AppImage und tar.gz (ADR 0004) – damit ist
 jede Distribution mit PipeWire abgedeckt, ohne je Distribution ein eigenes
-Paket zu pflegen.
+Paket zu pflegen. macOS ist seit 2026-11-21 **geplant und beschlossen**
+([ADR 0010](adr/0010-macos-unterbau.md), [plan-macos.md](plan-macos.md)), aber
+noch nicht gebaut: entschieden ist der Unterbau, nicht das Ausliefern.
 
-### Warum nicht Windows oder macOS
+### Zwei Grenzen statt einer Portierung
+
+PipeWire lässt sich nicht portieren, der Mixer schon. Der Kern bekommt deshalb
+zwei Traits, hinter denen je eine Plattform sitzt:
+
+```
+crates/fenster     kennt nur Modell, Aktionen und Umgebung (als Daten)
+     │
+crates/core
+     ├── AudioBackend    ein Callback, 18 Puffer je Block
+     └── GeraeteBackend  welche Geräte, welcher Bus wohin, Echo-Referenz
+              │                       │
+      JACK + PipeWire            Core Audio
+      (heute, Linux)             (neu, macOS)
+```
+
+Gewählt wird in `src/` (Kompositionswurzel), **nie** im Fenster: AGENTS.md §2.10
+gilt hier wörtlich, `crates/fenster` bekommt kein `cfg(target_os)`, sondern eine
+`Umgebung` im Modell. `cfg` bleibt nur in `Cargo.toml`, wo Cargo es erzwingt.
+
+Die Naht ist schon da: `EngineDsp::process(&Params, &Io, frames)` bekommt 18
+rohe Pufferzeiger und weiß nichts von einem Audio-Server. `Zugriff`
+(`crates/core/src/pw.rs`) ist der Keim des Geräte-Backends und wandert nach
+`core/src/backend/geraete.rs`. Zusammen sind das 24–40 h – und sie lohnen auch
+ohne macOS, weil danach Tests ohne PipeWire laufen.
+
+### Warum nicht Windows
 
 Entschieden am 2026-10-29 nach Aufwandsmessung (`wc -l` über den Code).
 
-**Windows: nicht geplant.** Der Mixer selbst wäre portierbar (≈19 % des Kerns
+**Windows: nicht geplant.** Der Mixer selbst wäre portierbar (≈20 % des Kerns
 ist plattformnah, DSP/VBAN/OSC/HTTP sind plattformneutral), aber virtuelle
 Geräte — also genau das, was einen VoiceMeeter-Ersatz ausmacht — brauchen einen
 **signierten Kernel-Treiber**: 400–800 h Arbeit plus EV-Zertifikat
 (300–700 €/Jahr). Ein Pult ohne virtuelle Kabel (120–200 h) löst den
-Anwendungsfall „Programm X auf Kanal 3" nicht und wäre damit kein Ersatz.
+Anwendungsfall „Programm X auf Kanal 3" nicht und wäre damit kein Ersatz. Die
+Grenze aus ADR 0010 macht es später leichter, entscheidet aber nichts darüber.
 
-**macOS: nicht geplant, aber machbar.** Kein Treiber nötig (Audio Taps ab
-macOS 13), aber CoreAudio-Backend, Taps, `.app`, Notarisierung (99 €/Jahr) und
-Testhardware ergeben 170–240 h. Nur sinnvoll mit einem Mac zum Belegen und
-einer Gruppe, die es vermisst.
+### macOS (ADR 0010)
 
-**Regel für später:** Wer die Portierung wieder aufbringt, beginnt mit dem
-Audio-Backend allein (60–80 h) und entscheidet erst danach über Oberfläche und
-Geräte-Routing. Nicht mit dem Treiber anfangen — daran sterben solche Projekte.
+Kein Kernel-Treiber: virtuelle Geräte sind ein userspace *Audio Server Plug-in*
+in `/Library/Audio/Plug-Ins/HAL`, gebaut mit `libASPL`, das mit der App über
+Shared Memory und zwei lock-freie Ringpuffer spricht. Audio läuft über die
+Core-Audio-HAL-API (`objc2-core-audio`, nicht `cpal` – cpal verbirgt Aggregat-
+Geräte und IOProc). Die **Echo-Referenz** aus ADR 0005 wird auf macOS nicht aus
+Monitor-Ports gebaut, sondern aus einem globalen **Core-Audio-Tap**
+(`AudioHardwareCreateProcessTap`, ab **macOS 14.2**) – das ist näher am
+Original als der PipeWire-Weg, weil ein Gerät keinen Monitor haben muss. Die
+frühere Notiz „Audio Taps ab macOS 13" war zu früh.
+
+Aufwand **180–286 h** in sechs Schritten, jeder einzeln lauffähig; ohne eigenes
+Plugin 120–186 h. Dazu 99 €/Jahr Developer Program und Testhardware. Die Zahl
+liegt über den früher genannten 170–240 h, weil dort die Trait-Grenze (a) und
+der Ersatz für `echo.rs` (e) fehlten. Risiko: das Plugin läuft im `coreaudiod`,
+ein Absturz dort nimmt den Ton des ganzen Macs mit.
+
+### Regel für später
+
+Wer die Portierung aufbringt, beginnt **nicht** mit dem Treiber und nicht mit
+der Oberfläche, sondern mit der Grenze: erst `AudioBackend` und
+`GeraeteBackend` einziehen, Linux unverändert grün, dann ein zweites Backend
+dahinter. Erst danach virtuelle Geräte. Daran sterben solche Projekte.
