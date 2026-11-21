@@ -2,10 +2,10 @@
 //!
 //! Ein zaehlender Allokator umhuellt das ganze Testprogramm. Gemessen wird
 //! nur das Fenster um `EngineDsp::process` – Aufbau, Presets und Puffer
-//! entstehen vorher. Im Fenster sind Gate und Echounterdrückung (AEC3 aus
-//! `sonora`) an allen virtuellen Bussen aktiv, mit einer echten Referenz auf
-//! `echo_ref_L/R`: alle Puffer liegen im DSP-Zustand, `process` baut kein Vec
-//! und ruft kein `format!`.
+//! entstehen vorher. Im Fenster ist die **ganze Filterkette** an allen
+//! virtuellen Bussen aktiv (LC, ECHO, NR, Gate, COMP, AGC, Limiter, DUCK, PTT),
+//! mit einer echten Referenz auf `echo_ref_L/R`: alle Puffer liegen im
+//! DSP-Zustand, `process` baut kein Vec und ruft kein `format!`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,15 +48,36 @@ fn process_allokiert_nichts() {
     const BLOCK: usize = 1024;
 
     let p = std::sync::Arc::new(Params::new(48000.0, BLOCK as u32));
-    // Alles an, was Puffer brauchen koennte: Gate, Echounterdrückung und
-    // Rauschunterdrückung an allen virtuellen Bussen, Mikro (Streifen 1) und
-    // Systemton (Streifen 6) auf A1 und B1..B3.
+    // Alles an, was rechnen oder Puffer brauchen koennte: die ganze Kette an
+    // allen virtuellen Bussen, Mikro (Streifen 1) und Systemton (Streifen 6)
+    // auf A1 und B1..B3.
     for bus in 5..8 {
         for (k, v) in [
+            ("lc", 1.0),
+            ("lc_freq", 80.0),
+            ("aec", 1.0),
+            ("nr", 1.0),
+            ("nr_stufe", 2.0),
             ("gate", 1.0),
             ("gate_schwelle", -45.0),
-            ("aec", 1.0),
-            ("aec_ns", 1.0),
+            ("comp", 1.0),
+            ("comp_schwelle", -20.0),
+            ("comp_ratio", 4.0),
+            ("comp_attack", 1.0),
+            ("comp_release", 100.0),
+            ("comp_makeup", 3.0),
+            ("limiter", 1.0),
+            ("limiter_decke", -1.0),
+            ("agc", 1.0),
+            ("agc_ziel", -12.0),
+            ("duck", 1.0),
+            ("duck_ziel", 0.0),
+            ("duck_tiefe", 12.0),
+            ("duck_schwelle", -30.0),
+            ("duck_attack", 5.0),
+            ("duck_release", 100.0),
+            ("ptt", 1.0),
+            ("ptt_offen", 1.0),
         ] {
             assert!(p.set("bus", bus, k, v), "Parameter {k} an Bus {bus}");
         }
