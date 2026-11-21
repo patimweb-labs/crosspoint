@@ -42,9 +42,17 @@ Rahmen:
 * Reicht die Fensterhöhe nicht (viele Geräte in der ECHO-Karte), kommt eine
   Spalte dazu – lieber schmaler als abgeschnitten (ADR 0007: kein Scrollen).
 * In der Karte: Beschriftung und Wert in festen Spalten, der Schieber nimmt den
-  Rest. Zeilen rechnen mit der Kartenbreite, nicht mit
-  `ui.available_width()`: egui weitet `max_rect` auf, sobald ein Inhalt
-  überläuft, und dann würde jede Zeile ein Stück breiter als die Karte.
+  Rest. Beschriftungs- und Wertspalte werden gemessen, nicht geschätzt: die
+  Beschriftungsspalte ist so breit wie die breiteste Beschriftung aller Karten
+  (`wort::ALLE`), die Wertspalte so breit wie der längste Wert (`WERT_LANG`).
+  Damit sind alle Schieber einer Karte gleich lang, enden an der Wertspalte,
+  und alle Wertfelder enden am Innenrand der Karte. Die Zielbus-Auswahl in DUCK
+  und die vier Stufen in NR füllen dieselbe Spalte. Zeilen rechnen mit der
+  Kartenbreite, nicht mit `ui.available_width()`: egui weitet `max_rect` auf,
+  sobald ein Inhalt überläuft, und dann würde jede Zeile ein Stück breiter als
+  die Karte. Zeile und Zellen setzen dazu `set_min_size`/`set_min_width` – ohne
+  das schrumpft `allocate_ui_with_layout` auf den Inhalt, und jede Karte bekäme
+  ihre eigene Spalte.
 * Der An/Aus-Schalter sitzt oben rechts und ist in jeder Karte gleich groß.
 
 ### 3. Die ECHO-Auswahl bietet nur lokale Ausgabegeräte

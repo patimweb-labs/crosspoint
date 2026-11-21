@@ -65,11 +65,9 @@ const KARTE_KOPF: f32 = thema::SIZE_CONTROL_SM;
 /// Breite des An/Aus-Schalters oben rechts – in jeder Karte dieselbe.
 const SCHALTER_BREITE: f32 = thema::SPACE_6 * 2.0;
 
-/// Feste Spalte für die Beschriftung einer Reglerzeile.
-const LABEL_BREITE: f32 = thema::SPACE_6 * 2.5;
-
-/// Feste Spalte für den Wert rechts: rechtsbündig, damit die Zahlen stehen.
-const WERT_BREITE: f32 = thema::SPACE_6 * 2.0;
+/// Die längsten Werte, die ein Wertfeld aufnehmen muss (Grenze, Zeit in ms,
+/// Verhältnis). Sie bestimmen die feste Breite der Wertspalte.
+const WERT_LANG: [&str; 3] = ["-00.0 dBFS", "1000 ms", "20.0 : 1"];
 
 /// Abstand zwischen zwei Karten.
 const LUECKE: f32 = thema::SPACE_2;
@@ -87,6 +85,87 @@ const SPALTEN_MAX: usize = 4;
 /// Höchstens so viele Geräte in der ECHO-Karte. Mehr passt bei Mindestgröße
 /// nicht ohne Scrollen (ADR 0007); der Rest steht als Hinweis darin.
 const ECHO_ZEILEN: usize = 7;
+
+/// Beschriftungen der Reglerzeilen, an einer Stelle: die breiteste bestimmt
+/// die Beschriftungsspalte, und die Zeilen holen ihren Text von hier – so
+/// bekommt keine Karte eine eigene Spalte, und keine Beschriftung läuft in
+/// den Regler hinein.
+mod wort {
+    pub const GRENZE: &str = "Grenze";
+    pub const SCHWELLE: &str = "Schwelle";
+    pub const TIEFE: &str = "Tiefe";
+    pub const ATTACK: &str = "Attack";
+    pub const HOLD: &str = "Hold";
+    pub const RELEASE: &str = "Release";
+    pub const RATIO: &str = "Ratio";
+    pub const MAKEUP: &str = "Make-up";
+    pub const ZIELPEGEL: &str = "Zielpegel";
+    pub const ZIELBUS: &str = "Zielbus";
+    pub const ABSENKUNG: &str = "Absenkung";
+    pub const STUFE: &str = "Stufe";
+    pub const LIMITER: &str = "LIMITER";
+    pub const OFFEN: &str = "OFFEN";
+
+    /// Alle Beschriftungen, über die gemessen wird.
+    pub const ALLE: [&str; 14] = [
+        GRENZE, SCHWELLE, TIEFE, ATTACK, HOLD, RELEASE, RATIO, MAKEUP, ZIELPEGEL, ZIELBUS,
+        ABSENKUNG, STUFE, LIMITER, OFFEN,
+    ];
+}
+
+// ---------------------------------------------------------------- Spalten ----
+
+/// Die drei Spalten einer Zeile, in jeder Karte an derselben Stelle:
+/// Beschriftung (so breit wie die breiteste Beschriftung aller Karten),
+/// Regler (der Rest der Kartenbreite) und Wert (rechts am Kartenrand).
+#[derive(Clone, Copy)]
+struct Spalten {
+    label: f32,
+    regler: f32,
+    wert: f32,
+}
+
+impl Spalten {
+    /// Die Spalten für eine Kartenbreite. `label` und `wert` kommen aus
+    /// [`spalten_masse`] und gelten für alle Karten; den Rest bekommt der
+    /// Regler, damit er bis an die Wertspalte reicht.
+    fn fuer(karte: f32, label: f32, wert: f32) -> Self {
+        let luecken = 2.0 * thema::SPACE_1;
+        Self {
+            label,
+            regler: (karte - label - wert - luecken).max(thema::SPACE_6),
+            wert,
+        }
+    }
+}
+
+/// Die Breiten der beiden festen Spalten, einmal für das ganze Modal gemessen:
+/// die breiteste Beschriftung und der längste Wert. Gemessen wird in denselben
+/// Schriften, in denen gezeichnet wird.
+fn spalten_masse(ui: &Ui) -> (f32, f32) {
+    let stil = ui.style();
+    let beschriftung = egui::FontId::monospace(thema::FONT_SIZE_SM);
+    let wert = stil.text_styles[&stil.drag_value_text_style].clone();
+    let breite = |text: &str, font: &egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE)
+            .size()
+            .x
+    };
+    let label = wort::ALLE
+        .iter()
+        .map(|text| breite(text, &beschriftung))
+        .fold(0.0_f32, f32::max);
+    let wertfeld = WERT_LANG
+        .iter()
+        .map(|text| breite(text, &wert))
+        .fold(0.0_f32, f32::max);
+    // Ein Pixel Luft zwischen Text und Spaltenkante, damit nichts klebt.
+    (
+        (label + thema::SPACE_1).ceil(),
+        (wertfeld + 3.0 * thema::SPACE_1).ceil(),
+    )
+}
 
 // --------------------------------------------------------------- Modal ----
 
@@ -108,7 +187,14 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
         bus,
         ziel,
         fw,
+        // Kartenbreite und Spalten setzt `raster`: sie hängen an der Breite des
+        // Fensters und an der Schrift, also an dem, was erst im Dialog steht.
         breite: 0.0,
+        spalten: Spalten {
+            label: 0.0,
+            regler: 0.0,
+            wert: 0.0,
+        },
     };
     // Titel ohne Dopplung: „FILTER · B1“, mit eigenem Namen „FILTER · B1 · Discord“.
     let titel = format!(
@@ -135,7 +221,18 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
                     .truncate(),
             );
             let innen = breite - 2.0 * bausteine::DIALOG_RAND;
-            pegelzeile(ui, f, k, bus, innen);
+            // Die festen Spalten einmal für alle Karten messen: die breiteste
+            // Beschriftung und der längste Wert.
+            let (label, wert) = spalten_masse(ui);
+            let karten = Karten {
+                spalten: Spalten {
+                    label,
+                    regler: 0.0,
+                    wert,
+                },
+                ..karten
+            };
+            pegelzeile(ui, f, k, bus, innen, karten.spalten);
             raster(ui, f, &karten, innen, fensterhoehe, a);
         },
     );
@@ -145,8 +242,10 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
 }
 
 /// Pegel vor und nach den Filtern als eigene Zeile unter dem Titel, über die
-/// volle Innenbreite: je eine Hälfte mit Beschriftung, Balken und Wert.
-fn pegelzeile(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize, breite: f32) {
+/// volle Innenbreite: je eine Hälfte mit Beschriftung, Balken und Wert. Die
+/// beiden Hälften tragen dieselben Spalten wie die Karten, damit Balken und
+/// Werte untereinander stehen.
+fn pegelzeile(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize, breite: f32, spalten: Spalten) {
     let (roh, nachher) = logik::filter_pegel(&k.params, bus);
     // Eine Lücke zwischen den beiden Hälften, damit der Wert nicht an der
     // nächsten Beschriftung klebt.
@@ -160,16 +259,17 @@ fn pegelzeile(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize, breite: f32) {
                     Vec2::new(halb, ZEILE),
                     Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                        label_zelle(ui, f, titel);
+                        label_zelle(ui, f, spalten.label, titel);
                         let db = crate::fmt::lin_to_db(linear);
                         let rest =
-                            (halb - LABEL_BREITE - WERT_BREITE - 2.0 * thema::SPACE_1).max(0.0);
+                            (halb - spalten.label - spalten.wert - 2.0 * thema::SPACE_1).max(0.0);
                         let segmente = ((rest / 4.0) as usize).max(4);
                         bausteine::segmentleiste(ui, f, db, segmente);
                         ui.allocate_ui_with_layout(
-                            Vec2::new(WERT_BREITE, ZEILE),
+                            Vec2::new(spalten.wert, ZEILE),
                             Layout::right_to_left(egui::Align::Center),
                             |ui| {
+                                ui.set_min_width(spalten.wert);
                                 ui.label(bausteine::text(
                                     f,
                                     &crate::fmt::db_text(db),
@@ -200,6 +300,7 @@ struct Karten<'a> {
     ziel: Ziel,
     fw: logik::FilterWerte,
     breite: f32,
+    spalten: Spalten,
 }
 
 /// Eine Karte der Kette: Titel, Beschreibung, Schalter und was sie zeichnet.
@@ -457,6 +558,7 @@ fn karte_zeichnen(ui: &mut Ui, k: &Karten, info: &Kette, rect: Rect, a: &mut Vec
     let innen = rect.shrink2(Vec2::new(thema::SPACE_2, KARTE_RAND));
     let karte = Karten {
         breite: innen.width(),
+        spalten: Spalten::fuer(innen.width(), k.spalten.label, k.spalten.wert),
         ..*k
     };
     ui.scope_builder(
@@ -532,6 +634,9 @@ fn zeile(ui: &mut Ui, breite: f32, inhalt: impl FnOnce(&mut Ui)) {
         Vec2::new(breite, ZEILE),
         Layout::left_to_right(egui::Align::Center),
         |ui| {
+            // Ohne dieses Mindestmaß schrumpft die Zeile auf ihren Inhalt, und
+            // dann stünde in jeder Karte eine andere Spalte.
+            ui.set_min_size(Vec2::new(breite, ZEILE));
             ui.spacing_mut().item_spacing.x = thema::SPACE_1;
             inhalt(ui);
         },
@@ -540,18 +645,30 @@ fn zeile(ui: &mut Ui, breite: f32, inhalt: impl FnOnce(&mut Ui)) {
 
 /// Die feste Beschriftungsspalte einer Zeile (gibt die Antwort für
 /// `labelled_by` zurück).
-fn label_zelle(ui: &mut Ui, f: &Farben, text: &str) -> egui::Response {
+fn label_zelle(ui: &mut Ui, f: &Farben, breite: f32, text: &str) -> egui::Response {
     ui.allocate_ui_with_layout(
-        Vec2::new(LABEL_BREITE, ZEILE),
+        Vec2::new(breite, ZEILE),
         Layout::left_to_right(egui::Align::Center),
-        |ui| ui.add(Label::new(bausteine::text(f, text, false, true)).truncate()),
+        |ui| {
+            ui.set_min_width(breite);
+            ui.add(Label::new(bausteine::text(f, text, false, true)).truncate())
+        },
     )
     .inner
 }
 
-/// Das feste Wertfeld rechts einer Zeile.
+/// Der Schieber einer Zeile: er füllt die Reglerspalte genau, damit alle
+/// Schieber einer Karte gleich lang sind und bis an die Wertspalte reichen.
+fn schieber(ui: &mut Ui, breite: f32, wert: &mut f32, von: f32, bis: f32) -> egui::Response {
+    ui.spacing_mut().slider_width = breite;
+    ui.add(egui::Slider::new(wert, von..=bis).show_value(false))
+}
+
+/// Das feste Wertfeld rechts einer Zeile: feste Breite, rechte Kante am
+/// Kartenrand, damit alle Zahlen in einer Linie enden.
 fn wert_zelle(
     ui: &mut Ui,
+    breite: f32,
     wert: &mut f32,
     von: f32,
     bis: f32,
@@ -559,9 +676,10 @@ fn wert_zelle(
     dezimal: usize,
 ) -> egui::Response {
     ui.allocate_ui_with_layout(
-        Vec2::new(WERT_BREITE, ZEILE),
+        Vec2::new(breite, ZEILE),
         Layout::right_to_left(egui::Align::Center),
         |ui| {
+            ui.set_min_width(breite);
             // Enge Polsterung: das Wertfeld soll die Zeilenhöhe nicht
             // aufweiten, sonst passt das Raster nicht mehr in sein Maß.
             ui.spacing_mut().button_padding = Vec2::new(thema::SPACE_1, 0.0);
@@ -569,7 +687,8 @@ fn wert_zelle(
                 egui::DragValue::new(wert)
                     .range(von..=bis)
                     .suffix(suffix)
-                    .fixed_decimals(dezimal),
+                    .fixed_decimals(dezimal)
+                    .min_size(Vec2::new(breite, ZEILE)),
             )
         },
     )
@@ -590,16 +709,14 @@ struct Regler<'a> {
 
 fn regler(ui: &mut Ui, k: &Karten, r: Regler, a: &mut Vec<Aktion>) {
     let f = k.f;
+    let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
-        label_zelle(ui, f, r.titel);
+        label_zelle(ui, f, spalten.label, r.titel);
         let mut v = r.wert;
-        let frei =
-            (k.breite - LABEL_BREITE - WERT_BREITE - 2.0 * thema::SPACE_1).max(thema::SPACE_6);
-        ui.spacing_mut().slider_width = frei;
-        let schieber = ui.add(egui::Slider::new(&mut v, r.von..=r.bis).show_value(false));
+        let schieber = schieber(ui, spalten.regler, &mut v, r.von, r.bis);
         let name = r.titel.to_string();
         schieber.widget_info(|| WidgetInfo::slider(true, v as f64, name.clone()));
-        let feld = wert_zelle(ui, &mut v, r.von, r.bis, r.suffix, r.dezimal);
+        let feld = wert_zelle(ui, spalten.wert, &mut v, r.von, r.bis, r.suffix, r.dezimal);
         if schieber.changed() || feld.changed() {
             a.push(setzen(k.ziel, r.param, v));
         }
@@ -613,7 +730,7 @@ fn lc(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
         ui,
         k,
         Regler {
-            titel: "Grenze",
+            titel: wort::GRENZE,
             param: "lc_freq",
             von: 40.0,
             bis: 200.0,
@@ -696,11 +813,11 @@ fn echo(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
 
 fn nr(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     let f = k.f;
+    let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
-        label_zelle(ui, f, "Stufe");
-        let breite = (k.breite - LABEL_BREITE - WERT_BREITE - 2.0 * thema::SPACE_1)
-            .max(thema::SPACE_6 * 4.0);
-        let zelle = (breite - 3.0 * thema::SPACE_1) / 4.0;
+        label_zelle(ui, f, spalten.label, wort::STUFE);
+        // Die vier Stufen füllen die Reglerspalte genau.
+        let zelle = (spalten.regler - 3.0 * thema::SPACE_1) / 4.0;
         for (i, stufe) in NR_STUFEN.iter().enumerate() {
             let gewaehlt = k.fw.nr_stufe as usize == i;
             let groesse = Vec2::new(zelle, ZEILE - thema::SPACE_1);
@@ -717,7 +834,7 @@ fn gate(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     let fw = k.fw;
     for (titel, param, von, bis, wert, suffix, dezimal) in [
         (
-            "Schwelle",
+            wort::SCHWELLE,
             "gate_schwelle",
             -80.0,
             -10.0,
@@ -725,9 +842,17 @@ fn gate(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             " dBFS",
             0,
         ),
-        ("Tiefe", "gate_tiefe", 0.0, 80.0, fw.gate_tiefe, " dB", 0),
         (
-            "Attack",
+            wort::TIEFE,
+            "gate_tiefe",
+            0.0,
+            80.0,
+            fw.gate_tiefe,
+            " dB",
+            0,
+        ),
+        (
+            wort::ATTACK,
             "gate_attack",
             0.5,
             100.0,
@@ -735,9 +860,9 @@ fn gate(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             " ms",
             1,
         ),
-        ("Hold", "gate_hold", 0.0, 500.0, fw.gate_hold, " ms", 0),
+        (wort::HOLD, "gate_hold", 0.0, 500.0, fw.gate_hold, " ms", 0),
         (
-            "Release",
+            wort::RELEASE,
             "gate_release",
             5.0,
             1000.0,
@@ -768,7 +893,7 @@ fn comp(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     let fw = k.fw;
     for (titel, param, von, bis, wert, suffix, dezimal) in [
         (
-            "Schwelle",
+            wort::SCHWELLE,
             "comp_schwelle",
             -60.0,
             0.0,
@@ -776,9 +901,17 @@ fn comp(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             " dBFS",
             0,
         ),
-        ("Ratio", "comp_ratio", 1.0, 20.0, fw.comp_ratio, " : 1", 1),
         (
-            "Attack",
+            wort::RATIO,
+            "comp_ratio",
+            1.0,
+            20.0,
+            fw.comp_ratio,
+            " : 1",
+            1,
+        ),
+        (
+            wort::ATTACK,
             "comp_attack",
             0.1,
             100.0,
@@ -787,7 +920,7 @@ fn comp(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             1,
         ),
         (
-            "Release",
+            wort::RELEASE,
             "comp_release",
             5.0,
             1000.0,
@@ -796,7 +929,7 @@ fn comp(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             0,
         ),
         (
-            "Make-up",
+            wort::MAKEUP,
             "comp_makeup",
             0.0,
             24.0,
@@ -822,20 +955,17 @@ fn comp(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     }
     // Limiter in der Beschriftungsspalte, seine Decke auf demselben Schieber
     // wie die Regler darüber – so bleibt die Zeile im Raster.
+    let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
-        let breite = Vec2::new(LABEL_BREITE, ZEILE - thema::SPACE_1);
-        if bausteine::schalter(ui, f, "LIMITER", fw.limiter, Art::Akzent, breite).clicked() {
+        let groesse = Vec2::new(spalten.label, ZEILE - thema::SPACE_1);
+        if bausteine::schalter(ui, f, wort::LIMITER, fw.limiter, Art::Akzent, groesse).clicked() {
             a.push(setzen(k.ziel, "limiter", schalter_wert(!fw.limiter)));
         }
         let mut v = fw.limiter_decke;
-        let frei =
-            (k.breite - LABEL_BREITE - WERT_BREITE - 2.0 * thema::SPACE_1).max(thema::SPACE_6);
-        ui.spacing_mut().slider_width = frei;
-        let schieber = ui
-            .add(egui::Slider::new(&mut v, -12.0..=0.0).show_value(false))
-            .on_hover_text("Decke des Limiters");
+        let schieber =
+            schieber(ui, spalten.regler, &mut v, -12.0, 0.0).on_hover_text("Decke des Limiters");
         schieber.widget_info(|| WidgetInfo::slider(true, v as f64, "Decke"));
-        let feld = wert_zelle(ui, &mut v, -12.0, 0.0, " dBFS", 1);
+        let feld = wert_zelle(ui, spalten.wert, &mut v, -12.0, 0.0, " dBFS", 1);
         if schieber.changed() || feld.changed() {
             a.push(setzen(k.ziel, "limiter_decke", v));
         }
@@ -847,7 +977,7 @@ fn agc(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
         ui,
         k,
         Regler {
-            titel: "Zielpegel",
+            titel: wort::ZIELPEGEL,
             param: "agc_ziel",
             von: -40.0,
             bis: 0.0,
@@ -862,11 +992,13 @@ fn agc(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
 fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     let f = k.f;
     let fw = k.fw;
+    let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
-        let l = label_zelle(ui, f, "Zielbus");
-        let breite = (k.breite - LABEL_BREITE - thema::SPACE_1).max(thema::SPACE_6 * 2.0);
+        let l = label_zelle(ui, f, spalten.label, wort::ZIELBUS);
+        // Die Auswahl nimmt die ganze Reglerspalte ein – so breit wie die
+        // Schieber darunter.
         egui::ComboBox::from_id_salt(("duck_ziel", k.bus))
-            .width(breite - thema::SPACE_6)
+            .width(spalten.regler)
             .selected_text(BUS_NAMES[fw.duck_ziel])
             .show_ui(ui, |ui| {
                 for (b, busname) in BUS_NAMES.iter().enumerate() {
@@ -882,7 +1014,7 @@ fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     });
     for (titel, param, von, bis, wert, suffix, dezimal) in [
         (
-            "Absenkung",
+            wort::ABSENKUNG,
             "duck_tiefe",
             0.0,
             48.0,
@@ -891,7 +1023,7 @@ fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             0,
         ),
         (
-            "Schwelle",
+            wort::SCHWELLE,
             "duck_schwelle",
             -60.0,
             0.0,
@@ -900,7 +1032,7 @@ fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             0,
         ),
         (
-            "Attack",
+            wort::ATTACK,
             "duck_attack",
             0.5,
             500.0,
@@ -909,7 +1041,7 @@ fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
             0,
         ),
         (
-            "Release",
+            wort::RELEASE,
             "duck_release",
             5.0,
             3000.0,
@@ -937,21 +1069,32 @@ fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
 
 fn ptt(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
     let f = k.f;
+    let spalten = k.spalten;
     zeile(ui, k.breite, |ui| {
-        let breite = Vec2::new(LABEL_BREITE, ZEILE - thema::SPACE_1);
-        let offen = bausteine::schalter(ui, f, "OFFEN", k.fw.ptt_offen, Art::Akzent, breite)
+        let groesse = Vec2::new(spalten.label, ZEILE - thema::SPACE_1);
+        let offen = bausteine::schalter(ui, f, wort::OFFEN, k.fw.ptt_offen, Art::Akzent, groesse)
             .on_hover_text("Taste gedrückt: der Bus ist hörbar");
         if offen.clicked() {
             a.push(setzen(k.ziel, "ptt_offen", schalter_wert(!k.fw.ptt_offen)));
         }
-        ui.add(
-            Label::new(
-                bausteine::text(f, "über MIDI oder /bus/<n>/ptt_offen", false, true)
-                    .size(thema::FONT_SIZE_SM),
-            )
-            .truncate(),
-        )
-        .on_hover_text("Auf der Bühne über MIDI oder /bus/<n>/ptt_offen.");
+        // Der Hinweis bekommt Regler- und Wertspalte, damit er nicht über den
+        // Kartenrand hinausläuft.
+        let rest = spalten.regler + spalten.wert + thema::SPACE_1;
+        ui.allocate_ui_with_layout(
+            Vec2::new(rest, ZEILE),
+            Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_width(rest);
+                ui.add(
+                    Label::new(
+                        bausteine::text(f, "über MIDI oder /bus/<n>/ptt_offen", false, true)
+                            .size(thema::FONT_SIZE_SM),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text("Auf der Bühne über MIDI oder /bus/<n>/ptt_offen.");
+            },
+        );
     });
 }
 

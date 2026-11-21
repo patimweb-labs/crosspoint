@@ -401,16 +401,10 @@ fn bilder_in_allen_themes() {
         // kleinsten Fenster (die Lämpchenreihe am Zug ist mit drauf).
         for (breite, hoehe, name) in [(1920.0, 1080.0, ""), (min.x, min.y, "-min")] {
             let (mut f, params) = beispiel(thema);
-            // Ein paar Filter an, damit die Lämpchen und Karten etwas zeigen.
-            for (k, v) in [
-                ("lc", 1.0),
-                ("nr", 1.0),
-                ("comp", 1.0),
-                ("limiter", 1.0),
-                ("agc", 1.0),
-                ("duck", 1.0),
-                ("ptt", 1.0),
-            ] {
+            // Ein paar Filter an, ein paar aus: die Bilder sollen zeigen, wie
+            // An und Aus am Schalter aussehen (das Beispielmodell hat LC, AGC
+            // und PTT aus, ECHO und GATE an).
+            for (k, v) in [("nr", 1.0), ("comp", 1.0), ("limiter", 1.0), ("duck", 1.0)] {
                 params.set("bus", 5, k, v);
             }
             // Pegel vor und nach den Filtern (schreibt sonst der Audio-Thread).
@@ -885,4 +879,141 @@ fn echo_meldung_nennt_den_geraetenamen() {
         h.state().o.echo_geraete,
         vec!["alsa_output.pci-0000_03_00.1.hdmi-stereo-extra2".to_string()]
     );
+}
+
+/// Regler und Werte stehen bündig: in jeder Karte sind alle Schieber gleich
+/// breit, beginnen an derselben Kante und reichen bis an die Wertspalte; alle
+/// Wertfelder sind gleich breit und enden am Innenrand der Karte. Die Auswahl
+/// (Zielbus in DUCK) nimmt dieselbe Spalte ein wie die Schieber.
+#[test]
+fn filter_karten_haben_buendige_spalten() {
+    use crosspoint_fenster::thema;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    /// Die Schieber der Karten tragen den Namen ihrer Zeile …
+    const REGLER: [&str; 11] = [
+        "Grenze",
+        "Schwelle",
+        "Tiefe",
+        "Attack",
+        "Hold",
+        "Release",
+        "Ratio",
+        "Make-up",
+        "Zielpegel",
+        "Absenkung",
+        "Decke",
+    ];
+    /// … die Wertfelder ihren Suffix.
+    const WERTE: [&str; 5] = ["Hz", "dBFS", "dB", "ms", ": 1"];
+    let min = mindestgroesse();
+    for (breite, hoehe, name) in [
+        (min.x, min.y, "Mindestgröße"),
+        (1920.0, 1080.0, "1920"),
+        (2560.0, 1440.0, "2560"),
+    ] {
+        let (f, _) = filter_offen(Thema::Dunkel);
+        let mut h = harness(f, (breite, hoehe));
+        h.run_steps(6);
+        let karten: Vec<egui::Rect> = h
+            .get_all_by_label_contains("Filterkarte ")
+            .map(|n| n.rect())
+            .collect();
+        assert_eq!(karten.len(), 8, "{name}: nicht acht Karten");
+        for karte in &karten {
+            // Nur Knoten, die ganz in der Karte liegen und eine Beschriftung
+            // der Zeilen tragen: das Pult darunter hat eigene Schieber (Fader)
+            // und Wertfelder.
+            let drin = |r: &egui::Rect| karte.contains_rect(*r);
+            let heisst = |n: &egui_kittest::Node, namen: &[&str]| {
+                NodeT::accesskit_node(n)
+                    .label()
+                    .is_some_and(|l| namen.contains(&l.as_str()))
+            };
+            let schieber: Vec<egui::Rect> = h
+                .query_all_by_role(Role::Slider)
+                .filter(|n| heisst(n, &REGLER))
+                .map(|n| n.rect())
+                .filter(drin)
+                .collect();
+            let felder: Vec<egui::Rect> = h
+                .query_all_by_role(Role::SpinButton)
+                .filter(|n| heisst(n, &WERTE))
+                .map(|n| n.rect())
+                .filter(drin)
+                .collect();
+            assert_eq!(
+                schieber.len(),
+                felder.len(),
+                "{name}: {karte:?} hat Schieber ohne Wertfeld"
+            );
+            if schieber.is_empty() {
+                continue;
+            }
+            // Jedes Wertfeld endet am Innenrand der Karte, alle gleich breit.
+            let kante = karte.right() - thema::SPACE_2;
+            for feld in &felder {
+                assert!(
+                    (feld.right() - kante).abs() < 0.5,
+                    "{name}: Wertfeld endet bei {} statt bei {kante} ({feld:?})",
+                    feld.right()
+                );
+                assert!(
+                    (feld.width() - felder[0].width()).abs() < 0.5,
+                    "{name}: Wertfelder sind {} und {} breit",
+                    feld.width(),
+                    felder[0].width()
+                );
+            }
+            // Jeder Schieber gleich lang, gleiche Kante, bis an die Wertspalte.
+            for r in &schieber {
+                assert!(
+                    (r.width() - schieber[0].width()).abs() < 0.5,
+                    "{name}: Schieber sind {} und {} lang",
+                    r.width(),
+                    schieber[0].width()
+                );
+                assert!(
+                    (r.left() - schieber[0].left()).abs() < 0.5,
+                    "{name}: Schieber beginnen bei {} und {}",
+                    r.left(),
+                    schieber[0].left()
+                );
+                assert!(
+                    (felder[0].left() - r.right() - thema::SPACE_1).abs() < 0.5,
+                    "{name}: Schieber endet bei {}, Wertspalte beginnt bei {}",
+                    r.right(),
+                    felder[0].left()
+                );
+            }
+        }
+        // Die Zielbus-Auswahl in DUCK nimmt die volle Reglerspalte ein: so
+        // breit wie die Schieber der Karte, an derselben linken Kante.
+        let auswahl = h
+            .query_all_by_role(Role::ComboBox)
+            .find(|n| NodeT::accesskit_node(n).label().as_deref() == Some("Zielbus"))
+            .unwrap_or_else(|| panic!("{name}: Zielbus-Auswahl fehlt"))
+            .rect();
+        let karte = karten
+            .iter()
+            .find(|k| k.contains_rect(auswahl))
+            .unwrap_or_else(|| panic!("{name}: Auswahl steht in keiner Karte"));
+        let schieber = h
+            .query_all_by_role(Role::Slider)
+            .map(|n| n.rect())
+            .find(|r| karte.contains_rect(*r))
+            .unwrap_or_else(|| panic!("{name}: kein Schieber neben der Auswahl"));
+        assert!(
+            (auswahl.width() - schieber.width()).abs() < 0.5,
+            "{name}: Auswahl {:.1} px breit, Schieber {:.1} px",
+            auswahl.width(),
+            schieber.width()
+        );
+        assert!(
+            (auswahl.left() - schieber.left()).abs() < 0.5,
+            "{name}: Auswahl beginnt bei {} statt {}",
+            auswahl.left(),
+            schieber.left()
+        );
+    }
 }
