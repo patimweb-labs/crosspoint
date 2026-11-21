@@ -30,3 +30,7 @@ pipewire = "0.10"
 # Kleine Runtime im Registry-Thread (src/pw.rs): Ereignisse einsammeln,
 # ohne die HTTP-Schicht zu blockieren. Nur rt + time, kein Netzwerk.
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+
+[dev-dependencies]
+# Nur fuer examples/echo_probe.rs (WAV lesen).
+hound = "3.5"

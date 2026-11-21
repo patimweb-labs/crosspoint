@@ -841,6 +841,7 @@ dependencies = [
 name = "crosspoint-core"
 version = "0.5.2"
 dependencies = [
+ "hound",
  "jack",
  "macros",
  "pipewire",

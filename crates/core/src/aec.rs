@@ -74,6 +74,9 @@ pub struct Echounterdruecker {
     /// Geglättete Fehlerleistungen von Hintergrund und Vordergrund.
     fehler_hinten: f32,
     fehler_vorn: f32,
+    /// Zähler für die Fehlersuche: übernommene und zurückgesetzte Blöcke.
+    uebernommen: u32,
+    zurueckgesetzt: u32,
     /// Spektren der letzten Referenzblöcke (Ring, `x_pos` = neuester).
     x: Vec<[K; BINS]>,
     x_pos: usize,
@@ -111,6 +114,8 @@ impl Echounterdruecker {
             w_vorn: vec![[K::default(); BINS]; PARTITIONEN],
             fehler_hinten: 0.0,
             fehler_vorn: 0.0,
+            uebernommen: 0,
+            zurueckgesetzt: 0,
             x: vec![[K::default(); BINS]; PARTITIONEN],
             x_pos: 0,
             leistung: [0.0; BINS],
@@ -163,6 +168,11 @@ impl Echounterdruecker {
             self.block();
         }
         y
+    }
+
+    /// (übernommen, zurückgesetzt) seit dem Anlegen – zur Fehlersuche.
+    pub fn zaehler(&self) -> (u32, u32) {
+        (self.uebernommen, self.zurueckgesetzt)
     }
 
     /// Spektrum eines reellen Puffers in `self.re/im` → Bins.
@@ -235,9 +245,11 @@ impl Echounterdruecker {
         if self.fehler_hinten < UEBERNEHMEN * self.fehler_vorn {
             self.w_vorn.copy_from_slice(&self.w);
             self.fehler_vorn = self.fehler_hinten;
+            self.uebernommen += 1;
         } else if self.fehler_hinten > ZURUECKSETZEN * self.fehler_vorn {
             self.w.copy_from_slice(&self.w_vorn);
             self.fehler_hinten = self.fehler_vorn;
+            self.zurueckgesetzt += 1;
             return;
         }
 
