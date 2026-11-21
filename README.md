@@ -1,5 +1,9 @@
 # Crosspoint
 
+<p align="center">
+  <img src="data/icons/hicolor/256x256/apps/de.weppelmann.Crosspoint.png" width="140" alt="Crosspoint: acht Eingänge, acht Busse, das Kreuz in der Mitte">
+</p>
+
 8×8-Mixer für PipeWire/JACK in Rust: 8 Eingänge, 8 Busse (A1–A5 Hardware,
 B1–B3 virtuell), ohne Kernelmodul. Die Eingänge liefern ihr **Rohsignal**;
 Filter gibt es nur an den virtuellen Ausgängen B1–B3 – dort, wo das Signal zu
@@ -34,6 +38,12 @@ Debian, Arch und openSUSE Standard). Das Flatpak bringt beides selbst mit.
 Die Bilder erzeugt der Oberflächentest (`CROSSPOINT_BILDER=$PWD/docs/bilder
 cargo test -p crosspoint-fenster --test oberflaeche`), sie werden nicht von
 Hand abgelegt.
+
+Dunkel ist Cyan auf Nachtblau, hell ist Schwarz auf Kachelweiß, mono eine
+Tinte — und in allen drei Themes sitzt der Kreuzungspunkt bernsteinfarben:
+an der Zuordnung `A1 … B3` und an der Spitze der Pegel. Zeichen, Wortmarke und
+Icons liegen als SVG in `assets/`, die Farben als Tokens in
+`crates/fenster/tokens/` ([ADR 0008](docs/adr/0008-logo-und-farben.md)).
 
 Das Pult **scrollt nicht**: alle 17 Züge mit allen neun Skalenzahlen (+12 …
 −60) stehen immer vollständig da. Damit nichts abgeschnitten wird, hat das
