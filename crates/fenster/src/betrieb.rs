@@ -278,6 +278,7 @@ struct Pult {
     lauf: Arc<crosspoint::lauf::Lauf>,
     tray: Option<Arc<tray::Tray>>,
     schliessen_um: Option<Instant>,
+    ende_gemeldet: bool,
 }
 
 impl Pult {
@@ -329,6 +330,7 @@ impl Pult {
             fenster.ausfuehren(crate::modell::Aktion::Dialog(start));
         }
         Pult {
+            ende_gemeldet: false,
             fenster,
             lauf,
             tray,
@@ -350,8 +352,12 @@ impl Drop for Pult {
 impl eframe::App for Pult {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // Engine zu → Fenster zu.
+        // Engine zu → Fenster zu (mit Grund im Protokoll).
         if self.lauf.beendet() {
+            if !self.ende_gemeldet {
+                self.ende_gemeldet = true;
+                eprintln!("crosspoint: Engine beendet - Fenster schliesst");
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if self.schliessen_um.is_some_and(|t| Instant::now() >= t) {

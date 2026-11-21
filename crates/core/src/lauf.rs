@@ -693,6 +693,13 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
             // laufender Aufpasser die Geraete nach dem Schliessen wieder
             // anlegen - die Sperre in `wire` und [`ABBAU`] schliessen das.
             let mut letzte_pruefung = Instant::now();
+            // Warum die Engine endet, steht im Protokoll – sonst sieht ein
+            // Fenster, das „von selbst“ zugeht, aus wie ein Absturz.
+            let signal_melden = || {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    eprintln!("Signal SIGINT/SIGTERM empfangen - beende");
+                }
+            };
             while !SHUTDOWN.load(Ordering::SeqCst) && !ende_w.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(250));
                 // Nach dem Schlafen erneut pruefen: in den 250 ms kann der
@@ -722,6 +729,7 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
                     }
                 }
             }
+            signal_melden();
             ende_w.store(true, Ordering::SeqCst);
         });
     }

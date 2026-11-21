@@ -163,6 +163,23 @@ fn mute_und_routing_schreiben_in_den_kern() {
 }
 
 #[test]
+fn hand_ueber_klickbarem_pfeil_sonst() {
+    let (f, _) = beispiel(Thema::Dunkel);
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(3);
+    let zeiger = |h: &mut Harness<'static, Fenster>| {
+        h.run_steps(2);
+        h.output().platform_output.cursor_icon
+    };
+    for name in ["M", "GATE", "PRESETS", "A1"] {
+        h.get_all_by_label(name).next().expect(name).hover();
+        assert_eq!(zeiger(&mut h), egui::CursorIcon::PointingHand, "{name}");
+    }
+    h.get_by_label("Mikro Fader dB").hover();
+    assert_eq!(zeiger(&mut h), egui::CursorIcon::ResizeVertical, "Fader");
+}
+
+#[test]
 fn dialoge_kommen_mit_inhalt() {
     use crosspoint_fenster::modell::{Aktion, Dialog};
     for (dialog, erwartet) in [

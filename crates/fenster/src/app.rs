@@ -104,6 +104,7 @@ impl Fenster {
 
         let laeuft = (self.umgebung.laeuft)();
         let aktionen = crate::ansichten::pult(ui, &mut self.o, &self.kern, laeuft, jetzt);
+        handzeiger(&ctx);
         let mut speichern = false;
         for a in aktionen {
             speichern |= logik::ausfuehren(a, &mut self.o, &self.kern);
@@ -116,6 +117,29 @@ impl Fenster {
             }
         }
         ctx.request_repaint_after(TAKT);
+    }
+}
+
+/// Handzeiger über allem, was man anklicken kann.
+///
+/// egui setzt `Visuals::interact_cursor` nur bei `Button`; ComboBox,
+/// Checkbox, Auswahlfelder, das Schließen-X der Dialoge und die gezeichneten
+/// Schalter blieben beim Pfeil. Hier einmal je Bild für alle: liegt der Zeiger
+/// über einem klickbaren Element und hat noch niemand einen eigenen Zeiger
+/// gewählt (Textfeld, Fader), wird es die Hand.
+pub fn handzeiger(ctx: &egui::Context) {
+    let unter_zeiger: Vec<egui::Id> =
+        ctx.viewport(|vp| vp.interact_widgets.hovered.iter().copied().collect());
+    let klickbar = unter_zeiger.into_iter().any(|id| {
+        ctx.read_response(id)
+            .is_some_and(|r| r.enabled() && r.sense.senses_click())
+    });
+    if klickbar {
+        ctx.output_mut(|o| {
+            if o.cursor_icon == egui::CursorIcon::Default {
+                o.cursor_icon = egui::CursorIcon::PointingHand;
+            }
+        });
     }
 }
 

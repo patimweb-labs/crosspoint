@@ -110,6 +110,8 @@ pub fn fader(
         }
     }
     let gain = neu.unwrap_or(gain_db);
+    // Fader: senkrecht ziehen (wie in der GTK-Oberfläche).
+    let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
     response.widget_info(|| WidgetInfo::slider(true, gain as f64, format!("{name} Fader dB")));
 
     let p = ui.painter_at(rect);
@@ -298,6 +300,7 @@ pub fn pan(ui: &mut Ui, f: &Farben, name: &str, breite: f32, pan: f32) -> (Respo
         }
     }
     let wert = neu.unwrap_or(pan);
+    let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
     response.widget_info(|| WidgetInfo::slider(true, wert as f64, format!("{name} Pan")));
 
     let p = ui.painter_at(rect);
