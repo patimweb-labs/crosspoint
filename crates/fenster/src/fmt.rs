@@ -25,7 +25,6 @@ pub fn lin_to_db(v: f32) -> f32 {
 }
 
 /// Dezibel -> Amplitudenfaktor (Gegenrichtung zu [`lin_to_db`]).
-#[allow(dead_code)]
 pub fn db_to_lin(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
@@ -94,15 +93,6 @@ pub fn kurz(text: &str, max: usize) -> String {
     s
 }
 
-/// Frequenz eines EQ-Bandes lesbar machen (1000 -> "1.0k", 100 -> "100").
-pub fn hz_text(hz: f32) -> String {
-    if hz >= 1000.0 {
-        format!("{:.1}k", hz / 1000.0)
-    } else {
-        format!("{:.0}", hz)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,13 +156,6 @@ mod tests {
         assert_eq!(gain_text(-0.02), "0.0");
         assert_eq!(gain_text(3.0), "+3.0");
         assert_eq!(gain_text(-6.25), "-6.2");
-    }
-
-    #[test]
-    fn frequenz_wird_gekuerzt() {
-        assert_eq!(hz_text(100.0), "100");
-        assert_eq!(hz_text(1000.0), "1.0k");
-        assert_eq!(hz_text(12500.0), "12.5k");
     }
 }
 

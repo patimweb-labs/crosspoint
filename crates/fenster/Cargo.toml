@@ -1,0 +1,31 @@
+[package]
+name = "crosspoint-fenster"
+version = "0.5.2"
+edition = "2021"
+description = "Crosspoint: Fenster in egui direkt auf Arc<Params> (ersetzt die GTK-Oberflaeche)"
+
+[lib]
+name = "crosspoint_fenster"
+path = "src/lib.rs"
+
+[dependencies]
+# Der Fader schreibt in dieselben Atome, die der Audio-Thread liest - kein
+# HTTP, kein JSON (wie zuvor die GTK-Oberflaeche).
+crosspoint = { package = "crosspoint-core", path = "../core" }
+macros = { path = "../macros" }
+# egui wie in sprechwerk (ADR 0013 dort): Renderer glow, AccessKit an,
+# Wayland und X11 werden zur Laufzeit geladen - keine -devel-Pakete.
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "accesskit", "wayland", "x11"] }
+# egui direkt für die Bausteine; dieselbe Fassung, die eframe mitbringt.
+egui = { version = "0.37", default-features = false }
+# Tray-Symbol (StatusNotifierItem über D-Bus, reines Rust, kein GTK):
+# ersetzt den handgeschriebenen glib-D-Bus-Dienst der GTK-Oberfläche.
+ksni = { version = "0.3", features = ["blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"] }
+
+[build-dependencies]
+serde_json = "1"

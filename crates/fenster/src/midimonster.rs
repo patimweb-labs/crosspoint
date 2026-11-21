@@ -179,10 +179,7 @@ impl Karte {
 
 /// Standardpfad: `~/.config/crosspoint/midimonster.cfg`.
 pub fn pfad() -> PathBuf {
-    crate::theme::konfig_pfad()
-        .parent()
-        .map(|p| p.join("midimonster.cfg"))
-        .unwrap_or_else(|| PathBuf::from("midimonster.cfg"))
+    crate::konfig::ordner().join("midimonster.cfg")
 }
 
 /// Wertet `cc1.<nr>` bzw. `ch<kanal>.cc<nr>` als CC-Nummer aus.
