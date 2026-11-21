@@ -1,6 +1,9 @@
-//! DSP-Bausteine: dB-Umrechnung, Noise Gate, Verzögerung, FFT.
+//! DSP-Bausteine: dB-Umrechnung, Noise Gate, Low-Cut, Kompressor, Limiter,
+//! Ducking, Verzögerung, FFT.
 //!
-//! Die Echounterdrückung steht in `aec.rs`, sie baut auf [`Fft`] auf.
+//! Die Echounterdrückung steht in `aec.rs`, die Pegelregelung (AGC2) in
+//! `agc.rs` – beide bauen auf `sonora` auf. Alles hier ist Handarbeit: kleine,
+//! allokationsfreie Bausteine, die im Audio-Thread je Sample laufen.
 
 use std::f32::consts::PI;
 
@@ -19,7 +22,7 @@ pub fn lin_to_db(v: f32) -> f32 {
 }
 
 #[inline]
-fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
+pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
     if v < lo {
         lo
     } else if v > hi {
@@ -116,6 +119,248 @@ impl Gate {
             self.gain += (self.boden - self.gain) * (1.0 - self.rel);
         }
         x * self.gain
+    }
+}
+
+/* ==================================================================
+Low-Cut, Kompressor, Limiter, Ducking
+================================================================== */
+
+/// Biquad in transponierter Direktform II (zwei Zustandswerte, ein Koeffizient
+/// mehr für die Rückkopplung).
+#[derive(Clone, Copy, Default)]
+pub struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    /// Hochpass 2. Ordnung (Butterworth, Q = 0,707): bei `freq_hz` liegt die
+    /// Grenze bei −3 dB, darunter fällt er mit 12 dB je Oktave.
+    pub fn hochpass(freq_hz: f32, sr: f32) -> Biquad {
+        let f = clamp(freq_hz, 10.0, sr * 0.45);
+        let w = 2.0 * PI * f / sr;
+        let (sin, cos) = (w.sin(), w.cos());
+        let alpha = sin / (2.0 * std::f32::consts::FRAC_1_SQRT_2);
+        let a0 = 1.0 + alpha;
+        Biquad {
+            b0: (1.0 + cos) * 0.5 / a0,
+            b1: -(1.0 + cos) / a0,
+            b2: (1.0 + cos) * 0.5 / a0,
+            a1: -2.0 * cos / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    /// Neue Grenzfrequenz bei stehendem Zustand: beim Drehen am Regler knackt
+    /// nichts, weil nur die Koeffizienten getauscht werden.
+    pub fn setze_hochpass(&mut self, freq_hz: f32, sr: f32) {
+        let (z1, z2) = (self.z1, self.z2);
+        *self = Biquad::hochpass(freq_hz, sr);
+        self.z1 = z1;
+        self.z2 = z2;
+    }
+
+    #[inline]
+    pub fn process(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b2 * x - self.a2 * y;
+        y
+    }
+
+    pub fn reset(&mut self) {
+        self.z1 = 0.0;
+        self.z2 = 0.0;
+    }
+}
+
+/// Kompressor mit gekoppeltem Stereo-Detektor (wie das Gate: beide Kanäle
+/// bekommen denselben Schlüssel `max(|L|, |R|)`, damit das Stereobild steht).
+///
+/// Harte Kennlinie (kein Knee): über der Schwelle wird um `1 − 1/ratio`
+/// reduziert, darunter bleibt das Signal unberührt. Make-up hebt danach
+/// wieder an.
+#[derive(Clone, Copy)]
+pub struct Kompressor {
+    pub enabled: bool,
+    env: f32,
+    att: f32,
+    rel: f32,
+    /// Aktuelle Verstärkung (linear, mit Make-up).
+    gain: f32,
+    makeup: f32,
+    schwelle: f32,
+    ratio: f32,
+}
+
+impl Default for Kompressor {
+    fn default() -> Self {
+        Kompressor {
+            enabled: false,
+            env: 0.0,
+            att: 0.0,
+            rel: 0.0,
+            gain: 1.0,
+            makeup: 1.0,
+            schwelle: -18.0,
+            ratio: 3.0,
+        }
+    }
+}
+
+impl Kompressor {
+    /// Schwelle, Ratio, Zeiten und Make-up in dB bzw. ms (einmal je Block).
+    pub fn set_werte(
+        &mut self,
+        schwelle_db: f32,
+        ratio: f32,
+        attack_ms: f32,
+        release_ms: f32,
+        makeup_db: f32,
+        sr: f32,
+    ) {
+        self.schwelle = clamp(schwelle_db, -80.0, 0.0);
+        self.ratio = clamp(ratio, 1.0, 40.0);
+        self.att = (-1.0 / (clamp(attack_ms, 0.1, 200.0) * 0.001 * sr)).exp();
+        self.rel = (-1.0 / (clamp(release_ms, 5.0, 4000.0) * 0.001 * sr)).exp();
+        self.makeup = db_to_lin(clamp(makeup_db, 0.0, 30.0));
+    }
+
+    /// Ein Sample; `key` ist der Detektorwert (bei Stereo `max(|L|, |R|)`).
+    #[inline]
+    pub fn process_key(&mut self, x: f32, key: f32) -> f32 {
+        if !self.enabled {
+            return x;
+        }
+        let lvl = key.abs();
+        let coef = if lvl > self.env { self.att } else { self.rel };
+        self.env = coef * self.env + (1.0 - coef) * lvl;
+        let ueber = lin_to_db(self.env) - self.schwelle;
+        let ziel_db = if ueber > 0.0 {
+            -ueber * (1.0 - 1.0 / self.ratio)
+        } else {
+            0.0
+        };
+        let ziel = db_to_lin(ziel_db) * self.makeup;
+        let c = if ziel < self.gain { self.att } else { self.rel };
+        self.gain = ziel + (self.gain - ziel) * c;
+        x * self.gain
+    }
+
+    /// Verstärkung, die der Kompressor gerade anlegt (für Messungen).
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+}
+
+/// Limiter mit Decke: was über die Decke will, wird sofort heruntergezogen und
+/// danach mit `release_ms` wieder freigegeben.
+#[derive(Clone, Copy)]
+pub struct Limiter {
+    pub enabled: bool,
+    decke: f32,
+    gain: f32,
+    rel: f32,
+}
+
+impl Default for Limiter {
+    fn default() -> Self {
+        Limiter {
+            enabled: false,
+            decke: db_to_lin(-1.0),
+            gain: 1.0,
+            rel: 0.0,
+        }
+    }
+}
+
+impl Limiter {
+    pub fn set_werte(&mut self, decke_db: f32, release_ms: f32, sr: f32) {
+        self.decke = db_to_lin(clamp(decke_db, -30.0, 0.0));
+        self.rel = (-1.0 / (clamp(release_ms, 5.0, 5000.0) * 0.001 * sr)).exp();
+    }
+
+    /// Decke in dBFS (für Zustand und Tests).
+    pub fn decke_db(&self) -> f32 {
+        lin_to_db(self.decke)
+    }
+
+    /// Ein Sample; `key` wie beim Kompressor der gekoppelte Detektorwert.
+    #[inline]
+    pub fn process_key(&mut self, x: f32, key: f32) -> f32 {
+        if !self.enabled {
+            return x;
+        }
+        let noetig = if key > self.decke && key > 1e-9 {
+            self.decke / key
+        } else {
+            1.0
+        };
+        // Sofort zu, langsam auf: kein Überschwingen über die Decke.
+        if noetig < self.gain {
+            self.gain = noetig;
+        } else {
+            self.gain = noetig + (self.gain - noetig) * self.rel;
+        }
+        let y = x * self.gain;
+        // Letzte Hand: die Decke hält auch, wenn im Block etwas springt.
+        clamp(y, -self.decke, self.decke)
+    }
+}
+
+/// Ducking: senkt einen anderen Bus ab, solange der eigene Bus über der
+/// Schwelle liegt.
+///
+/// Das Ziel steht im Parameter des Quellbusses; die Absenkung wird über den
+/// **Pegel aus dem vorigen Block** entschieden (siehe `EngineDsp::process`).
+#[derive(Clone, Copy)]
+pub struct Ducker {
+    gain: f32,
+    att: f32,
+    rel: f32,
+}
+
+impl Default for Ducker {
+    fn default() -> Self {
+        Ducker {
+            gain: 1.0,
+            att: 0.0,
+            rel: 0.0,
+        }
+    }
+}
+
+impl Ducker {
+    pub fn set_times(&mut self, attack_ms: f32, release_ms: f32, sr: f32) {
+        self.att = (-1.0 / (clamp(attack_ms, 0.5, 2000.0) * 0.001 * sr)).exp();
+        self.rel = (-1.0 / (clamp(release_ms, 5.0, 8000.0) * 0.001 * sr)).exp();
+    }
+
+    /// Ein Sample weiterrechnen. `ueber` = Quellbus liegt über der Schwelle,
+    /// `tiefe` = Zielverstärkung der Absenkung (linear, z. B. −12 dB).
+    #[inline]
+    pub fn step(&mut self, ueber: bool, tiefe: f32) -> f32 {
+        let ziel = if ueber { tiefe } else { 1.0 };
+        let c = if ziel < self.gain { self.att } else { self.rel };
+        self.gain = ziel + (self.gain - ziel) * c;
+        self.gain
+    }
+
+    /// Aktuelle Absenkung (linear).
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    pub fn reset(&mut self) {
+        self.gain = 1.0;
     }
 }
 
@@ -268,6 +513,108 @@ mod tests {
             assert_eq!(d.process(if k == 0 { 1.0 } else { 0.0 }), 0.0);
         }
         assert!((d.process(0.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lowcut_daempft_tiefen_und_laesst_hoehen_stehen() {
+        let sr = 48_000.0;
+        let mut bq = Biquad::hochpass(80.0, sr);
+        // Pegel (Effektivwert) einer Sinuswelle nach dem Filter, eingeschwungen.
+        let messen = |freq: f32, bq: &mut Biquad| {
+            let mut summe = 0.0f64;
+            let n = (sr * 0.5) as usize;
+            for i in 0..n {
+                let x = (2.0 * PI * freq * i as f32 / sr).sin();
+                let y = bq.process(x);
+                if i >= n / 2 {
+                    summe += (y * y) as f64;
+                }
+            }
+            (summe / (n / 2) as f64).sqrt() as f32
+        };
+        let tief = messen(30.0, &mut bq);
+        let hoch = messen(1000.0, &mut bq);
+        // Sinus hat Effektivwert 1/√2; bei 30 Hz muss deutlich gedämpft sein.
+        let tief_db = lin_to_db(tief * std::f32::consts::SQRT_2);
+        let hoch_db = lin_to_db(hoch * std::f32::consts::SQRT_2);
+        assert!(tief_db < -12.0, "30 Hz nur {tief_db:.1} dB");
+        assert!(hoch_db.abs() < 0.2, "1 kHz verändert: {hoch_db:.2} dB");
+    }
+
+    #[test]
+    fn kompressor_reduziert_um_die_ratio() {
+        let sr = 48_000.0;
+        let mut k = Kompressor {
+            enabled: true,
+            ..Default::default()
+        };
+        // Schwelle −20 dBFS, Ratio 4:1, schnelle Attacke.
+        k.set_werte(-20.0, 4.0, 1.0, 100.0, 0.0, sr);
+        // Sinus mit −6 dBFS Spitze (0,5) → 14 dB über der Schwelle.
+        let mut spitze = 0.0f32;
+        for i in 0..(sr * 0.5) as usize {
+            let x = 0.5 * (2.0 * PI * 400.0 * i as f32 / sr).sin();
+            let key = x.abs();
+            let y = k.process_key(x, key);
+            if i > (sr * 0.25) as usize {
+                spitze = spitze.max(y.abs());
+            }
+        }
+        let erwartet = -6.0 - 14.0 * (1.0 - 0.25);
+        let gemessen = lin_to_db(spitze);
+        assert!(
+            (gemessen - erwartet).abs() < 1.5,
+            "Ausgang {gemessen:.1} dBFS, erwartet {erwartet:.1} dBFS"
+        );
+        // Aus: unverändert.
+        k.enabled = false;
+        assert!((k.process_key(0.5, 0.5) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn limiter_haelt_die_decke() {
+        let sr = 48_000.0;
+        let mut l = Limiter {
+            enabled: true,
+            ..Default::default()
+        };
+        l.set_werte(-1.0, 50.0, sr);
+        let decke = db_to_lin(-1.0);
+        assert!((l.decke_db() - -1.0).abs() < 0.01);
+        let mut spitze = 0.0f32;
+        for i in 0..(sr * 0.2) as usize {
+            // 6 dB über der Decke, dazu ein Sprung mitten im Block.
+            let a = if i % 1000 == 0 { 2.0 } else { 1.2 };
+            let x = a * (2.0 * PI * 200.0 * i as f32 / sr).sin();
+            let y = l.process_key(x, x.abs());
+            assert!(y.abs() <= decke + 1e-6, "Sample {y} über der Decke");
+            spitze = spitze.max(y.abs());
+        }
+        assert!(
+            spitze > decke * 0.7,
+            "Limiter hat zu stark zugepackt: {spitze}"
+        );
+    }
+
+    #[test]
+    fn ducker_senkt_ab_und_gibt_wieder_frei() {
+        let sr = 48_000.0;
+        let mut d = Ducker::default();
+        d.set_times(20.0, 200.0, sr);
+        let tiefe = db_to_lin(-12.0);
+        for _ in 0..(sr * 0.2) as usize {
+            d.step(true, tiefe);
+        }
+        let abgesenkt = d.gain();
+        assert!(
+            (lin_to_db(abgesenkt) + 12.0).abs() < 0.5,
+            "abgesenkt auf {:.1} dB",
+            lin_to_db(abgesenkt)
+        );
+        for _ in 0..(sr * 1.0) as usize {
+            d.step(false, tiefe);
+        }
+        assert!(d.gain() > 0.99, "nicht freigegeben: {:.3}", d.gain());
     }
 
     #[test]
