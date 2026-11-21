@@ -363,20 +363,37 @@ fn filter_menue(
                                 .size(thema::FONT_SIZE_SM),
                         );
                     }
-                    for eintrag in senken {
-                        let an = gewaehlt.contains(&eintrag.name);
-                        let text = geraete::eintrag_text(&eintrag.anzeige, eintrag.fehlt);
-                        if ui
-                            .add(egui::Checkbox::new(&mut { an }, text))
-                            .on_hover_text(&eintrag.name)
-                            .clicked()
-                        {
-                            a.push(Aktion::EchoGeraet {
-                                name: eintrag.name.clone(),
-                                an: !an,
-                            });
+                    // Das Kästchen muss man sehen: die Vorgabe des Themes
+                    // (bg_raised auf bg_panel) verschwindet im Menü, und mit
+                    // der Vorgabegröße wäre es ein Punkt neben dem Text.
+                    ui.scope(|ui| {
+                        ui.spacing_mut().icon_width = thema::SIZE_CONTROL_SM;
+                        ui.spacing_mut().icon_width_inner = thema::SIZE_CONTROL_SM;
+                        let w = &mut ui.visuals_mut().widgets;
+                        for zustand in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+                            zustand.bg_fill = f.bg_input;
+                            zustand.weak_bg_fill = f.bg_input;
+                            zustand.bg_stroke =
+                                egui::Stroke::new(thema::SIZE_BORDER, f.border_strong);
                         }
-                    }
+                        w.active.bg_fill = f.bg_selected;
+                        w.active.bg_stroke = egui::Stroke::new(thema::SIZE_FOCUS, f.focus_ring);
+                        for eintrag in senken {
+                            let an = gewaehlt.contains(&eintrag.name);
+                            let mut wert = an;
+                            let text = geraete::eintrag_text(&eintrag.anzeige, eintrag.fehlt);
+                            if ui
+                                .add(egui::Checkbox::new(&mut wert, text))
+                                .on_hover_text(&eintrag.name)
+                                .changed()
+                            {
+                                a.push(Aktion::EchoGeraet {
+                                    name: eintrag.name.clone(),
+                                    an: wert,
+                                });
+                            }
+                        }
+                    });
                     ui.label(
                         bausteine::text(
                             f,

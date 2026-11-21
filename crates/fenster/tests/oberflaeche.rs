@@ -262,5 +262,19 @@ fn bilder_in_allen_themes() {
                     .unwrap();
             }
         }
+        // Das ECHO-Menü ist neu: ein Bild je Theme, damit man es im PR sieht.
+        let (mut f, _) = beispiel(thema);
+        f.ausfuehren(crosspoint_fenster::modell::Aktion::Aufklappen(Some(
+            crosspoint_fenster::modell::Aufklapp::Echo(5),
+        )));
+        let mut h = harness(f, (1920.0, 1080.0));
+        h.run_steps(6);
+        assert!(h.query_by_label("ECHOUNTERDRÜCKUNG").is_some());
+        if let Some(ziel) = &ziel {
+            let bild = h.render().expect("zeichnen (wgpu)");
+            std::fs::create_dir_all(ziel).unwrap();
+            bild.save(ziel.join(format!("echo-menu-{}.png", thema.name())))
+                .unwrap();
+        }
     }
 }
