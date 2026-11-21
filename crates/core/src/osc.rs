@@ -504,7 +504,6 @@ pub fn lies(params: &Params, target: &str, index: usize, param: &str) -> Option<
             let s = params.strips.get(index)?;
             Some(match param {
                 "gain" => zahl(&s.gain),
-                "limit" => zahl(&s.limit),
                 "pan" => zahl(&s.pan),
                 "mute" => schalter(&s.mute),
                 "solo" => schalter(&s.solo),
@@ -519,12 +518,11 @@ pub fn lies(params: &Params, target: &str, index: usize, param: &str) -> Option<
             let b = params.buses.get(index)?;
             Some(match param {
                 "gain" => zahl(&b.gain),
-                "limit" => zahl(&b.limit),
                 "mute" => schalter(&b.mute),
                 "mono" => schalter(&b.mono),
                 "trim" => zahl(&b.trim[0]),
                 "delay" | "delay_ms" => zahl(&b.delay_ms[0]),
-                _ => return None,
+                _ => return crate::engine::filter_get(b.filter.as_ref()?, param),
             })
         }
         _ => None,

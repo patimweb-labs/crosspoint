@@ -1,19 +1,23 @@
 //! Echtzeit-Kern: Parameter als Atome, DSP-Zustand ausschließlich im Audio-Thread.
 //!
-//! Signalkette je Streifen:
-//!   Eingang -> Mono -> LOWCUT -> TK -> GATE -> NR (spektral) -> EQ -> Compressor
-//!   -> Denoiser ("einfach") -> Gain -> Pan -> Routing-Matrix (8 Busse)
+//! # Rohsignal an den Eingängen, Filter nur an den virtuellen Ausgängen
 //!
-//! Die Reihenfolge folgt der Sprache, nicht dem Original: erst Rumpeln weg
-//! (Lowcut), dann der Transienten-Unterdruecker (Klackser/Poltern, bevor das
-//! Gate ueber Pausen entscheidet), dann entscheidet das Gate **am
-//! unveraenderten Pegel**, ob eine Pause vorliegt, dann senkt die NR das
-//! Rauschen unter dem Signal, und erst danach formen EQ und Compressor den
-//! Klang. Stuende der Compressor vor dem Gate, haenge die Gate-Schwelle von
-//! seiner Kennlinie und seinem Makeup ab; hinter dem Gate arbeitet er auf dem
-//! schon bereinigten Signal.
-//! Je Bus: Summe -> Mischmodus (mode/cross) -> Limiter -> Delay pro Kanal
-//!   -> Trim -> Gain/Mute -> Ausgang.
+//! Streifen 1..8:  Eingang → Mono → Fader → Pan → Routing (8 Busse).
+//!   Keine Bearbeitung: auf jedem Bus, auf den ein Streifen geht, liegt sein
+//!   Rohsignal. Wer es unverändert braucht (Aufnahme, Kopfhörer), nimmt einen
+//!   Hardware-Bus.
+//!
+//! Busse A1..A5 (Hardware):  Summe → Mono/Modus → Delay → Trim → Gain/Mute.
+//!
+//! Busse B1..B3 (virtuell):  Summe → Mono/Modus → **Echounterdrückung** →
+//!   **Noise Gate** → Delay → Trim → Gain/Mute.
+//!   Die Echounterdrückung zieht ab, was die Boxen spielen: Referenz ist der
+//!   fertige Ausgang eines Hardware-Busses (`aec_ref`, ab Werk A1). Dass die
+//!   A-Busse vor den B-Bussen gerechnet werden, ist deshalb Absicht. Das Gate
+//!   entscheidet danach am echofreien Signal über Pausen.
+//!
+//! Die Filter stehen im Modell als [`AusgangsFilter`] – nur die virtuellen
+//! Busse haben einen; ein Hardware-Bus nimmt `gate`/`aec` nicht an.
 //!
 //! Es gibt **keinen** Mutex im Audio-Pfad: die Steuerung schreibt Atome, der
 //! Callback liest sie mit `Relaxed`.
@@ -21,10 +25,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, Ordering::Relaxed};
 use std::sync::Mutex;
 
+use crate::aec::Echounterdruecker;
 use crate::dsp::*;
-use crate::effekte::{self, Echo, Hall, Karaoke, Klangfarbe, FX_WEGE};
 use crate::json::Value;
-use crate::{BUSES, BUS_NAMES, EQ_CELLS, STRIPS, STRIP_NAMES};
+use crate::{bus_kind, BusKind, BUSES, BUS_NAMES, STRIPS, STRIP_NAMES};
 
 #[inline]
 fn fget(a: &AtomicU32) -> f32 {
@@ -35,55 +39,14 @@ fn fset(a: &AtomicU32, v: f32) {
     a.store(v.to_bits(), Relaxed)
 }
 
-pub struct EqParam {
-    pub on: AtomicBool,
-    pub kind: AtomicU32,
-    pub freq: AtomicU32,
-    pub q: AtomicU32,
-    pub gain: AtomicU32,
-}
-
-impl EqParam {
-    fn new() -> EqParam {
-        EqParam {
-            on: AtomicBool::new(false),
-            kind: AtomicU32::new(0),
-            freq: AtomicU32::new(1000.0f32.to_bits()),
-            q: AtomicU32::new(0.7f32.to_bits()),
-            gain: AtomicU32::new(0.0f32.to_bits()),
-        }
-    }
-}
-
-pub struct CompParam {
-    pub on: AtomicBool,
-    pub threshold: AtomicU32,
-    pub ratio: AtomicU32,
-    pub attack: AtomicU32,
-    pub release: AtomicU32,
-    pub knee: AtomicU32,
-    pub gain_in: AtomicU32,
-    pub gain_out: AtomicU32,
-}
-
-impl CompParam {
-    fn new() -> CompParam {
-        CompParam {
-            on: AtomicBool::new(false),
-            threshold: AtomicU32::new((-18.0f32).to_bits()),
-            ratio: AtomicU32::new(1.0f32.to_bits()),
-            attack: AtomicU32::new(20.0f32.to_bits()),
-            release: AtomicU32::new(200.0f32.to_bits()),
-            knee: AtomicU32::new(0.0f32.to_bits()),
-            gain_in: AtomicU32::new(0.0f32.to_bits()),
-            gain_out: AtomicU32::new(0.0f32.to_bits()),
-        }
-    }
-}
+/// Erster virtueller Bus (B1).
+pub const ERSTER_VIRTUELLER: usize = 5;
+/// Anzahl der virtuellen Busse (B1..B3).
+pub const VIRTUELLE: usize = BUSES - ERSTER_VIRTUELLER;
 
 pub struct GateParam {
     pub on: AtomicBool,
-    /// Schwelle in dBFS (`gate_schwelle`, auch `gate_threshold`).
+    /// Schwelle in dBFS (`gate_schwelle`).
     pub threshold: AtomicU32,
     pub attack: AtomicU32,
     pub hold: AtomicU32,
@@ -105,60 +68,99 @@ impl GateParam {
     }
 }
 
+/// Filter eines virtuellen Ausgangs: Echounterdrückung und Noise Gate.
+pub struct AusgangsFilter {
+    pub gate: GateParam,
+    /// Echounterdrückung an (`aec`).
+    pub aec: AtomicBool,
+    /// Hardware-Bus, dessen Ausgang die Boxen spielen (`aec_ref`, 0..4 = A1..A5).
+    pub aec_ref: AtomicU32,
+}
+
+impl AusgangsFilter {
+    fn new() -> AusgangsFilter {
+        AusgangsFilter {
+            gate: GateParam::new(),
+            aec: AtomicBool::new(false),
+            aec_ref: AtomicU32::new(0),
+        }
+    }
+
+    fn set(&self, param: &str, v: f32) -> bool {
+        let g = &self.gate;
+        match param {
+            "gate" => g.on.store(v != 0.0, Relaxed),
+            "gate_schwelle" => fset(&g.threshold, v.clamp(-80.0, -10.0)),
+            "gate_tiefe" => fset(&g.tiefe, v.clamp(0.0, 80.0)),
+            "gate_attack" => fset(&g.attack, v.clamp(0.1, 500.0)),
+            "gate_hold" => fset(&g.hold, v.clamp(0.0, 2000.0)),
+            "gate_release" => fset(&g.release, v.clamp(1.0, 5000.0)),
+            "aec" => self.aec.store(v != 0.0, Relaxed),
+            "aec_ref" => {
+                let i = v.round();
+                if !(0.0..ERSTER_VIRTUELLER as f32).contains(&i) {
+                    return false;
+                }
+                self.aec_ref.store(i as u32, Relaxed)
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Alle Werte, wie sie im Zustand und im Preset stehen.
+    pub fn to_json(&self) -> Value {
+        let g = &self.gate;
+        Value::obj(vec![
+            ("gate", Value::Bool(g.on.load(Relaxed))),
+            ("gate_schwelle", Value::num(fget(&g.threshold) as f64)),
+            ("gate_tiefe", Value::num(fget(&g.tiefe) as f64)),
+            ("gate_attack", Value::num(fget(&g.attack) as f64)),
+            ("gate_hold", Value::num(fget(&g.hold) as f64)),
+            ("gate_release", Value::num(fget(&g.release) as f64)),
+            ("aec", Value::Bool(self.aec.load(Relaxed))),
+            ("aec_ref", Value::num(self.aec_ref.load(Relaxed) as f64)),
+        ])
+    }
+}
+
+/// Wert eines Filterparameters (`None` = unbekannter Name), Gegenstück zu
+/// [`AusgangsFilter::set`] für OSC und die Remote-API.
+pub fn filter_get(f: &AusgangsFilter, param: &str) -> Option<f32> {
+    let g = &f.gate;
+    let schalter = |b: &AtomicBool| if b.load(Relaxed) { 1.0 } else { 0.0 };
+    Some(match param {
+        "gate" => schalter(&g.on),
+        "gate_schwelle" => fget(&g.threshold),
+        "gate_tiefe" => fget(&g.tiefe),
+        "gate_attack" => fget(&g.attack),
+        "gate_hold" => fget(&g.hold),
+        "gate_release" => fget(&g.release),
+        "aec" => schalter(&f.aec),
+        "aec_ref" => f.aec_ref.load(Relaxed) as f32,
+        _ => return None,
+    })
+}
+
+/// Namen der Filterparameter (für Presets, OSC und Oberfläche).
+pub const FILTER_PARAMS: [&str; 8] = [
+    "gate",
+    "gate_schwelle",
+    "gate_tiefe",
+    "gate_attack",
+    "gate_hold",
+    "gate_release",
+    "aec",
+    "aec_ref",
+];
+
 pub struct StripParam {
     pub gain: AtomicU32,
-    pub limit: AtomicU32,
     pub pan: AtomicU32,
     pub mute: AtomicBool,
     pub solo: AtomicBool,
     pub mono: AtomicBool,
     pub sends: [AtomicU32; BUSES],
-    pub eq_on: AtomicBool,
-    pub eq: [[EqParam; EQ_CELLS]; 2],
-    pub comp: CompParam,
-    pub gate: GateParam,
-    pub dn_on: AtomicBool,
-    pub dn_floor: AtomicU32,
-    pub dn_threshold: AtomicU32,
-    /// Lowcut in Hz (0 = aus, sonst 60/80/120/160).
-    pub lc_hz: AtomicU32,
-    /// Transienten-Unterdruecker (`tk`): 0 = aus, sonst an.
-    pub tk: AtomicBool,
-    /// Verhaeltnis schnell/langsam, ab dem der TK absenkt (0..20 dB).
-    pub tk_schwelle: AtomicU32,
-    /// Wie weit der TK absenkt (0..30 dB, Vorgabe 15).
-    pub tk_tiefe: AtomicU32,
-    /// Staerke der Rauschunterdrueckung 0..1 (0 = aus).
-    pub nr: AtomicU32,
-    /// Schwelle des NR-Expanders in dBFS (-60..-20).
-    pub nr_schwelle: AtomicU32,
-    /// 0 = eigene Berechnung, 1 = einfacher Denoiser, 2 = RNNoise (Zugabe).
-    pub nr_modus: AtomicU32,
-    /// Expander innerhalb der NR zuschalten (sonst nur spektrale Subtraktion).
-    pub nr_gate: AtomicBool,
-    /// Effekt-Sends in dB (`send_r`, `send_d`, `send_fx1`, `send_fx2`);
-    /// [`effekte::AUS_DB`] = aus.
-    pub fx_send: [AtomicU32; FX_WEGE],
-    /// Send hinter dem Fader (`post_<weg>`); sonst vor dem Fader.
-    pub fx_post: [AtomicBool; FX_WEGE],
-    /// Karaoke-Modus (`karaoke`, siehe `effekte::KARAOKE_*`).
-    pub karaoke: AtomicU32,
-    /// Mitte stumm (`muc`).
-    pub muc: AtomicBool,
-    /// Klangfarbe −1..1 (`farbe`, Intellipan/Voice Color).
-    pub farbe: AtomicU32,
-    /// Green Mode (`green`): Bearbeitungskette umgehen, nur Fader/Pan/Routing.
-    pub green: AtomicBool,
-    /// Insert-Weg einschalten (`insert`); wirkt erst, wenn [`ins_bereit`].
-    ///
-    /// [`ins_bereit`]: StripParam::ins_bereit
-    pub insert: AtomicBool,
-    /// Sind Insert-Ausgang und -Rückweg verbunden? Setzt der Port-Wächter,
-    /// nicht die Bedienung; ohne Rückweg bliebe der Streifen sonst stumm.
-    pub ins_bereit: AtomicBool,
-    /// Gewählte Programme für Compressor, Gate, Denoiser (`prg_c/g/d`,
-    /// 0 = eigene Einstellung).
-    pub prg: [AtomicU32; 3],
     pub level: AtomicU32,
     /// Frei wählbarer Name (`/api/set` mit `param:label`); leer = Vorgabename.
     pub label: Mutex<String>,
@@ -170,50 +172,14 @@ impl StripParam {
         sends[0] = AtomicU32::new(1.0f32.to_bits()); // Vorgabe: Streifen -> A1
         StripParam {
             gain: AtomicU32::new(0f32.to_bits()),
-            limit: AtomicU32::new(12.0f32.to_bits()),
             pan: AtomicU32::new(0f32.to_bits()),
             mute: AtomicBool::new(false),
             solo: AtomicBool::new(false),
             mono: AtomicBool::new(false),
             sends,
-            eq_on: AtomicBool::new(false),
-            eq: std::array::from_fn(|_| std::array::from_fn(|_| EqParam::new())),
-            comp: CompParam::new(),
-            gate: GateParam::new(),
-            dn_on: AtomicBool::new(false),
-            dn_floor: AtomicU32::new((-30.0f32).to_bits()),
-            dn_threshold: AtomicU32::new((-55.0f32).to_bits()),
-            lc_hz: AtomicU32::new(0f32.to_bits()),
-            tk: AtomicBool::new(false),
-            tk_schwelle: AtomicU32::new(6.0f32.to_bits()),
-            tk_tiefe: AtomicU32::new(15.0f32.to_bits()),
-            nr: AtomicU32::new(0f32.to_bits()),
-            nr_schwelle: AtomicU32::new((-45.0f32).to_bits()),
-            nr_modus: AtomicU32::new(0),
-            nr_gate: AtomicBool::new(false),
-            fx_send: std::array::from_fn(|_| AtomicU32::new(effekte::AUS_DB.to_bits())),
-            fx_post: std::array::from_fn(|_| AtomicBool::new(true)),
-            karaoke: AtomicU32::new(0),
-            muc: AtomicBool::new(false),
-            farbe: AtomicU32::new(0f32.to_bits()),
-            green: AtomicBool::new(false),
-            insert: AtomicBool::new(false),
-            ins_bereit: AtomicBool::new(false),
-            prg: std::array::from_fn(|_| AtomicU32::new(0)),
             level: AtomicU32::new(0f32.to_bits()),
             label: Mutex::new(String::new()),
         }
-    }
-
-    /// Ist im FX-Bereich etwas eingestellt (Send offen, Klang verändert,
-    /// Green Mode, Insert)? Die Oberfläche markiert dann den FX-Knopf.
-    pub fn fx_belegt(&self) -> bool {
-        self.fx_send.iter().any(|a| fget(a) > effekte::AUS_DB)
-            || fget(&self.farbe) != 0.0
-            || self.karaoke.load(Relaxed) != 0
-            || self.muc.load(Relaxed)
-            || self.green.load(Relaxed)
-            || self.insert.load(Relaxed)
     }
 
     /// Anzeigename (leer = Vorgabename aus `STRIP_NAMES`).
@@ -243,7 +209,6 @@ pub const BUS_MODE_MAX: u32 = BUS_MODE_UPMIX_61;
 
 pub struct BusParam {
     pub gain: AtomicU32,
-    pub limit: AtomicU32,
     pub mute: AtomicBool,
     pub mono: AtomicBool,
     /// Mischmodus, siehe `bus_mix` und `BUS_MODE_*`.
@@ -252,71 +217,27 @@ pub struct BusParam {
     pub cross: AtomicBool,
     pub trim: [AtomicU32; 2],
     pub delay_ms: [AtomicU32; 2],
-    pub eq_on: AtomicBool,
-    pub eq: [[EqParam; EQ_CELLS]; 2],
-    pub limiter_on: AtomicBool,
-    pub c5_on: AtomicBool,
-    pub c5_threshold: AtomicU32,
-    pub c5_ceiling: AtomicU32,
-    /// Effekt-Returns in dB (`ret_r`, `ret_d`, `ret_fx1`, `ret_fx2`).
-    pub fx_ret: [AtomicU32; FX_WEGE],
-    /// Gewählter Bus (`sel`, höchstens einer): Ziel des Master-Zugs.
-    pub sel: AtomicBool,
-    /// Abhören (`monitor`, höchstens einer): A1 gibt statt seiner eigenen
-    /// Mischung diesen Bus aus – „was hört der Stream?“.
-    pub monitor: AtomicBool,
-    /// Green Mode (`green`): EQ, Limiter und C5 umgehen.
-    pub green: AtomicBool,
-    /// Insert-Weg (`insert`), wie beim Streifen.
-    pub insert: AtomicBool,
-    pub ins_bereit: AtomicBool,
-    /// Bus zusätzlich als eigenes virtuelles Gerät (`vaio`, nur A1–A5;
-    /// B1–B3 sind es ohnehin).
-    pub vaio: AtomicBool,
+    /// Filter – nur virtuelle Busse (B1..B3) haben welche.
+    pub filter: Option<AusgangsFilter>,
     pub level: AtomicU32,
     /// Frei wählbarer Name (`/api/set` mit `param:label`); leer = Vorgabename.
     pub label: Mutex<String>,
 }
 
 impl BusParam {
-    /// Bus `index`: A1 bekommt die Effekt-Returns ab Werk auf 0 dB, damit
-    /// ein aufgedrehter Send sofort hörbar ist.
     fn new(index: usize) -> BusParam {
-        let ret = if index == 0 { 0.0f32 } else { effekte::AUS_DB };
         BusParam {
             gain: AtomicU32::new(0f32.to_bits()),
-            limit: AtomicU32::new(0.0f32.to_bits()),
             mute: AtomicBool::new(false),
             mono: AtomicBool::new(false),
             mode: AtomicU32::new(BUS_MODE_NORMAL),
             cross: AtomicBool::new(false),
             trim: std::array::from_fn(|_| AtomicU32::new(0f32.to_bits())),
             delay_ms: std::array::from_fn(|_| AtomicU32::new(0f32.to_bits())),
-            eq_on: AtomicBool::new(false),
-            eq: std::array::from_fn(|_| std::array::from_fn(|_| EqParam::new())),
-            limiter_on: AtomicBool::new(false),
-            c5_on: AtomicBool::new(false),
-            c5_threshold: AtomicU32::new((-18.0f32).to_bits()),
-            c5_ceiling: AtomicU32::new((-0.3f32).to_bits()),
-            fx_ret: std::array::from_fn(|_| AtomicU32::new(ret.to_bits())),
-            sel: AtomicBool::new(index == 0),
-            monitor: AtomicBool::new(false),
-            green: AtomicBool::new(false),
-            insert: AtomicBool::new(false),
-            ins_bereit: AtomicBool::new(false),
-            vaio: AtomicBool::new(false),
+            filter: (bus_kind(index) == BusKind::Virtual).then(AusgangsFilter::new),
             level: AtomicU32::new(0f32.to_bits()),
             label: Mutex::new(String::new()),
         }
-    }
-
-    /// Wie [`StripParam::fx_belegt`]: Abhören, `vaio`, Green Mode, Insert.
-    /// Die Returns zählen nicht – sie sind ab Werk auf A1 offen.
-    pub fn fx_belegt(&self) -> bool {
-        self.monitor.load(Relaxed)
-            || self.vaio.load(Relaxed)
-            || self.green.load(Relaxed)
-            || self.insert.load(Relaxed)
     }
 
     /// Anzeigename (leer = Vorgabename aus `BUS_NAMES`).
@@ -331,59 +252,9 @@ impl BusParam {
 /// Längste erlaubte Anzeigenamen für Streifen und Busse (Zeichen).
 pub const MAX_LABEL: usize = 24;
 
-/// Einstellungen der eingebauten Send-Effekte (Ziel `fx`, Index 0).
-pub struct FxParam {
-    /// Raumgröße des Halls 0..1 (`hall_raum`).
-    pub hall_raum: AtomicU32,
-    /// Höhendämpfung des Halls 0..1 (`hall_daempfung`).
-    pub hall_daempfung: AtomicU32,
-    /// Echozeit in ms (`echo_zeit`, 1..2000).
-    pub echo_zeit: AtomicU32,
-    /// Rückkopplung 0..0,9 (`echo_rueck`).
-    pub echo_rueck: AtomicU32,
-    /// Höhendämpfung der Wiederholungen 0..1 (`echo_daempfung`).
-    pub echo_daempfung: AtomicU32,
-}
-
-impl FxParam {
-    fn new() -> FxParam {
-        FxParam {
-            hall_raum: AtomicU32::new(0.5f32.to_bits()),
-            hall_daempfung: AtomicU32::new(0.5f32.to_bits()),
-            echo_zeit: AtomicU32::new(300.0f32.to_bits()),
-            echo_rueck: AtomicU32::new(0.35f32.to_bits()),
-            echo_daempfung: AtomicU32::new(0.3f32.to_bits()),
-        }
-    }
-
-    fn set(&self, param: &str, v: f32) -> bool {
-        match param {
-            "hall_raum" => fset(&self.hall_raum, v.clamp(0.0, 1.0)),
-            "hall_daempfung" => fset(&self.hall_daempfung, v.clamp(0.0, 1.0)),
-            "echo_zeit" => fset(&self.echo_zeit, v.clamp(1.0, effekte::ECHO_MAX_MS)),
-            "echo_rueck" => fset(&self.echo_rueck, v.clamp(0.0, 0.9)),
-            "echo_daempfung" => fset(&self.echo_daempfung, v.clamp(0.0, 1.0)),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Namen und Werte, wie sie im Preset stehen.
-    pub fn werte(&self) -> [(&'static str, f32); 5] {
-        [
-            ("hall_raum", fget(&self.hall_raum)),
-            ("hall_daempfung", fget(&self.hall_daempfung)),
-            ("echo_zeit", fget(&self.echo_zeit)),
-            ("echo_rueck", fget(&self.echo_rueck)),
-            ("echo_daempfung", fget(&self.echo_daempfung)),
-        ]
-    }
-}
-
 pub struct Params {
     pub strips: [StripParam; STRIPS],
     pub buses: [BusParam; BUSES],
-    pub fx: FxParam,
     pub sample_rate: AtomicU32,
     pub block: AtomicU32,
     /// Monoton steigender Zaehler der im Callback verarbeiteten Audio-Frames.
@@ -400,7 +271,6 @@ impl Params {
         Params {
             strips: std::array::from_fn(|_| StripParam::new()),
             buses: std::array::from_fn(BusParam::new),
-            fx: FxParam::new(),
             sample_rate: AtomicU32::new(sample_rate.to_bits()),
             block: AtomicU32::new(block),
             frames: AtomicU64::new(0),
@@ -415,73 +285,16 @@ impl Params {
 
     pub fn set(&self, target: &str, index: usize, param: &str, value: f32) -> bool {
         match target {
-            "strip" => {
-                if let Some(modul) = crate::programme::Modul::aus_param(param) {
-                    return value >= 0.0
-                        && crate::programme::waehlen(self, index, modul, value as u32);
-                }
-                match self.strips.get(index) {
-                    Some(s) => {
-                        let ok = set_strip(s, param, value);
-                        // Ein von Hand geaenderter Wert hebt das Programm auf.
-                        if ok {
-                            if let Some(m) = crate::programme::Modul::von_wert(param) {
-                                s.prg[m as usize].store(0, Relaxed);
-                            }
-                        }
-                        ok
-                    }
-                    None => false,
-                }
-            }
-            // `sel` und `monitor` gelten für höchstens einen Bus: Einschalten
-            // nimmt sie den anderen. `sel` lässt sich nicht abwählen – ein
-            // Bus ist immer der gewählte.
-            "bus" if matches!(param, "sel" | "monitor") => {
-                if index >= self.buses.len() {
-                    return false;
-                }
-                let an = value != 0.0;
-                fn feld(b: &BusParam, sel: bool) -> &AtomicBool {
-                    if sel {
-                        &b.sel
-                    } else {
-                        &b.monitor
-                    }
-                }
-                let sel = param == "sel";
-                if !an {
-                    // Ausschalten betrifft nur diesen Bus (bei `sel` nichts).
-                    if !sel {
-                        self.buses[index].monitor.store(false, Relaxed);
-                    }
-                    return true;
-                }
-                for (i, b) in self.buses.iter().enumerate() {
-                    feld(b, sel).store(an && i == index, Relaxed);
-                }
-                true
-            }
+            "strip" => match self.strips.get(index) {
+                Some(s) => set_strip(s, param, value),
+                None => false,
+            },
             "bus" => match self.buses.get(index) {
                 Some(b) => set_bus(b, param, value),
                 None => false,
             },
-            "fx" if index == 0 => self.fx.set(param, value),
             _ => false,
         }
-    }
-
-    /// Index des gewählten Busses (`sel`).
-    pub fn sel_bus(&self) -> usize {
-        self.buses
-            .iter()
-            .position(|b| b.sel.load(Relaxed))
-            .unwrap_or(0)
-    }
-
-    /// Bus, den A1 gerade abhört (`monitor`), falls einer.
-    pub fn monitor_bus(&self) -> Option<usize> {
-        self.buses.iter().position(|b| b.monitor.load(Relaxed))
     }
 
     /// Textparameter setzen – derzeit nur `label` (Anzeigename) je Streifen
@@ -525,194 +338,53 @@ impl Params {
         })
     }
 
-    /// EQ-Zellen eines Streifens als JSON (Kanal 0; die Zellen sind fuer beide
-    /// Kanaele gleich belegt, nur der Speicher ist getrennt).
-    pub fn eq_json(&self, strip: usize) -> Option<crate::json::Value> {
-        use std::sync::atomic::Ordering::Relaxed;
-        let s = self.strips.get(strip)?;
-        let cells: Vec<crate::json::Value> = s.eq[0]
+    pub fn to_json(&self) -> Value {
+        let strips = self
+            .strips
             .iter()
-            .map(|c| {
-                crate::json::Value::Obj(vec![
-                    ("on".into(), crate::json::Value::Bool(c.on.load(Relaxed))),
+            .enumerate()
+            .map(|(i, s)| {
+                let sends: Vec<Value> =
+                    s.sends.iter().map(|a| Value::num(fget(a) as f64)).collect();
+                Value::obj(vec![
+                    ("name", Value::str(STRIP_NAMES[i])),
+                    ("label", Value::Str(s.label())),
+                    ("gain", Value::num(fget(&s.gain) as f64)),
+                    ("pan", Value::num(fget(&s.pan) as f64)),
+                    ("mute", Value::Bool(s.mute.load(Relaxed))),
+                    ("solo", Value::Bool(s.solo.load(Relaxed))),
+                    ("mono", Value::Bool(s.mono.load(Relaxed))),
+                    ("sends", Value::Arr(sends)),
+                ])
+            })
+            .collect();
+        let buses = self
+            .buses
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                Value::obj(vec![
+                    ("name", Value::str(BUS_NAMES[i])),
+                    ("label", Value::Str(b.label())),
+                    ("gain", Value::num(fget(&b.gain) as f64)),
+                    ("mute", Value::Bool(b.mute.load(Relaxed))),
+                    ("mono", Value::Bool(b.mono.load(Relaxed))),
+                    ("mode", Value::num(b.mode.load(Relaxed) as f64)),
+                    ("cross", Value::Bool(b.cross.load(Relaxed))),
+                    ("delay_ms", Value::num(fget(&b.delay_ms[0]) as f64)),
+                    ("trim", Value::num(fget(&b.trim[0]) as f64)),
                     (
-                        "kind".into(),
-                        crate::json::Value::Num(c.kind.load(Relaxed) as f64),
-                    ),
-                    (
-                        "freq".into(),
-                        crate::json::Value::Num(f32::from_bits(c.freq.load(Relaxed)) as f64),
-                    ),
-                    (
-                        "q".into(),
-                        crate::json::Value::Num(f32::from_bits(c.q.load(Relaxed)) as f64),
-                    ),
-                    (
-                        "gain".into(),
-                        crate::json::Value::Num(f32::from_bits(c.gain.load(Relaxed)) as f64),
+                        "filter",
+                        b.filter
+                            .as_ref()
+                            .map_or(Value::Null, AusgangsFilter::to_json),
                     ),
                 ])
             })
             .collect();
-        Some(crate::json::Value::Obj(vec![
-            ("strip".into(), crate::json::Value::Num(strip as f64)),
-            ("cells".into(), crate::json::Value::Arr(cells)),
-        ]))
-    }
-
-    pub fn to_json(&self) -> Value {
         Value::obj(vec![
-            (
-                "strips",
-                Value::Arr(
-                    self.strips
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| {
-                            let sends: Vec<Value> =
-                                s.sends.iter().map(|a| Value::num(fget(a) as f64)).collect();
-                            Value::obj(vec![
-                                ("name", Value::str(STRIP_NAMES[i])),
-                                ("label", Value::Str(s.label())),
-                                ("gain", Value::num(fget(&s.gain) as f64)),
-                                ("pan", Value::num(fget(&s.pan) as f64)),
-                                ("mute", Value::Bool(s.mute.load(Relaxed))),
-                                ("solo", Value::Bool(s.solo.load(Relaxed))),
-                                ("mono", Value::Bool(s.mono.load(Relaxed))),
-                                ("sends", Value::Arr(sends)),
-                                ("eq", Value::Bool(s.eq_on.load(Relaxed))),
-                                ("comp", Value::Bool(s.comp.on.load(Relaxed))),
-                                ("gate", Value::Bool(s.gate.on.load(Relaxed))),
-                                ("denoiser", Value::Bool(s.dn_on.load(Relaxed))),
-                                ("lowcut", Value::num(fget(&s.lc_hz) as f64)),
-                                ("tk", Value::Bool(s.tk.load(Relaxed))),
-                                ("tk_schwelle", Value::num(fget(&s.tk_schwelle) as f64)),
-                                ("tk_tiefe", Value::num(fget(&s.tk_tiefe) as f64)),
-                                ("nr", Value::num(fget(&s.nr) as f64)),
-                                ("nr_schwelle", Value::num(fget(&s.nr_schwelle) as f64)),
-                                ("nr_modus", Value::num(s.nr_modus.load(Relaxed) as f64)),
-                                ("nr_gate", Value::Bool(s.nr_gate.load(Relaxed))),
-                                ("gate_schwelle", Value::num(fget(&s.gate.threshold) as f64)),
-                                ("gate_hold", Value::num(fget(&s.gate.hold) as f64)),
-                                ("gate_tiefe", Value::num(fget(&s.gate.tiefe) as f64)),
-                                ("gate_attack", Value::num(fget(&s.gate.attack) as f64)),
-                                ("gate_release", Value::num(fget(&s.gate.release) as f64)),
-                                ("comp_threshold", Value::num(fget(&s.comp.threshold) as f64)),
-                                ("comp_ratio", Value::num(fget(&s.comp.ratio) as f64)),
-                                ("comp_attack", Value::num(fget(&s.comp.attack) as f64)),
-                                ("comp_release", Value::num(fget(&s.comp.release) as f64)),
-                                ("comp_knee", Value::num(fget(&s.comp.knee) as f64)),
-                                ("comp_gain_in", Value::num(fget(&s.comp.gain_in) as f64)),
-                                ("comp_gain_out", Value::num(fget(&s.comp.gain_out) as f64)),
-                                (
-                                    "fx_send",
-                                    Value::Arr(
-                                        s.fx_send
-                                            .iter()
-                                            .map(|a| Value::num(fget(a) as f64))
-                                            .collect(),
-                                    ),
-                                ),
-                                (
-                                    "fx_post",
-                                    Value::Arr(
-                                        s.fx_post
-                                            .iter()
-                                            .map(|a| Value::Bool(a.load(Relaxed)))
-                                            .collect(),
-                                    ),
-                                ),
-                                ("karaoke", Value::num(s.karaoke.load(Relaxed) as f64)),
-                                ("muc", Value::Bool(s.muc.load(Relaxed))),
-                                ("farbe", Value::num(fget(&s.farbe) as f64)),
-                                ("green", Value::Bool(s.green.load(Relaxed))),
-                                ("insert", Value::Bool(s.insert.load(Relaxed))),
-                                (
-                                    "prg",
-                                    Value::Arr(
-                                        s.prg
-                                            .iter()
-                                            .map(|a| Value::num(a.load(Relaxed) as f64))
-                                            .collect(),
-                                    ),
-                                ),
-                                // EQ-Baender (Kanal 0; beide Kanaele sind gleich belegt).
-                                (
-                                    "eq_cells",
-                                    Value::Arr(
-                                        s.eq[0]
-                                            .iter()
-                                            .map(|c| {
-                                                Value::obj(vec![
-                                                    ("on", Value::Bool(c.on.load(Relaxed))),
-                                                    (
-                                                        "type",
-                                                        Value::num(c.kind.load(Relaxed) as f64),
-                                                    ),
-                                                    ("freq", Value::num(fget(&c.freq) as f64)),
-                                                    ("q", Value::num(fget(&c.q) as f64)),
-                                                    ("gain", Value::num(fget(&c.gain) as f64)),
-                                                ])
-                                            })
-                                            .collect(),
-                                    ),
-                                ),
-                            ])
-                        })
-                        .collect(),
-                ),
-            ),
-            (
-                "buses",
-                Value::Arr(
-                    self.buses
-                        .iter()
-                        .enumerate()
-                        .map(|(i, b)| {
-                            Value::obj(vec![
-                                ("name", Value::str(BUS_NAMES[i])),
-                                ("label", Value::Str(b.label())),
-                                ("gain", Value::num(fget(&b.gain) as f64)),
-                                ("mute", Value::Bool(b.mute.load(Relaxed))),
-                                ("mono", Value::Bool(b.mono.load(Relaxed))),
-                                ("mode", Value::num(b.mode.load(Relaxed) as f64)),
-                                ("cross", Value::Bool(b.cross.load(Relaxed))),
-                                ("eq", Value::Bool(b.eq_on.load(Relaxed))),
-                                ("limiter", Value::Bool(b.limiter_on.load(Relaxed))),
-                                ("delay_ms", Value::num(fget(&b.delay_ms[0]) as f64)),
-                                ("trim", Value::num(fget(&b.trim[0]) as f64)),
-                                ("c5", Value::Bool(b.c5_on.load(Relaxed))),
-                                ("c5_threshold", Value::num(fget(&b.c5_threshold) as f64)),
-                                ("c5_ceiling", Value::num(fget(&b.c5_ceiling) as f64)),
-                                (
-                                    "fx_ret",
-                                    Value::Arr(
-                                        b.fx_ret
-                                            .iter()
-                                            .map(|a| Value::num(fget(a) as f64))
-                                            .collect(),
-                                    ),
-                                ),
-                                ("sel", Value::Bool(b.sel.load(Relaxed))),
-                                ("monitor", Value::Bool(b.monitor.load(Relaxed))),
-                                ("green", Value::Bool(b.green.load(Relaxed))),
-                                ("insert", Value::Bool(b.insert.load(Relaxed))),
-                                ("vaio", Value::Bool(b.vaio.load(Relaxed))),
-                            ])
-                        })
-                        .collect(),
-                ),
-            ),
-            (
-                "fx",
-                Value::Obj(
-                    self.fx
-                        .werte()
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), Value::num(*v as f64)))
-                        .collect(),
-                ),
-            ),
+            ("strips", Value::Arr(strips)),
+            ("buses", Value::Arr(buses)),
             ("sample_rate", Value::num(fget_sr(self) as f64)),
             ("block", Value::num(self.block.load(Relaxed) as f64)),
         ])
@@ -757,209 +429,24 @@ fn fget_sr(p: &Params) -> u32 {
 
 fn set_strip(s: &StripParam, param: &str, v: f32) -> bool {
     match param {
-        "gain" => {
-            fset(&s.gain, v.clamp(-60.0, 12.0));
-            true
-        }
-        "pan" => {
-            fset(&s.pan, v.clamp(-1.0, 1.0));
-            true
-        }
-        "mute" => {
-            s.mute.store(v != 0.0, Relaxed);
-            true
-        }
-        "solo" => {
-            s.solo.store(v != 0.0, Relaxed);
-            true
-        }
-        "mono" => {
-            s.mono.store(v != 0.0, Relaxed);
-            true
-        }
-        "eq" => {
-            s.eq_on.store(v != 0.0, Relaxed);
-            true
-        }
-        "comp" => {
-            s.comp.on.store(v != 0.0, Relaxed);
-            true
-        }
-        "gate" => {
-            s.gate.on.store(v != 0.0, Relaxed);
-            true
-        }
-        "denoiser" => {
-            s.dn_on.store(v != 0.0, Relaxed);
-            true
-        }
-        // Lowcut: 0 = aus, sonst auf 60/80/120/160 Hz gerastet.
-        "lowcut" => {
-            fset(&s.lc_hz, crate::dsp::lowcut_raster(v.clamp(0.0, 160.0)));
-            true
-        }
-        // Transienten-Unterdruecker: 0 = aus, sonst an; Schwelle als
-        // Pegelverhaeltnis (0..20 dB), Tiefe 0..30 dB.
-        "tk" => {
-            s.tk.store(v != 0.0, Relaxed);
-            true
-        }
-        "tk_schwelle" => {
-            fset(&s.tk_schwelle, v.clamp(0.0, 20.0));
-            true
-        }
-        "tk_tiefe" => {
-            fset(&s.tk_tiefe, v.clamp(0.0, 30.0));
-            true
-        }
-        "nr" => {
-            fset(&s.nr, v.clamp(0.0, 1.0));
-            true
-        }
-        "nr_schwelle" => {
-            fset(&s.nr_schwelle, v.clamp(-60.0, -20.0));
-            true
-        }
-        "nr_modus" => {
-            s.nr_modus.store(v.clamp(0.0, 2.0) as u32, Relaxed);
-            true
-        }
-        "nr_gate" => {
-            s.nr_gate.store(v != 0.0, Relaxed);
-            true
-        }
-        "comp_threshold" => {
-            fset(&s.comp.threshold, v);
-            true
-        }
-        "comp_ratio" => {
-            fset(&s.comp.ratio, v.max(1.0));
-            true
-        }
-        "comp_attack" => {
-            fset(&s.comp.attack, v);
-            true
-        }
-        "comp_release" => {
-            fset(&s.comp.release, v);
-            true
-        }
-        // Die beiden Gain-Stufen des Compressors waren bisher nur intern
-        // gesetzt; hier sind sie ueber /api/set erreichbar.
-        "comp_gain_in" => {
-            fset(&s.comp.gain_in, v.clamp(-24.0, 24.0));
-            true
-        }
-        "comp_gain_out" => {
-            fset(&s.comp.gain_out, v.clamp(-24.0, 24.0));
-            true
-        }
-        "comp_knee" => {
-            fset(&s.comp.knee, v);
-            true
-        }
-        // `gate_schwelle` ist der Name aus der Oberflaeche, `gate_threshold`
-        // der alte; beide schreiben dasselbe Atom.
-        "gate_threshold" | "gate_schwelle" => {
-            fset(&s.gate.threshold, v.clamp(-60.0, -20.0));
-            true
-        }
-        "gate_tiefe" => {
-            fset(&s.gate.tiefe, v.clamp(0.0, 80.0));
-            true
-        }
-        "gate_attack" => {
-            fset(&s.gate.attack, v.clamp(0.1, 500.0));
-            true
-        }
-        "gate_hold" => {
-            fset(&s.gate.hold, v.clamp(0.0, 500.0));
-            true
-        }
-        "gate_release" => {
-            fset(&s.gate.release, v.clamp(1.0, 5000.0));
-            true
-        }
-        _ => set_strip_ext(s, param, v),
-    }
-}
-
-/// Sends (`send0..send7`), Effekt-Sends (`send_r` …, `post_r` …), die
-/// Klangbausteine und EQ-Zellen (`eq<zelle>_<feld>`).
-fn set_strip_ext(s: &StripParam, param: &str, v: f32) -> bool {
-    if let Some(weg) = param.strip_prefix("send_").and_then(effekte::weg_index) {
-        fset(&s.fx_send[weg], v.clamp(effekte::AUS_DB, effekte::MAX_DB));
-        return true;
-    }
-    if let Some(weg) = param.strip_prefix("post_").and_then(effekte::weg_index) {
-        s.fx_post[weg].store(v != 0.0, Relaxed);
-        return true;
-    }
-    match param {
-        "karaoke" => {
-            s.karaoke
-                .store(v.clamp(0.0, effekte::KARAOKE_MAX as f32) as u32, Relaxed);
-            return true;
-        }
-        "muc" => {
-            s.muc.store(v != 0.0, Relaxed);
-            return true;
-        }
-        "farbe" => {
-            fset(&s.farbe, v.clamp(-1.0, 1.0));
-            return true;
-        }
-        "green" => {
-            s.green.store(v != 0.0, Relaxed);
-            return true;
-        }
-        "insert" => {
-            s.insert.store(v != 0.0, Relaxed);
-            return true;
-        }
-        _ => {}
-    }
-    if let Some(rest) = param.strip_prefix("send") {
-        return match rest.parse::<usize>().ok().and_then(|b| s.sends.get(b)) {
-            Some(a) => {
-                fset(a, v.clamp(0.0, 2.0));
-                true
-            }
-            None => false,
-        };
-    }
-    if let Some(rest) = param.strip_prefix("eq") {
-        let (cell_s, field) = match rest.split_once('_') {
-            Some(x) => x,
-            None => return false,
-        };
-        let c: usize = match cell_s.parse() {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        for ch in 0..2 {
-            match s.eq[ch].get(c) {
-                Some(cell) => {
-                    if !set_eq_cell(cell, field, v) {
-                        return false;
-                    }
+        "gain" => fset(&s.gain, v.clamp(-60.0, 12.0)),
+        "pan" => fset(&s.pan, v.clamp(-1.0, 1.0)),
+        "mute" => s.mute.store(v != 0.0, Relaxed),
+        "solo" => s.solo.store(v != 0.0, Relaxed),
+        "mono" => s.mono.store(v != 0.0, Relaxed),
+        _ => {
+            return match param
+                .strip_prefix("send")
+                .and_then(|r| r.parse::<usize>().ok())
+                .and_then(|b| s.sends.get(b))
+            {
+                Some(a) => {
+                    fset(a, v.clamp(0.0, 2.0));
+                    true
                 }
-                None => return false,
+                None => false,
             }
         }
-        return true;
-    }
-    false
-}
-
-fn set_eq_cell(cell: &EqParam, field: &str, v: f32) -> bool {
-    match field {
-        "on" => cell.on.store(v != 0.0, Relaxed),
-        "type" => cell.kind.store(v.max(0.0) as u32, Relaxed),
-        "freq" => fset(&cell.freq, v.clamp(10.0, 24000.0)),
-        "q" => fset(&cell.q, v.clamp(0.05, 20.0)),
-        "gain" => fset(&cell.gain, v.clamp(-24.0, 24.0)),
-        _ => return false,
     }
     true
 }
@@ -974,11 +461,6 @@ fn set_bus(b: &BusParam, param: &str, v: f32) -> bool {
             .mode
             .store(v.clamp(0.0, BUS_MODE_MAX as f32) as u32, Relaxed),
         "cross" => b.cross.store(v != 0.0, Relaxed),
-        "eq" => b.eq_on.store(v != 0.0, Relaxed),
-        "limiter" => b.limiter_on.store(v != 0.0, Relaxed),
-        "c5" => b.c5_on.store(v != 0.0, Relaxed),
-        "c5_threshold" => fset(&b.c5_threshold, v.clamp(-60.0, 0.0)),
-        "c5_ceiling" => fset(&b.c5_ceiling, v.clamp(-24.0, 0.0)),
         "trim" => {
             fset(&b.trim[0], v);
             fset(&b.trim[1], v);
@@ -987,13 +469,8 @@ fn set_bus(b: &BusParam, param: &str, v: f32) -> bool {
             fset(&b.delay_ms[0], v.clamp(0.0, 2000.0));
             fset(&b.delay_ms[1], v.clamp(0.0, 2000.0));
         }
-        "green" => b.green.store(v != 0.0, Relaxed),
-        "insert" => b.insert.store(v != 0.0, Relaxed),
-        "vaio" => b.vaio.store(v != 0.0, Relaxed),
-        _ => match param.strip_prefix("ret_").and_then(effekte::weg_index) {
-            Some(weg) => fset(&b.fx_ret[weg], v.clamp(effekte::AUS_DB, effekte::MAX_DB)),
-            None => return false,
-        },
+        // Filter gibt es nur an virtuellen Bussen.
+        _ => return b.filter.as_ref().is_some_and(|f| f.set(param, v)),
     }
     true
 }
@@ -1001,7 +478,7 @@ fn set_bus(b: &BusParam, param: &str, v: f32) -> bool {
 /// −3 dB als Linearwert; Dämpfung für Composite und TV-Mix.
 const MINUS_3DB: f32 = 0.707_945_8;
 
-/// Kanalmischung eines Busses am Bus-Eingang, vor Limiter/Delay/Trim.
+/// Kanalmischung eines Busses am Bus-Eingang, vor Filtern/Delay/Trim.
 ///
 /// | Modus | links | rechts |
 /// |---|---|---|
@@ -1016,11 +493,8 @@ const MINUS_3DB: f32 = 0.707_945_8;
 /// `cross` tauscht anschließend L und R.
 ///
 /// **Upmix 2.1/4.1/6.1:** Im Original legen diese Modi das Monosignal zusätzlich
-/// auf Center, LFE und Rear. Ein Bus ist hier immer stereo — es gibt nur
-/// `outs[bi][0]` und `outs[bi][1]`, die zusätzlichen Lautsprecherkanäle
-/// existieren also nicht. Es bleibt die Monosumme, die auf beide
-/// Ausgangskanäle gelegt wird; die Modi unterscheiden sich daher im Ergebnis
-/// (noch) nicht. Sobald mehrkanalige Busse dazukommen, wird hier verzweigt.
+/// auf Center, LFE und Rear. Ein Bus ist hier immer stereo – es bleibt die
+/// Monosumme auf beiden Kanälen.
 #[inline]
 fn bus_mix(v: [f32; 2], mode: u32, cross: bool) -> [f32; 2] {
     let sum = 0.5 * (v[0] + v[1]);
@@ -1040,226 +514,68 @@ fn bus_mix(v: [f32; 2], mode: u32, cross: bool) -> [f32; 2] {
 }
 
 /// Zeiger auf die Kanalpuffer eines Blocks (aus den JACK-Ports).
-///
-/// Nullzeiger sind erlaubt: ein fehlender Eingang liest Stille, ein fehlender
-/// Ausgang wird übersprungen (Tests brauchen nur `ins`/`outs`).
 pub struct Io {
     pub ins: [[*const f32; 2]; STRIPS],
     pub outs: [[*mut f32; 2]; BUSES],
-    /// Externe Effekt-Sends FX1/FX2 (`fx1_L/R`, `fx2_L/R`).
-    pub fx_out: [[*mut f32; 2]; 2],
-    /// Rückwege der externen Effekte (`fx1_ret_L/R`, `fx2_ret_L/R`).
-    pub fx_ret: [[*const f32; 2]; 2],
-    /// Insert-Ausgang und -Rückweg je Streifen (`strip1_ins_L` → … →
-    /// `strip1_ret_L`).
-    pub strip_ins: [[*mut f32; 2]; STRIPS],
-    pub strip_ret: [[*const f32; 2]; STRIPS],
-    /// Dasselbe je Bus (`busA1_ins_L`, `busA1_ret_L`).
-    pub bus_ins: [[*mut f32; 2]; BUSES],
-    pub bus_ret: [[*const f32; 2]; BUSES],
 }
 
-impl Io {
-    /// Alle Zeiger null.
-    pub fn leer() -> Io {
-        Io {
-            ins: [[std::ptr::null(); 2]; STRIPS],
-            outs: [[std::ptr::null_mut(); 2]; BUSES],
-            fx_out: [[std::ptr::null_mut(); 2]; 2],
-            fx_ret: [[std::ptr::null(); 2]; 2],
-            strip_ins: [[std::ptr::null_mut(); 2]; STRIPS],
-            strip_ret: [[std::ptr::null(); 2]; STRIPS],
-            bus_ins: [[std::ptr::null_mut(); 2]; BUSES],
-            bus_ret: [[std::ptr::null(); 2]; BUSES],
-        }
-    }
+/// Filterzustand eines virtuellen Busses (beide Kanäle).
+struct FilterDsp {
+    gate: [Gate; 2],
+    aec: [Echounterdruecker; 2],
+    /// War die Echounterdrückung im vorigen Block an? Beim Einschalten wird
+    /// sie zurückgesetzt, damit kein alter Raum nachwirkt.
+    aec_war_an: bool,
 }
-
-/// Liest Sample `n` – Nullzeiger ist Stille.
-///
-/// # Safety
-/// `p` ist null oder zeigt auf mindestens `n + 1` Samples.
-#[inline]
-unsafe fn lies(p: *const f32, n: usize) -> f32 {
-    if p.is_null() {
-        0.0
-    } else {
-        unsafe { *p.add(n) }
-    }
-}
-
-/// Schreibt Sample `n` – Nullzeiger wird übersprungen.
-///
-/// # Safety
-/// `p` ist null oder zeigt auf mindestens `n + 1` Samples.
-#[inline]
-unsafe fn schreib(p: *mut f32, n: usize, x: f32) {
-    if !p.is_null() {
-        unsafe { *p.add(n) = x };
-    }
-}
-
-/// Wie lange ein Send-Effekt nach dem letzten aktiven Send weiterläuft
-/// (Sekunden) – lang genug für jeden Nachhall, danach spart er Rechenzeit.
-const FX_NACHLAUF_S: f32 = 8.0;
 
 /// DSP-Zustand, ausschließlich vom Audio-Thread benutzt.
 pub struct EngineDsp {
-    strip_lc: [[LowCut; 2]; STRIPS],
-    /// Transienten-Unterdruecker je Kanal (Lookahead-Ring in `new` allokiert).
-    strip_tk: [[TransientenUnterdruecker; 2]; STRIPS],
-    strip_nr: [[NoiseReduction; 2]; STRIPS],
-    /// RNNoise-Kanaele, nur wenn die Bibliothek geladen werden konnte.
-    strip_rn: [[Option<crate::rnnoise::Kanal>; 2]; STRIPS],
-    /// Laeuft der RNNoise-Modus gerade (Modus 2 und Bibliothek da)?
-    rn_on: [[bool; 2]; STRIPS],
-    strip_eq: [[[Biquad; EQ_CELLS]; 2]; STRIPS],
-    strip_comp: [[Compressor; 2]; STRIPS],
-    strip_gate: [[Gate; 2]; STRIPS],
-    strip_dn: [[Denoiser; 2]; STRIPS],
-    bus_eq: [[[Biquad; EQ_CELLS]; 2]; BUSES],
-    bus_lim: [[Limiter; 2]; BUSES],
-    bus_c5: [C5Limiter; BUSES],
     bus_delay: [[DelayLine; 2]; BUSES],
-    strip_farbe: [[Klangfarbe; 2]; STRIPS],
-    strip_karaoke: [Karaoke; STRIPS],
-    hall: Hall,
-    echo: Echo,
-    /// Restliche Samples, die Hall bzw. Echo noch nachklingen dürfen.
-    fx_nachlauf: [usize; 2],
-    prev_strip_gain: [f32; STRIPS],
-    prev_bus_gain: [f32; BUSES],
-    last_sr: f32,
+    filter: Vec<FilterDsp>,
     pub blocks: u64,
 }
 
 impl EngineDsp {
     pub fn new(max_block: usize) -> EngineDsp {
         EngineDsp {
-            strip_lc: [[LowCut::new(); 2]; STRIPS],
-            // Der TK bringt je Kanal einen Lookahead-Ring mit; er entsteht
-            // hier, ausserhalb des Callbacks.
-            strip_tk: std::array::from_fn(|_| {
-                [
-                    TransientenUnterdruecker::new(48000.0),
-                    TransientenUnterdruecker::new(48000.0),
-                ]
-            }),
-            // Fenster, Tabellen und Ringpuffer entstehen hier, einmal, mit
-            // fester Groesse - nicht im Audio-Callback.
-            strip_nr: std::array::from_fn(|_| {
-                [NoiseReduction::new(48000.0), NoiseReduction::new(48000.0)]
-            }),
-            // Nur wenn librnnoise.so.0 da ist, entstehen Kanaele - und zwar
-            // hier, ausserhalb des Callbacks.
-            strip_rn: std::array::from_fn(|_| {
-                [crate::rnnoise::Kanal::neu(), crate::rnnoise::Kanal::neu()]
-            }),
-            rn_on: [[false; 2]; STRIPS],
-            strip_eq: std::array::from_fn(|_| {
-                std::array::from_fn(|_| [Biquad::bypass(); EQ_CELLS])
-            }),
-            strip_comp: [[Compressor::default(); 2]; STRIPS],
-            strip_gate: [[Gate::default(); 2]; STRIPS],
-            strip_dn: [[Denoiser::default(); 2]; STRIPS],
-            bus_eq: std::array::from_fn(|_| std::array::from_fn(|_| [Biquad::bypass(); EQ_CELLS])),
-            bus_lim: [[Limiter::default(); 2]; BUSES],
-            bus_c5: std::array::from_fn(|_| C5Limiter::default()),
             bus_delay: std::array::from_fn(|_| {
                 [DelayLine::new(max_block * 4), DelayLine::new(max_block * 4)]
             }),
-            strip_farbe: [[Klangfarbe::default(); 2]; STRIPS],
-            strip_karaoke: [Karaoke::default(); STRIPS],
-            hall: Hall::neu(),
-            echo: Echo::neu(),
-            fx_nachlauf: [0; 2],
-            prev_strip_gain: [1.0; STRIPS],
-            prev_bus_gain: [1.0; BUSES],
-            last_sr: 0.0,
+            // Die Echounterdrücker bringen ihre Puffer mit; sie entstehen hier,
+            // außerhalb des Callbacks.
+            filter: (0..VIRTUELLE)
+                .map(|_| FilterDsp {
+                    gate: [Gate::default(); 2],
+                    aec: [Echounterdruecker::neu(), Echounterdruecker::neu()],
+                    aec_war_an: false,
+                })
+                .collect(),
             blocks: 0,
         }
     }
 
     fn reconfigure(&mut self, p: &Params, sr: f32) {
-        let need_eq = (self.last_sr - sr).abs() > 0.5 || self.blocks == 0;
-        for i in 0..STRIPS {
-            let s = &p.strips[i];
+        for (i, b) in p.buses.iter().enumerate() {
             for ch in 0..2 {
-                if need_eq || s.eq_on.load(Relaxed) {
-                    for c in 0..EQ_CELLS {
-                        let cell = &s.eq[ch][c];
-                        let on = cell.on.load(Relaxed) && s.eq_on.load(Relaxed);
-                        let b = &mut self.strip_eq[i][ch][c];
-                        if on {
-                            b.coeffs(
-                                FilterType::from_u8(cell.kind.load(Relaxed) as u8),
-                                fget(&cell.freq),
-                                fget(&cell.q),
-                                fget(&cell.gain),
-                                sr,
-                            );
-                        }
-                    }
-                }
-                self.strip_comp[i][ch].enabled = s.comp.on.load(Relaxed);
-                self.strip_comp[i][ch].set_times(fget(&s.comp.attack), fget(&s.comp.release), sr);
-                let lc = fget(&s.lc_hz);
-                self.strip_lc[i][ch].set_hz(lc, sr);
-                // TK: Schalter und Rate je Block; der Ring bleibt im DSP-Zustand.
-                self.strip_tk[i][ch].setup(s.tk.load(Relaxed), sr);
-                self.strip_gate[i][ch].enabled = s.gate.on.load(Relaxed);
-                self.strip_gate[i][ch].set_tiefe(fget(&s.gate.tiefe));
-                self.strip_gate[i][ch].set_times(
-                    fget(&s.gate.attack),
-                    fget(&s.gate.hold),
-                    fget(&s.gate.release),
-                    sr,
-                );
-                // NR: Stufe 'eigen' (Modus 0) ist die eigene Berechnung,
-                // 'einfach' (1) benutzt den vorhandenen Denoiser, 'rnnoise'
-                // (2) nur, wenn die Bibliothek geladen ist (sonst Modus 0).
-                let nr_st = fget(&s.nr);
-                let modus = s.nr_modus.load(Relaxed);
-                let nr = &mut self.strip_nr[i][ch];
-                nr.gate_on = s.nr_gate.load(Relaxed);
-                // Modus 2 nur bei 48 kHz und vorhandener Bibliothek; sonst
-                // faellt der Streifen still auf die eigene Berechnung zurueck.
-                let rn_geht =
-                    self.strip_rn[i][ch].is_some() && (sr - 48000.0).abs() < 0.5 && modus == 2;
-                self.rn_on[i][ch] = nr_st > 0.0 && rn_geht;
-                nr.enabled = nr_st > 0.0 && (modus == 0 || (modus == 2 && !rn_geht));
-                self.strip_dn[i][ch].enabled = s.dn_on.load(Relaxed) || (nr_st > 0.0 && modus == 1);
-                self.strip_dn[i][ch].set_sample_rate(sr);
-                self.strip_farbe[i][ch].setup(fget(&s.farbe), sr);
-            }
-            self.strip_karaoke[i].set_sample_rate(sr);
-        }
-        self.hall.set_sample_rate(sr);
-        for i in 0..BUSES {
-            let b = &p.buses[i];
-            for ch in 0..2 {
-                if need_eq || b.eq_on.load(Relaxed) {
-                    for c in 0..EQ_CELLS {
-                        let cell = &b.eq[ch][c];
-                        let on = cell.on.load(Relaxed) && b.eq_on.load(Relaxed);
-                        let f = &mut self.bus_eq[i][ch][c];
-                        if on {
-                            f.coeffs(
-                                FilterType::from_u8(cell.kind.load(Relaxed) as u8),
-                                fget(&cell.freq),
-                                fget(&cell.q),
-                                fget(&cell.gain),
-                                sr,
-                            );
-                        }
-                    }
-                }
-                self.bus_lim[i][ch].enabled = b.limiter_on.load(Relaxed);
-                self.bus_lim[i][ch].set_release(50.0, sr);
                 self.bus_delay[i][ch].set_ms(fget(&b.delay_ms[ch]), sr);
             }
         }
-        self.last_sr = sr;
+        for (v, f) in self.filter.iter_mut().enumerate() {
+            let Some(fp) = p.buses[ERSTER_VIRTUELLER + v].filter.as_ref() else {
+                continue;
+            };
+            let g = &fp.gate;
+            for gate in f.gate.iter_mut() {
+                gate.enabled = g.on.load(Relaxed);
+                gate.set_tiefe(fget(&g.tiefe));
+                gate.set_times(fget(&g.attack), fget(&g.hold), fget(&g.release), sr);
+            }
+            let an = fp.aec.load(Relaxed);
+            if an && !f.aec_war_an {
+                f.aec.iter_mut().for_each(Echounterdruecker::reset);
+            }
+            f.aec_war_an = an;
+        }
     }
 
     /// Ein Block. Die Kanäle werden als rohe Zeiger übergeben, damit der
@@ -1279,63 +595,8 @@ impl EngineDsp {
         let mut peak_s = [0f32; STRIPS];
         let mut peak_b = [0f32; BUSES];
 
-        // Je Block einmal: Sends, Returns, Schalter. Im Sample-Takt wird nur
-        // noch gelesen, nicht umgerechnet.
-        let mut send_lin = [[0f32; FX_WEGE]; STRIPS];
-        let mut send_post = [[true; FX_WEGE]; STRIPS];
-        let mut strip_green = [false; STRIPS];
-        let mut strip_ins = [false; STRIPS];
-        let mut fx_aktiv = [false; FX_WEGE];
-        for si in 0..STRIPS {
-            let sp = &p.strips[si];
-            for w in 0..FX_WEGE {
-                send_lin[si][w] = effekte::pegel_lin(fget(&sp.fx_send[w]));
-                send_post[si][w] = sp.fx_post[w].load(Relaxed);
-                fx_aktiv[w] |= send_lin[si][w] > 0.0;
-            }
-            strip_green[si] = sp.green.load(Relaxed);
-            strip_ins[si] = sp.insert.load(Relaxed)
-                && sp.ins_bereit.load(Relaxed)
-                && !io.strip_ins[si][0].is_null()
-                && !io.strip_ret[si][0].is_null();
-        }
-        let mut ret_lin = [[0f32; FX_WEGE]; BUSES];
-        let mut bus_green = [false; BUSES];
-        let mut bus_ins = [false; BUSES];
-        for bi in 0..BUSES {
-            let bp = &p.buses[bi];
-            for w in 0..FX_WEGE {
-                ret_lin[bi][w] = effekte::pegel_lin(fget(&bp.fx_ret[w]));
-            }
-            bus_green[bi] = bp.green.load(Relaxed);
-            bus_ins[bi] = bp.insert.load(Relaxed)
-                && bp.ins_bereit.load(Relaxed)
-                && !io.bus_ins[bi][0].is_null()
-                && !io.bus_ret[bi][0].is_null();
-        }
-        // A1 hoert einen anderen Bus ab (A1 selbst abhoeren aendert nichts).
-        let monitor = p.monitor_bus().filter(|&m| m != 0);
-        // Hall und Echo laufen, solange ein Send offen ist, und danach noch
-        // so lange nach, dass kein Nachhall abreisst.
-        let nachlauf = (FX_NACHLAUF_S * sr) as usize;
-        for (w, rest) in self.fx_nachlauf.iter_mut().enumerate() {
-            if fx_aktiv[w] {
-                *rest = nachlauf;
-            } else {
-                *rest = rest.saturating_sub(frames);
-            }
-        }
-        let hall_an = self.fx_nachlauf[0] > 0;
-        let echo_an = self.fx_nachlauf[1] > 0;
-        let hall_raum = fget(&p.fx.hall_raum);
-        let hall_daempfung = fget(&p.fx.hall_daempfung);
-        let echo_zeit = fget(&p.fx.echo_zeit);
-        let echo_rueck = fget(&p.fx.echo_rueck);
-        let echo_daempfung = fget(&p.fx.echo_daempfung);
-
         for n in 0..frames {
             let mut acc = [[0f32; 2]; BUSES];
-            let mut fx_acc = [[0f32; 2]; FX_WEGE];
             for si in 0..STRIPS {
                 let sp = &p.strips[si];
                 let audible = !sp.mute.load(Relaxed) && (!any_solo || sp.solo.load(Relaxed));
@@ -1345,44 +606,16 @@ impl EngineDsp {
                     0.0
                 };
                 let pan = fget(&sp.pan).clamp(-1.0, 1.0);
-                let mono = sp.mono.load(Relaxed);
-                let mut s = unsafe { [lies(io.ins[si][0], n), lies(io.ins[si][1], n)] };
-
-                if mono {
+                // SAFETY: JACK liefert je Port einen Puffer von `frames` Samples.
+                let mut s = unsafe { [*io.ins[si][0].add(n), *io.ins[si][1].add(n)] };
+                if sp.mono.load(Relaxed) {
                     let m = 0.5 * (s[0] + s[1]);
                     s = [m, m];
                 }
-                // Green Mode: keine Bearbeitung, nur Fader, Pan und Routing.
-                if !strip_green[si] {
-                    let karaoke = sp.karaoke.load(Relaxed);
-                    let muc = sp.muc.load(Relaxed);
-                    if karaoke != 0 || muc {
-                        s = self.strip_karaoke[si].process(s, karaoke, muc);
-                    }
-                    self.strip_kette(sp, si, &mut s, sr);
-                }
-                // Insert: vor dem Fader hinaus, ueber den Rueckweg wieder herein.
-                for ch in 0..2 {
-                    unsafe {
-                        if strip_ins[si] {
-                            schreib(io.strip_ins[si][ch], n, s[ch]);
-                            s[ch] = lies(io.strip_ret[si][ch], n);
-                        } else {
-                            schreib(io.strip_ins[si][ch], n, 0.0);
-                        }
-                    }
-                }
-                // Vor dem Fader (fuer Pre-Sends): Stumm/Solo gelten trotzdem.
-                let an = if audible { 1.0 } else { 0.0 };
-                let pre = [s[0] * an, s[1] * an];
-                // (6) Fader und Pan.
                 let g = [1.0 - pan, 1.0 + pan];
                 let l = s[0] * gain * g[0].min(1.0);
                 let r = s[1] * gain * g[1].min(1.0);
-                let level = l.abs().max(r.abs());
-                if level > peak_s[si] {
-                    peak_s[si] = level;
-                }
+                peak_s[si] = peak_s[si].max(l.abs().max(r.abs()));
                 for bi in 0..BUSES {
                     let send = fget(&sp.sends[bi]);
                     if send != 0.0 {
@@ -1390,211 +623,73 @@ impl EngineDsp {
                         acc[bi][1] += r * send;
                     }
                 }
-                for w in 0..FX_WEGE {
-                    let lvl = send_lin[si][w];
-                    if lvl > 0.0 {
-                        let quelle = if send_post[si][w] { [l, r] } else { pre };
-                        fx_acc[w][0] += quelle[0] * lvl;
-                        fx_acc[w][1] += quelle[1] * lvl;
-                    }
-                }
             }
 
-            // Send-Effekte: Hall und Echo intern, FX1/FX2 ueber die Ports.
-            let mut rueck = [[0f32; 2]; FX_WEGE];
-            if hall_an {
-                rueck[0] = self.hall.process(fx_acc[0], hall_raum, hall_daempfung);
-            }
-            if echo_an {
-                rueck[1] = self
-                    .echo
-                    .process(fx_acc[1], echo_zeit, echo_rueck, echo_daempfung, sr);
-            }
-            for ext in 0..2 {
-                for ch in 0..2 {
-                    unsafe {
-                        schreib(io.fx_out[ext][ch], n, fx_acc[2 + ext][ch]);
-                        rueck[2 + ext][ch] = lies(io.fx_ret[ext][ch], n);
-                    }
-                }
-            }
-
+            // Hardware-Busse zuerst: ihr Ausgang ist die Referenz der
+            // Echounterdrückung an den virtuellen Bussen.
             let mut aus = [[0f32; 2]; BUSES];
             for bi in 0..BUSES {
                 let bp = &p.buses[bi];
+                let mut v = acc[bi];
+                if bp.mono.load(Relaxed) {
+                    let m = 0.5 * (v[0] + v[1]);
+                    v = [m, m];
+                }
+                v = bus_mix(v, bp.mode.load(Relaxed), bp.cross.load(Relaxed));
+                if let Some(fp) = bp.filter.as_ref() {
+                    let f = &mut self.filter[bi - ERSTER_VIRTUELLER];
+                    if f.aec_war_an {
+                        let r = aus[fp.aec_ref.load(Relaxed) as usize % ERSTER_VIRTUELLER];
+                        let referenz = 0.5 * (r[0] + r[1]);
+                        for ch in 0..2 {
+                            v[ch] = f.aec[ch].process(v[ch], referenz);
+                        }
+                    }
+                    // Gekoppelter Detektor: beide Kanäle öffnen gemeinsam.
+                    let key = v[0].abs().max(v[1].abs());
+                    let schwelle = fget(&fp.gate.threshold);
+                    for ch in 0..2 {
+                        v[ch] = f.gate[ch].process_key(v[ch], key, schwelle);
+                    }
+                }
                 let gain = if bp.mute.load(Relaxed) {
                     0.0
                 } else {
                     db_to_lin(fget(&bp.gain))
                 };
-                let mono = bp.mono.load(Relaxed);
-                let mode = bp.mode.load(Relaxed);
-                let cross = bp.cross.load(Relaxed);
-                let mut v = acc[bi];
-                for w in 0..FX_WEGE {
-                    let r = ret_lin[bi][w];
-                    if r > 0.0 {
-                        v[0] += rueck[w][0] * r;
-                        v[1] += rueck[w][1] * r;
-                    }
-                }
-                if mono {
-                    let m = 0.5 * (v[0] + v[1]);
-                    v = [m, m];
-                }
-                v = bus_mix(v, mode, cross);
-                let green = bus_green[bi];
                 for ch in 0..2 {
-                    let mut x = v[ch];
-                    if !green && bp.eq_on.load(Relaxed) {
-                        for c in 0..EQ_CELLS {
-                            x = self.bus_eq[bi][ch][c].process(x);
-                        }
-                    }
-                    unsafe {
-                        if bus_ins[bi] {
-                            schreib(io.bus_ins[bi][ch], n, x);
-                            x = lies(io.bus_ret[bi][ch], n);
-                        } else {
-                            schreib(io.bus_ins[bi][ch], n, 0.0);
-                        }
-                    }
-                    if !green {
-                        x = self.bus_lim[bi][ch].process(x, fget(&bp.limit));
-                        if bp.c5_on.load(Relaxed) {
-                            let th = fget(&bp.c5_threshold);
-                            let ce = fget(&bp.c5_ceiling);
-                            let cfg = C5Config {
-                                enabled: true,
-                                threshold_db: [th; 3],
-                                ceiling_db: [ce; 3],
-                                ..C5Config::default()
-                            };
-                            x = self.bus_c5[bi].process(x, &cfg, sr);
-                        }
-                    }
-                    x = self.bus_delay[bi][ch].process(x);
+                    let mut x = self.bus_delay[bi][ch].process(v[ch]);
                     x *= db_to_lin(fget(&bp.trim[ch]));
-                    x *= gain;
-                    v[ch] = x;
+                    v[ch] = x * gain;
                 }
                 aus[bi] = v;
-                let level = v[0].abs().max(v[1].abs());
-                if level > peak_b[bi] {
-                    peak_b[bi] = level;
-                }
-            }
-            for bi in 0..BUSES {
-                // Abhoeren: A1 gibt den gewaehlten Bus aus statt seiner Mischung.
-                let v = match monitor {
-                    Some(m) if bi == 0 => aus[m],
-                    _ => aus[bi],
-                };
+                peak_b[bi] = peak_b[bi].max(v[0].abs().max(v[1].abs()));
+                // SAFETY: wie oben, `frames` Samples je Ausgangsport.
                 unsafe {
-                    schreib(io.outs[bi][0], n, v[0]);
-                    schreib(io.outs[bi][1], n, v[1]);
+                    *io.outs[bi][0].add(n) = v[0];
+                    *io.outs[bi][1].add(n) = v[1];
                 }
-            }
-
-            // Die akkumulierten Werte gelten fuer alle Streifen dieses Frames.
-            if n + 1 == frames {
-                for si in 0..STRIPS {
-                    let old = fget(&p.strips[si].level);
-                    fset(&p.strips[si].level, peak_s[si].max(old * 0.72));
-                }
-                for bi in 0..BUSES {
-                    let old = fget(&p.buses[bi].level);
-                    fset(&p.buses[bi].level, peak_b[bi].max(old * 0.72));
-                }
-                // Letzte Handlung des Blocks: der Zaehler zeigt an, dass die
-                // Pegel oben vollstaendig geschrieben sind. Nur ein Store,
-                // keine Allokation, kein Lock.
-                p.frames.fetch_add(frames as u64, Ordering::Release);
             }
         }
-        self.prev_strip_gain = std::array::from_fn(|i| db_to_lin(fget(&p.strips[i].gain)));
-        self.prev_bus_gain = std::array::from_fn(|i| db_to_lin(fget(&p.buses[i].gain)));
+
+        for si in 0..STRIPS {
+            let old = fget(&p.strips[si].level);
+            fset(&p.strips[si].level, peak_s[si].max(old * 0.72));
+        }
+        for bi in 0..BUSES {
+            let old = fget(&p.buses[bi].level);
+            fset(&p.buses[bi].level, peak_b[bi].max(old * 0.72));
+        }
+        // Letzte Handlung des Blocks: der Zaehler zeigt an, dass die Pegel
+        // oben vollstaendig geschrieben sind. Nur ein Store, keine Allokation.
+        p.frames.fetch_add(frames as u64, Ordering::Release);
         self.blocks += 1;
     }
-
-    /// Bearbeitungskette eines Streifens (ein Stereo-Sample), ohne Fader:
-    /// Lowcut, TK, Gate, NR, EQ, Klangfarbe, Compressor, Denoiser.
-    #[inline]
-    // Je Kanal mehrere parallele Felder (Filter, Zustand, Sample) – wie in
-    // `process` liest der Index sich hier besser als ein Iterator.
-    #[allow(clippy::needless_range_loop)]
-    fn strip_kette(&mut self, sp: &StripParam, si: usize, s: &mut [f32; 2], sr: f32) {
-        let nr_st = fget(&sp.nr);
-        let nr_modus = sp.nr_modus.load(Relaxed);
-        let nr_schwelle = fget(&sp.nr_schwelle);
-        let tk_schwelle = fget(&sp.tk_schwelle);
-        let tk_tiefe = fget(&sp.tk_tiefe);
-        for ch in 0..2 {
-            let mut x = s[ch];
-            // (1) LOWCUT: Rumpeln weg, bevor irgendetwas entscheidet.
-            x = self.strip_lc[si][ch].process(x);
-            // (1b) TK: Klackser und Poltern am Verhaeltnis zweier
-            //      Huellkurven, mit 5 ms Vorlauf. Aus = bit-gleich durch.
-            let tk = &mut self.strip_tk[si][ch];
-            if tk.enabled {
-                x = tk.process(x, tk_schwelle, tk_tiefe);
-            }
-            s[ch] = x;
-        }
-        // (2) GATE: entscheidet am unveraenderten Pegel ueber Pausen,
-        //     fuer beide Kanaele gemeinsam (gekoppelter Detektor).
-        let gate_key = s[0].abs().max(s[1].abs());
-        let gate_schwelle = fget(&sp.gate.threshold);
-        for ch in 0..2 {
-            let mut x = self.strip_gate[si][ch].process_key(s[ch], gate_key, gate_schwelle);
-            // (3) NR: Rauschen unter dem Signal.
-            if self.rn_on[si][ch] {
-                if let Some(k) = self.strip_rn[si][ch].as_mut() {
-                    x = k.process(x);
-                }
-            } else if nr_st > 0.0 && nr_modus == 0 {
-                x = self.strip_nr[si][ch].process(x, nr_st, nr_schwelle, sr);
-            }
-            // (4) EQ: formt erst nach dem Bereinigen.
-            if sp.eq_on.load(Relaxed) {
-                for c in 0..EQ_CELLS {
-                    x = self.strip_eq[si][ch][c].process(x);
-                }
-            }
-            // (4b) Klangfarbe (Voice Color); neutral = bit-gleich durch.
-            x = self.strip_farbe[si][ch].process(x);
-            // (5) COMP: sieht das Gate-Ergebnis, nicht umgekehrt.
-            let prefix = db_to_lin(fget(&sp.comp.gain_in));
-            x *= prefix;
-            let comp = &mut self.strip_comp[si][ch];
-            x = comp.process(
-                x,
-                fget(&sp.comp.threshold),
-                fget(&sp.comp.ratio),
-                fget(&sp.comp.knee),
-                auto_makeup(sp),
-            );
-            // Stufe 'einfach' der Rauschunterdrueckung: der vorhandene
-            // Denoiser, mit Schwelle/Staerke der NR angesteuert.
-            let dn = &mut self.strip_dn[si][ch];
-            if nr_st > 0.0 && nr_modus == 1 {
-                x = dn.process(x, -(6.0 + 24.0 * nr_st), nr_schwelle);
-            } else if sp.dn_on.load(Relaxed) {
-                x = dn.process(x, fget(&sp.dn_floor), fget(&sp.dn_threshold));
-            }
-            s[ch] = x;
-        }
-    }
-}
-
-fn auto_makeup(s: &StripParam) -> f32 {
-    fget(&s.comp.gain_out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     /// Testpuffer: 2 Kanäle je Streifen/Bus, alle mit demselben Pegel gefüllt.
     struct Buf {
@@ -1625,7 +720,10 @@ mod tests {
         }
 
         fn io(&mut self) -> Io {
-            let mut io = Io::leer();
+            let mut io = Io {
+                ins: [[std::ptr::null(); 2]; STRIPS],
+                outs: [[std::ptr::null_mut(); 2]; BUSES],
+            };
             for s in 0..STRIPS {
                 for c in 0..2 {
                     io.ins[s][c] = self.ins[s * 2 + c].as_ptr();
@@ -1772,43 +870,6 @@ mod tests {
         assert!((fget(&p.strips[0].level) - 0.25).abs() < 1e-3);
     }
 
-    #[test]
-    fn c5_limiter_haelt_bus_decke() {
-        let p = params();
-        let mut dsp = dsp_neu();
-        p.set("bus", 0, "c5", 1.0);
-        p.set("bus", 0, "c5_ceiling", -6.0);
-        p.set("bus", 0, "c5_threshold", 0.0);
-        p.set("strip", 0, "gain", 12.0); // 0.5 * 4 = 2.0 in den Bus
-        let mut buf = Buf::new(0.5, 64);
-        let mut peak = 0f32;
-        for _ in 0..40 {
-            let io = buf.io();
-            dsp.process(&p, &io, 64);
-            peak = peak.max(buf.bus(0).abs());
-        }
-        let db = crate::dsp::lin_to_db(peak);
-        assert!(
-            db <= -4.0,
-            "Bus-Spitze war {db} dB, soll unter -6 dB liegen"
-        );
-    }
-
-    #[test]
-    fn eq_und_eq_parameter() {
-        let p = params();
-        let mut dsp = dsp_neu();
-        p.set("strip", 0, "eq", 1.0);
-        assert!(p.set("strip", 0, "eq0_gain", 12.0));
-        assert!(p.set("strip", 0, "eq0_freq", 1000.0));
-        assert!(p.set("strip", 0, "eq0_on", 1.0));
-        assert!(!p.set("strip", 0, "eq9_gain", 1.0));
-        let mut buf = Buf::new(0.1, 64);
-        let io = buf.io();
-        dsp.process(&p, &io, 64);
-        assert!(buf.bus(0).is_finite());
-    }
-
     // ---- Bus-Mischmodi -------------------------------------------------
 
     /// Setzt `mode`/`cross` auf Bus A1, regt Streifen 0 mit L/R an und liefert
@@ -1931,26 +992,6 @@ mod tests {
     }
 
     #[test]
-    fn gate_regelt_links_und_rechts_gemeinsam() {
-        // Links laut, rechts leise (unter der Schwelle): mit gekoppeltem
-        // Detektor bleibt das Gate fuer beide offen - der leise Kanal faellt
-        // nicht um 60 dB weg, nur weil er allein leise ist.
-        let p = params();
-        assert!(p.set("strip", 0, "gate", 1.0));
-        assert!(p.set("strip", 0, "gate_schwelle", -45.0));
-        let mut dsp = dsp_neu();
-        let mut buf = Buf::new(0.0, 64);
-        buf.set_strip_ch(0, 0, 0.5);
-        buf.set_strip_ch(0, 1, 0.001);
-        for _ in 0..40 {
-            let io = buf.io();
-            dsp.process(&p, &io, 64);
-        }
-        let r = buf.out(0, 1);
-        assert!((r - 0.001).abs() < 1e-4, "rechts war {r}, soll 0.001");
-    }
-
-    #[test]
     fn bus_cross_tauscht_kanaele() {
         // Ohne Modus, nur Kreuzung: L und R tauschen.
         check(mix_block(0.0, 1.0, 0.5, 0.25), (0.25, 0.5), "cross");
@@ -2007,269 +1048,125 @@ mod tests {
         assert_eq!(p.label("strip", 0).as_deref(), Some(""));
     }
 
-    // ----- Effektwege, Inserts, Green Mode, Abhoeren -----------------------
+    // ---- Filter an den virtuellen Ausgängen -------------------------------
 
-    /// Zusatzpuffer fuer die Effekt- und Insert-Ports eines Blocks.
-    struct Zusatz {
-        fx_out: Vec<Vec<f32>>,
-        fx_ret: Vec<Vec<f32>>,
-        ins: Vec<Vec<f32>>,
-        ret: Vec<Vec<f32>>,
-    }
-
-    impl Zusatz {
-        fn neu(frames: usize) -> Zusatz {
-            Zusatz {
-                fx_out: vec![vec![9.0; frames]; 4],
-                fx_ret: vec![vec![0.0; frames]; 4],
-                ins: vec![vec![9.0; frames]; 2],
-                ret: vec![vec![0.0; frames]; 2],
-            }
+    #[test]
+    fn hardware_busse_haben_keine_filter() {
+        let p = params();
+        for bi in 0..ERSTER_VIRTUELLER {
+            assert!(p.buses[bi].filter.is_none());
+            assert!(!p.set("bus", bi, "gate", 1.0), "A{} nahm gate an", bi + 1);
+            assert!(!p.set("bus", bi, "aec", 1.0), "A{} nahm aec an", bi + 1);
         }
-
-        /// Haengt FX1/FX2 und den Insert von Streifen 0 an das Io.
-        fn an(&mut self, io: &mut Io) {
-            for ext in 0..2 {
-                for ch in 0..2 {
-                    io.fx_out[ext][ch] = self.fx_out[ext * 2 + ch].as_mut_ptr();
-                    io.fx_ret[ext][ch] = self.fx_ret[ext * 2 + ch].as_ptr();
-                }
-            }
-            for ch in 0..2 {
-                io.strip_ins[0][ch] = self.ins[ch].as_mut_ptr();
-                io.strip_ret[0][ch] = self.ret[ch].as_ptr();
+        for bi in ERSTER_VIRTUELLER..BUSES {
+            for name in FILTER_PARAMS {
+                assert!(p.set("bus", bi, name, 1.0), "{name} an B{}", bi - 4);
             }
         }
     }
 
     #[test]
-    fn fx1_send_vor_und_hinter_dem_fader() {
+    fn streifen_kennen_keine_bearbeitung_mehr() {
         let p = params();
-        let mut dsp = dsp_neu();
-        let mut buf = Buf::new(0.5, 64);
-        let mut z = Zusatz::neu(64);
-        p.set("strip", 0, "gain", -60.0);
-        p.set("strip", 0, "send_fx1", 0.0);
-        // Hinter dem Fader (Vorgabe): der Fader steht unten, kaum Signal.
-        let mut io = buf.io();
-        z.an(&mut io);
-        dsp.process(&p, &io, 64);
-        assert!(z.fx_out[0][10].abs() < 1e-3, "post: {}", z.fx_out[0][10]);
-        // FX2 ist aus: der Port fuehrt Stille statt alter Pufferreste.
-        assert_eq!(z.fx_out[2][10], 0.0);
-        // Vor dem Fader: volles Signal unabhaengig vom Fader.
-        p.set("strip", 0, "post_fx1", 0.0);
-        dsp.process(&p, &io, 64);
-        assert!(
-            (z.fx_out[0][10] - 0.5).abs() < 1e-6,
-            "pre: {}",
-            z.fx_out[0][10]
-        );
-        // Stumm gilt auch vor dem Fader.
-        p.set("strip", 0, "mute", 1.0);
-        dsp.process(&p, &io, 64);
-        assert_eq!(z.fx_out[0][10], 0.0);
+        for name in ["eq", "comp", "gate", "nr", "lowcut", "tk", "denoiser"] {
+            assert!(!p.set("strip", 0, name, 1.0), "{name} noch am Streifen");
+        }
     }
 
     #[test]
-    fn rueckweg_landet_nur_auf_bussen_mit_return() {
+    fn aec_ref_nur_auf_hardware_busse() {
         let p = params();
-        let mut dsp = dsp_neu();
-        let mut buf = Buf::new(0.0, 64);
-        let mut z = Zusatz::neu(64);
-        z.fx_ret[2].iter_mut().for_each(|x| *x = 0.25); // FX2 links
-        let mut io = buf.io();
-        z.an(&mut io);
-        dsp.process(&p, &io, 64);
-        // A1 hat ab Werk alle Returns auf 0 dB, A2 keinen.
-        assert!((buf.out(0, 0) - 0.25).abs() < 1e-6, "A1 {}", buf.out(0, 0));
-        assert_eq!(buf.out(1, 0), 0.0);
-        p.set("bus", 1, "ret_fx2", -6.0);
-        p.set("bus", 0, "ret_fx2", -60.0);
-        dsp.process(&p, &io, 64);
-        assert_eq!(buf.out(0, 0), 0.0);
-        assert!((buf.out(1, 0) - 0.25 * db_to_lin(-6.0)).abs() < 1e-5);
+        assert!(p.set("bus", 5, "aec_ref", 4.0));
+        assert!(!p.set("bus", 5, "aec_ref", 5.0), "B1 als Referenz");
+        assert!(!p.set("bus", 5, "aec_ref", -1.0));
+        let f = p.buses[5].filter.as_ref().unwrap();
+        assert_eq!(f.aec_ref.load(Relaxed), 4);
     }
 
     #[test]
-    fn hall_send_klingt_auf_a1() {
+    fn rohsignal_auf_a1_gefiltert_auf_b1() {
+        // Mikro auf A1 und B1; Gate an B1 mit hoher Schwelle macht B1 zu,
+        // A1 bleibt das Rohsignal.
         let p = params();
         let mut dsp = dsp_neu();
-        // Ein Impuls auf Streifen 0, der nur in den Hall geht (Routing aus).
-        p.set("strip", 0, "send0", 0.0);
-        p.set("strip", 0, "send_r", 0.0);
-        let mut energie = 0.0f32;
-        for block in 0..200 {
-            let mut buf = Buf::new(0.0, 64);
-            if block == 0 {
-                buf.ins[0][0] = 1.0;
-                buf.ins[1][0] = 1.0;
-            }
+        p.set("strip", 0, "send5", 1.0);
+        p.set("bus", 5, "gate", 1.0);
+        p.set("bus", 5, "gate_schwelle", -10.0);
+        p.set("bus", 5, "gate_tiefe", 60.0);
+        let mut buf = Buf::new(0.05, 64);
+        for _ in 0..200 {
             let io = buf.io();
             dsp.process(&p, &io, 64);
-            energie += buf.outs[0].iter().map(|x| x * x).sum::<f32>();
         }
-        assert!(energie > 1e-4, "Hall auf A1: {energie}");
-        // Ohne Return auf A1 bleibt A1 still.
+        assert!((buf.bus(0) - 0.05).abs() < 1e-6, "A1 war {}", buf.bus(0));
+        assert!(buf.bus(5).abs() < 0.05 * 0.01, "B1 war {}", buf.bus(5));
+    }
+
+    #[test]
+    fn gate_regelt_links_und_rechts_gemeinsam() {
+        let p = params();
+        let mut dsp = dsp_neu();
+        p.set("strip", 0, "send5", 1.0);
+        assert!(p.set("bus", 5, "gate", 1.0));
+        assert!(p.set("bus", 5, "gate_schwelle", -45.0));
+        // Links laut, rechts leise: beide Seiten bleiben offen.
+        let mut buf = Buf::new(0.0, 64);
+        buf.set_strip_ch(0, 0, 0.5);
+        buf.set_strip_ch(0, 1, 0.001);
+        for _ in 0..100 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        assert!(
+            (buf.out(5, 1) - 0.001).abs() < 1e-4,
+            "R war {}",
+            buf.out(5, 1)
+        );
+    }
+
+    #[test]
+    fn echo_der_boxen_wird_aus_b1_gerechnet() {
+        // Streifen 6 = Systemton (nur auf A1, die Boxen), Streifen 1 = Mikro,
+        // das den Systemton gedämpft und verzögert aufnimmt; das Mikro geht
+        // auf B1 (nicht auf A1, sonst rückkoppelt es im Test).
         let p = params();
         let mut dsp = dsp_neu();
         p.set("strip", 0, "send0", 0.0);
-        p.set("strip", 0, "send_r", 0.0);
-        p.set("bus", 0, "ret_r", -60.0);
-        let mut buf = Buf::new(0.5, 64);
-        let io = buf.io();
-        for _ in 0..50 {
-            dsp.process(&p, &io, 64);
+        p.set("strip", 0, "send5", 1.0);
+        p.set("bus", 5, "aec", 1.0);
+        let block = 256;
+        let mut buf = Buf::new(0.0, block);
+        let mut zufall = 1u32;
+        let mut verlauf = vec![0.0f32; 4096];
+        let mut pos = 0usize;
+        let (mut mic_p, mut aus_p) = (0.0f64, 0.0f64);
+        let bloecke = 48_000 * 6 / block;
+        for b in 0..bloecke {
+            for n in 0..block {
+                zufall ^= zufall << 13;
+                zufall ^= zufall >> 17;
+                zufall ^= zufall << 5;
+                let sys = 0.3 * ((zufall as f32 / u32::MAX as f32) * 2.0 - 1.0);
+                buf.ins[5 * 2][n] = sys;
+                buf.ins[5 * 2 + 1][n] = sys;
+                // A1 gibt den Systemton im selben Sample aus; der Raum
+                // verzögert ihn um 20 ms.
+                verlauf[pos] = sys;
+                let echo = 0.4 * verlauf[(pos + 4096 - 960) % 4096];
+                pos = (pos + 1) % 4096;
+                buf.ins[0][n] = echo;
+                buf.ins[1][n] = echo;
+            }
+            let io = buf.io();
+            dsp.process(&p, &io, block);
+            if b >= bloecke - 48_000 / block {
+                for n in 0..block {
+                    mic_p += (buf.ins[0][n] as f64).powi(2);
+                    aus_p += (buf.outs[5 * 2][n] as f64).powi(2);
+                }
+            }
         }
-        assert_eq!(buf.bus(0), 0.0);
-    }
-
-    #[test]
-    fn insert_wirkt_erst_mit_verbundenem_rueckweg() {
-        let p = params();
-        let mut dsp = dsp_neu();
-        let mut buf = Buf::new(0.5, 64);
-        let mut z = Zusatz::neu(64);
-        z.ret[0].iter_mut().for_each(|x| *x = 0.1);
-        z.ret[1].iter_mut().for_each(|x| *x = 0.1);
-        let mut io = buf.io();
-        z.an(&mut io);
-        // Eingeschaltet, aber nicht verbunden: Durchgang, Insert-Ausgang still.
-        p.set("strip", 0, "insert", 1.0);
-        dsp.process(&p, &io, 64);
-        assert!((buf.bus(0) - 0.5).abs() < 1e-6);
-        assert_eq!(z.ins[0][5], 0.0);
-        // Verbunden: hinaus geht das Signal, herein kommt der Rueckweg.
-        p.strips[0].ins_bereit.store(true, Relaxed);
-        dsp.process(&p, &io, 64);
-        assert!((z.ins[0][5] - 0.5).abs() < 1e-6, "hinaus {}", z.ins[0][5]);
-        assert!((buf.bus(0) - 0.1).abs() < 1e-6, "herein {}", buf.bus(0));
-        // Ausgeschaltet: wieder Durchgang.
-        p.set("strip", 0, "insert", 0.0);
-        dsp.process(&p, &io, 64);
-        assert!((buf.bus(0) - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn green_mode_umgeht_die_kette() {
-        let p = params();
-        let mut dsp = dsp_neu();
-        // Ein harter Compressor und ein stark gekippter Klang …
-        p.set("strip", 0, "comp", 1.0);
-        p.set("strip", 0, "comp_threshold", -40.0);
-        p.set("strip", 0, "comp_ratio", 20.0);
-        p.set("strip", 0, "karaoke", 2.0);
-        let mut buf = Buf::new(0.5, 64);
-        buf.set_strip_ch(0, 1, 0.0);
-        let io = buf.io();
-        for _ in 0..20 {
-            dsp.process(&p, &io, 64);
-        }
-        assert!(buf.out(0, 0) < 0.3, "Kette wirkt: {}", buf.out(0, 0));
-        // … und im Green Mode zaehlt nur der Fader.
-        p.set("strip", 0, "green", 1.0);
-        dsp.process(&p, &io, 64);
-        assert!((buf.out(0, 0) - 0.5).abs() < 1e-6, "{}", buf.out(0, 0));
-        assert_eq!(buf.out(0, 1), 0.0);
-    }
-
-    #[test]
-    fn a1_hoert_den_abgehoerten_bus() {
-        let p = params();
-        let mut dsp = dsp_neu();
-        let mut buf = Buf::new(0.0, 64);
-        buf.set_strip(1, 0.3);
-        // Streifen 2 nur auf B1 (Bus 5), Streifen 1 (leer) auf A1.
-        p.set("strip", 1, "send0", 0.0);
-        p.set("strip", 1, "send5", 1.0);
-        let io = buf.io();
-        dsp.process(&p, &io, 64);
-        assert_eq!(buf.bus(0), 0.0);
-        assert!((buf.bus(5) - 0.3).abs() < 1e-6);
-        p.set("bus", 5, "monitor", 1.0);
-        dsp.process(&p, &io, 64);
-        assert!(
-            (buf.bus(0) - 0.3).abs() < 1e-6,
-            "A1 hoert B1: {}",
-            buf.bus(0)
-        );
-        assert!((buf.bus(5) - 0.3).abs() < 1e-6, "B1 bleibt");
-        p.set("bus", 5, "monitor", 0.0);
-        dsp.process(&p, &io, 64);
-        assert_eq!(buf.bus(0), 0.0);
-    }
-
-    #[test]
-    fn sel_und_monitor_gelten_fuer_hoechstens_einen_bus() {
-        let p = params();
-        assert_eq!(p.sel_bus(), 0);
-        assert!(p.set("bus", 3, "sel", 1.0));
-        assert_eq!(p.sel_bus(), 3);
-        assert_eq!(p.buses.iter().filter(|b| b.sel.load(Relaxed)).count(), 1);
-        // Abwaehlen geht nicht: ein Bus ist immer gewaehlt.
-        assert!(p.set("bus", 3, "sel", 0.0));
-        assert_eq!(p.sel_bus(), 3);
-        assert_eq!(p.monitor_bus(), None);
-        p.set("bus", 6, "monitor", 1.0);
-        p.set("bus", 7, "monitor", 1.0);
-        assert_eq!(p.monitor_bus(), Some(7));
-        assert_eq!(
-            p.buses.iter().filter(|b| b.monitor.load(Relaxed)).count(),
-            1
-        );
-        p.set("bus", 7, "monitor", 0.0);
-        assert_eq!(p.monitor_bus(), None);
-        assert!(!p.set("bus", 99, "sel", 1.0));
-    }
-
-    #[test]
-    fn neue_parameter_werden_geklemmt() {
-        let p = params();
-        assert!(p.set("strip", 0, "send_d", 40.0));
-        assert_eq!(fget(&p.strips[0].fx_send[1]), effekte::MAX_DB);
-        assert!(p.set("strip", 0, "farbe", -3.0));
-        assert_eq!(fget(&p.strips[0].farbe), -1.0);
-        assert!(p.set("strip", 0, "karaoke", 7.0));
-        assert_eq!(p.strips[0].karaoke.load(Relaxed), effekte::KARAOKE_MAX);
-        assert!(p.set("bus", 2, "ret_fx1", -99.0));
-        assert_eq!(fget(&p.buses[2].fx_ret[2]), effekte::AUS_DB);
-        assert!(p.set("fx", 0, "echo_rueck", 2.0));
-        assert_eq!(fget(&p.fx.echo_rueck), 0.9);
-        assert!(!p.set("fx", 1, "echo_rueck", 0.5));
-        assert!(!p.set("strip", 0, "send_x", 0.0));
-        assert!(!p.set("bus", 0, "ret_q", 0.0));
-        // Die alten Bus-Sends bleiben erreichbar.
-        assert!(p.set("strip", 0, "send3", 1.0));
-    }
-
-    #[test]
-    fn preset_rundlauf_der_neuen_felder() {
-        let p = Arc::new(params());
-        p.set("strip", 2, "send_r", -6.0);
-        p.set("strip", 2, "post_d", 0.0);
-        p.set("strip", 2, "farbe", 0.5);
-        p.set("strip", 2, "karaoke", 1.0);
-        p.set("strip", 2, "muc", 1.0);
-        p.set("strip", 2, "green", 1.0);
-        p.set("strip", 2, "insert", 1.0);
-        p.set("strip", 2, "prg_c", 3.0);
-        p.set("bus", 4, "ret_d", -3.0);
-        p.set("bus", 4, "sel", 1.0);
-        p.set("bus", 6, "monitor", 1.0);
-        p.set("bus", 1, "vaio", 1.0);
-        p.set("bus", 1, "green", 1.0);
-        p.set("bus", 1, "mode", 3.0);
-        p.set("bus", 1, "c5", 1.0);
-        p.set("fx", 0, "hall_raum", 0.8);
-        let bild = p.to_json();
-        let q = Arc::new(params());
-        crate::http::apply_preset(&q, &bild);
-        assert_eq!(q.to_json().to_json(), bild.to_json());
-        assert_eq!(
-            crate::programme::aktuell(&q, 2, crate::programme::Modul::Comp),
-            3
-        );
-        assert_eq!(q.sel_bus(), 4);
-        assert_eq!(q.monitor_bus(), Some(6));
+        let erle = 10.0 * (mic_p / aus_p).log10();
+        assert!(erle > 25.0, "Echo auf B1 nur um {erle:.1} dB gesenkt");
     }
 }

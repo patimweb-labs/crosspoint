@@ -2,10 +2,9 @@
 //!
 //! Ein zaehlender Allokator umhuellt das ganze Testprogramm. Gemessen wird
 //! nur das Fenster um `EngineDsp::process` – Aufbau, Presets und Puffer
-//! entstehen vorher. Im Fenster sind Lowcut, TK (mit Lookahead-Ring), Gate,
-//! NR (mit FFT) und der
-//! einfache Denoiser aktiv: alle Puffer liegen im DSP-Zustand, `process`
-//! baut kein Vec und ruft kein `format!`.
+//! entstehen vorher. Im Fenster sind Gate und Echounterdrückung (mit FFT und
+//! Filterpartitionen) an allen virtuellen Bussen aktiv: alle Puffer liegen im
+//! DSP-Zustand, `process` baut kein Vec und ruft kein `format!`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,22 +47,15 @@ fn process_allokiert_nichts() {
     const BLOCK: usize = 1024;
 
     let p = std::sync::Arc::new(Params::new(48000.0, BLOCK as u32));
-    // Alles an, was Puffer brauchen koennte.
-    for (k, v) in [
-        ("lowcut", 120.0),
-        ("tk", 1.0),
-        ("tk_schwelle", 6.0),
-        ("tk_tiefe", 15.0),
-        ("gate", 1.0),
-        ("gate_schwelle", -45.0),
-        ("nr", 0.8),
-        ("nr_schwelle", -40.0),
-        ("nr_gate", 1.0),
-        ("denoiser", 1.0),
-        ("eq", 1.0),
-        ("comp", 1.0),
-    ] {
-        assert!(p.set("strip", 0, k, v), "Parameter {k}");
+    // Alles an, was Puffer brauchen koennte: Gate und Echounterdrückung an
+    // allen virtuellen Bussen, Mikro (Streifen 1) und Systemton (Streifen 6)
+    // auf A1 und B1..B3.
+    for bus in 5..8 {
+        for (k, v) in [("gate", 1.0), ("gate_schwelle", -45.0), ("aec", 1.0)] {
+            assert!(p.set("bus", bus, k, v), "Parameter {k} an Bus {bus}");
+        }
+        assert!(p.set("strip", 0, &format!("send{bus}"), 1.0));
+        assert!(p.set("strip", 5, &format!("send{bus}"), 1.0));
     }
 
     // Der DSP-Zustand ist gross; er entsteht auf einem eigenen Stapel.
@@ -90,10 +82,14 @@ fn process_allokiert_nichts() {
                 + 0.03 * sum * 0.577,
         );
     }
-    ins[0][..N].copy_from_slice(&signal);
-    ins[1][..N].copy_from_slice(&signal);
+    for k in [0, 1, 10, 11] {
+        ins[k][..N].copy_from_slice(&signal);
+    }
 
-    let mut io = Io::leer();
+    let mut io = Io {
+        ins: [[std::ptr::null(); 2]; STRIPS],
+        outs: [[std::ptr::null_mut(); 2]; BUSES],
+    };
     for k in 0..STRIPS {
         for c in 0..2 {
             io.ins[k][c] = ins[k * 2 + c].as_ptr();
@@ -117,7 +113,7 @@ fn process_allokiert_nichts() {
     let bytes_nachher = BYTES.load(Ordering::Relaxed);
 
     println!(
-        "ALLOC: {} Aufrufe und {} Bytes in vier Bloecken ({} Frames) mit LC+Gate+NR+EQ+Comp",
+        "ALLOC: {} Aufrufe und {} Bytes in vier Bloecken ({} Frames) mit Gate+AEC an B1..B3",
         nachher - vorher,
         bytes_nachher - bytes_vorher,
         4 * BLOCK

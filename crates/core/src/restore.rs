@@ -772,7 +772,7 @@ mod tests {
         let params = Arc::new(Params::new(48_000.0, 512));
         let mut b = Beobachter::neu(&params);
         assert!(!b.pruefe(&params), "ohne Aenderung nichts markieren");
-        params.set("strip", 3, "comp_ratio", 4.0);
+        params.set("bus", 6, "gate_schwelle", -30.0);
         assert!(b.pruefe(&params), "direkte Aenderung muss markiert werden");
         assert!(!b.pruefe(&params), "dieselbe Aenderung nur einmal");
         params.set_text("bus", 1, "label", "Kopfhoerer");

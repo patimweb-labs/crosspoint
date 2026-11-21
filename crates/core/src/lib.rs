@@ -15,40 +15,34 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 /// Geraete abraeumen: ein Sweep ohne Merkliste (Absturz, kill -9, doppelte Pfade).
+/// Echounterdrückung für die virtuellen Ausgänge (B1–B3).
+pub mod aec;
 pub mod aufraeumen;
 pub mod autostart;
 pub mod devices;
 pub mod dsp;
-pub mod effekte;
 pub mod engine;
-/// Effekt-Host (mod-host/Carla als betreute Kindprozesse).
-pub mod fx;
 pub mod http;
 pub mod inputs;
 pub mod jack;
 pub mod json;
 /// Start des ganzen Prozesses (Engine, Adapter, Aufpasser) an einer Stelle.
 pub mod lauf;
-pub mod lv2;
 pub mod macros_io;
 /// OSC-Eingang (`/strip/<n>/<param>`) für MIDIMonster und Fader.
 pub mod osc;
 /// Pegelbank: der Audio-Thread schreibt, die Oberfläche liest.
 pub mod pegel;
 pub mod pfade;
-pub mod programme;
 /// PipeWire-Graph (`pw-dump`) als Grundlage der Geräteerkennung.
 pub mod pw;
 pub mod remote_api;
 /// Zustand beim Start wiederherstellen, Änderungen selbsttätig sichern.
 pub mod restore;
-pub mod vaio;
-/// Wächter über abgesteckte Geräte: Zustand melden, Zuordnung behalten, heilen.
-pub mod wache;
-// Zugabe: RNNoise nur, wenn librnnoise.so.0 per dlopen erreichbar ist.
-pub mod rnnoise;
 pub mod tape_io;
 pub mod vban_io;
+/// Wächter über abgesteckte Geräte: Zustand melden, Zuordnung behalten, heilen.
+pub mod wache;
 
 pub const STRIPS: usize = 8;
 pub const BUSES: usize = 8;

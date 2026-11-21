@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 use crate::engine::{BusParam, Params, StripParam};
 use crate::json::Value;
-use crate::{BUSES, EQ_CELLS, STRIPS};
+use crate::{BUSES, STRIPS};
 
 /// Anzahl der Macro-Button-Slots wie im Original (`VBVMR_MACROBUTTON_NUMBER`).
 pub const MACRO_BUTTONS: usize = 80;
@@ -557,56 +557,11 @@ fn strip_get(s: &StripParam, param: &str) -> Option<f32> {
         "mute" => flag(s.mute.load(Relaxed)),
         "solo" => flag(s.solo.load(Relaxed)),
         "mono" => flag(s.mono.load(Relaxed)),
-        "eq" => flag(s.eq_on.load(Relaxed)),
-        "comp" => flag(s.comp.on.load(Relaxed)),
-        "gate" => flag(s.gate.on.load(Relaxed)),
-        "denoiser" => flag(s.dn_on.load(Relaxed)),
-        "lowcut" => fget(&s.lc_hz),
-        "tk" => flag(s.tk.load(Relaxed)),
-        "tk_schwelle" => fget(&s.tk_schwelle),
-        "tk_tiefe" => fget(&s.tk_tiefe),
-        "nr" => fget(&s.nr),
-        "nr_schwelle" => fget(&s.nr_schwelle),
-        "nr_modus" => s.nr_modus.load(Relaxed) as f32,
-        "nr_gate" => flag(s.nr_gate.load(Relaxed)),
-        "gate_schwelle" => fget(&s.gate.threshold),
-        "gate_tiefe" => fget(&s.gate.tiefe),
-        "comp_threshold" => fget(&s.comp.threshold),
-        "comp_ratio" => fget(&s.comp.ratio),
-        "comp_attack" => fget(&s.comp.attack),
-        "comp_release" => fget(&s.comp.release),
-        "comp_knee" => fget(&s.comp.knee),
-        "comp_gain_in" => fget(&s.comp.gain_in),
-        "comp_gain_out" => fget(&s.comp.gain_out),
-        "gate_threshold" => fget(&s.gate.threshold),
-        "gate_attack" => fget(&s.gate.attack),
-        "gate_hold" => fget(&s.gate.hold),
-        "gate_release" => fget(&s.gate.release),
-        _ => return strip_get_ext(s, param),
-    })
-}
-
-fn strip_get_ext(s: &StripParam, param: &str) -> Option<f32> {
-    if let Some(rest) = param.strip_prefix("send") {
-        let bus: usize = rest.parse().ok()?;
-        return s.sends.get(bus).map(fget);
-    }
-    if let Some(rest) = param.strip_prefix("eq") {
-        let (cell, field) = rest.split_once('_')?;
-        let cell: usize = cell.parse().ok()?;
-        if cell >= EQ_CELLS {
-            return None;
+        _ => {
+            let bus: usize = param.strip_prefix("send")?.parse().ok()?;
+            return s.sends.get(bus).map(fget);
         }
-        return match field {
-            "on" => Some(flag(s.eq[0][cell].on.load(Relaxed))),
-            "type" => Some(s.eq[0][cell].kind.load(Relaxed) as f32),
-            "freq" => Some(fget(&s.eq[0][cell].freq)),
-            "q" => Some(fget(&s.eq[0][cell].q)),
-            "gain" => Some(fget(&s.eq[0][cell].gain)),
-            _ => None,
-        };
-    }
-    None
+    })
 }
 
 fn bus_get(b: &BusParam, param: &str) -> Option<f32> {
@@ -614,14 +569,9 @@ fn bus_get(b: &BusParam, param: &str) -> Option<f32> {
         "gain" => fget(&b.gain),
         "mute" => flag(b.mute.load(Relaxed)),
         "mono" => flag(b.mono.load(Relaxed)),
-        "eq" => flag(b.eq_on.load(Relaxed)),
-        "limiter" => flag(b.limiter_on.load(Relaxed)),
-        "c5" => flag(b.c5_on.load(Relaxed)),
-        "c5_threshold" => fget(&b.c5_threshold),
-        "c5_ceiling" => fget(&b.c5_ceiling),
         "trim" => fget(&b.trim[0]),
         "delay" => fget(&b.delay_ms[0]),
-        _ => return None,
+        _ => return crate::engine::filter_get(b.filter.as_ref()?, param),
     })
 }
 

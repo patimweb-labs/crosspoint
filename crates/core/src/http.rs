@@ -27,7 +27,6 @@ use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::{Message, Role, WebSocket};
 
 use crate::devices::DeviceMap;
-use crate::effekte::FX_NAMEN;
 use crate::engine::Params;
 use crate::json::{self, Value};
 use crate::macros_io::MacroControl;
@@ -394,25 +393,6 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
                 }
             }
         }
-        ("GET", p) if p.starts_with("/api/eq") => {
-            let strip: usize = p
-                .split("strip=")
-                .nth(1)
-                .and_then(|s| s.split(&['&', ' '][..]).next())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            match params.eq_json(strip) {
-                Some(v) => {
-                    let body = v.to_json();
-                    reply("200 OK", "application/json", body.as_bytes())
-                }
-                None => reply(
-                    "404 Not Found",
-                    "application/json",
-                    b"{\"error\":\"strip\"}",
-                ),
-            }
-        }
         ("GET", p) if p.starts_with("/api/inputs") => {
             let mit = p.contains("monitors=1");
             let body = crate::inputs::status_json(&PipeWire, mit);
@@ -502,13 +482,15 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
             reply("200 OK", "application/json", ergebnis.to_json().as_bytes())
         }
         // Effekt-Host (mod-host): Ketten, Bypass und Host-Status.
-        ("GET", p) if p.starts_with("/api/fx") => {
-            let body = crate::fx::api_json().to_json();
-            reply("200 OK", "application/json", body.as_bytes())
-        }
         ("GET", p) if p.starts_with("/api/autostart") => {
             let body = crate::autostart::status_json();
             reply("200 OK", "application/json", body.as_bytes())
+        }
+        // Ein zweiter Start (Launcher, Menü) bittet die laufende Instanz um
+        // ihr Fenster, statt eine zweite Engine zu starten.
+        ("POST", p) if p.starts_with("/api/fenster") => {
+            FENSTER_WUNSCH.store(true, std::sync::atomic::Ordering::Relaxed);
+            reply("200 OK", "application/json", br#"{"ok":true}"#)
         }
         ("POST", p) if p.starts_with("/api/autostart") => {
             let wunsch = json::parse(body)
@@ -606,60 +588,23 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
 }
 
 /// Preset anwenden: alle im JSON vorhandenen Felder werden gesetzt.
+///
+/// Ältere Presets mit Filtern an den Streifen (EQ, Comp, Gate, NR …) laden
+/// weiter – diese Felder gibt es nicht mehr, `Params::set` lehnt sie ab.
 pub fn apply_preset(params: &Arc<Params>, v: &Value) {
+    let zahl = |x: &Value| match x {
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        anders => anders.as_f64().map(|f| f as f32),
+    };
     if let Some(strips) = v.get("strips").and_then(|x| x.as_arr()) {
         for (i, s) in strips.iter().enumerate() {
-            for key in ["gain", "pan"] {
-                if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
-                    params.set("strip", i, key, x as f32);
-                }
-            }
-            for key in [
-                "mute", "solo", "mono", "eq", "comp", "gate", "denoiser", "nr_gate", "tk",
-            ] {
-                if let Some(b) = s.get(key).and_then(|x| x.as_bool()) {
-                    params.set("strip", i, key, if b { 1.0 } else { 0.0 });
-                }
-            }
-            // Zahlenwerte der neuen Stufen: Lowcut, TK, NR und Gate.
-            for key in [
-                "lowcut",
-                "tk_schwelle",
-                "tk_tiefe",
-                "nr",
-                "nr_schwelle",
-                "nr_modus",
-                "gate_schwelle",
-                "gate_hold",
-                "gate_tiefe",
-                "gate_attack",
-                "gate_release",
-                "comp_threshold",
-                "comp_ratio",
-                "comp_attack",
-                "comp_release",
-                "comp_knee",
-                "comp_gain_in",
-                "comp_gain_out",
-            ] {
-                if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
-                    params.set("strip", i, key, x as f32);
+            for key in ["gain", "pan", "mute", "solo", "mono"] {
+                if let Some(x) = s.get(key).and_then(zahl) {
+                    params.set("strip", i, key, x);
                 }
             }
             if let Some(Value::Str(name)) = s.get("label") {
                 params.set_text("strip", i, "label", name);
-            }
-            if let Some(cells) = s.get("eq_cells").and_then(|x| x.as_arr()) {
-                for (c, cell) in cells.iter().enumerate() {
-                    if let Some(an) = cell.get("on").and_then(|x| x.as_bool()) {
-                        params.set("strip", i, &format!("eq{c}_on"), if an { 1.0 } else { 0.0 });
-                    }
-                    for feld in ["type", "freq", "q", "gain"] {
-                        if let Some(x) = cell.get(feld).and_then(|x| x.as_f64()) {
-                            params.set("strip", i, &format!("eq{c}_{feld}"), x as f32);
-                        }
-                    }
-                }
             }
             if let Some(sends) = s.get("sends").and_then(|x| x.as_arr()) {
                 for (b, sv) in sends.iter().enumerate() {
@@ -668,75 +613,22 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
                     }
                 }
             }
-            // Effekt-Sends, Klangbausteine, Programme.
-            if let Some(werte) = s.get("fx_send").and_then(|x| x.as_arr()) {
-                for (w, x) in werte.iter().enumerate().take(FX_NAMEN.len()) {
-                    if let Some(x) = x.as_f64() {
-                        params.set("strip", i, &format!("send_{}", FX_NAMEN[w]), x as f32);
-                    }
-                }
-            }
-            if let Some(werte) = s.get("fx_post").and_then(|x| x.as_arr()) {
-                for (w, x) in werte.iter().enumerate().take(FX_NAMEN.len()) {
-                    if let Some(b) = x.as_bool() {
-                        params.set("strip", i, &format!("post_{}", FX_NAMEN[w]), b as u8 as f32);
-                    }
-                }
-            }
-            for key in ["karaoke", "farbe"] {
-                if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
-                    params.set("strip", i, key, x as f32);
-                }
-            }
-            for key in ["muc", "green", "insert"] {
-                if let Some(b) = s.get(key).and_then(|x| x.as_bool()) {
-                    params.set("strip", i, key, if b { 1.0 } else { 0.0 });
-                }
-            }
-            // Programme zuletzt: ihre Werte stehen schon oben, das Setzen der
-            // Nummer schreibt sie nur noch einmal gleich.
-            if let Some(prg) = s.get("prg").and_then(|x| x.as_arr()) {
-                for (m, x) in crate::programme::Modul::ALLE.iter().zip(prg) {
-                    if let Some(n) = x.as_f64() {
-                        crate::programme::waehlen(params, i, *m, n as u32);
-                    }
-                }
-            }
         }
     }
     if let Some(buses) = v.get("buses").and_then(|x| x.as_arr()) {
         for (i, b) in buses.iter().enumerate() {
-            if let Some(x) = b.get("gain").and_then(|x| x.as_f64()) {
-                params.set("bus", i, "gain", x as f32);
-            }
-            if let Some(x) = b.get("delay_ms").and_then(|x| x.as_f64()) {
-                params.set("bus", i, "delay", x as f32);
-            }
-            if let Some(x) = b.get("trim").and_then(|x| x.as_f64()) {
-                params.set("bus", i, "trim", x as f32);
-            }
-            for key in [
-                "mute", "mono", "eq", "limiter", "cross", "c5", "green", "insert", "vaio",
-                "monitor",
-            ] {
-                if let Some(x) = b.get(key).and_then(|x| x.as_bool()) {
-                    params.set("bus", i, key, if x { 1.0 } else { 0.0 });
+            for key in ["gain", "trim", "mute", "mono", "mode", "cross"] {
+                if let Some(x) = b.get(key).and_then(zahl) {
+                    params.set("bus", i, key, x);
                 }
             }
-            // `sel` nur einschalten: Ausschalten ist kein Zustand (ein Bus ist
-            // immer gewaehlt) und wuerde sonst den gerade gesetzten loeschen.
-            if b.get("sel").and_then(|x| x.as_bool()) == Some(true) {
-                params.set("bus", i, "sel", 1.0);
+            if let Some(x) = b.get("delay_ms").and_then(zahl) {
+                params.set("bus", i, "delay", x);
             }
-            for key in ["mode", "c5_threshold", "c5_ceiling"] {
-                if let Some(x) = b.get(key).and_then(|x| x.as_f64()) {
-                    params.set("bus", i, key, x as f32);
-                }
-            }
-            if let Some(werte) = b.get("fx_ret").and_then(|x| x.as_arr()) {
-                for (w, x) in werte.iter().enumerate().take(FX_NAMEN.len()) {
-                    if let Some(x) = x.as_f64() {
-                        params.set("bus", i, &format!("ret_{}", FX_NAMEN[w]), x as f32);
+            if let Some(f) = b.get("filter") {
+                for key in crate::engine::FILTER_PARAMS {
+                    if let Some(x) = f.get(key).and_then(zahl) {
+                        params.set("bus", i, key, x);
                     }
                 }
             }
@@ -745,18 +637,21 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
             }
         }
     }
-    if let Some(Value::Obj(fx)) = v.get("fx") {
-        for (k, x) in fx {
-            if let Some(x) = x.as_f64() {
-                params.set("fx", 0, k, x as f32);
-            }
-        }
-    }
 }
 
 /// Zeitpunkt der letzten Anfrage (ms seit UNIX-Epoche) - die Engine beendet
 /// sich, wenn die Oberflaeche laenger weg ist, damit die virtuellen Geraete
 /// nicht als Leichen im System stehen bleiben.
+/// Jemand möchte das Fenster sehen (`POST /api/fenster`). Das Fenster
+/// holt den Wunsch ab ([`fenster_gewuenscht`]).
+pub static FENSTER_WUNSCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Liefert einen offenen Fensterwunsch genau einmal.
+pub fn fenster_gewuenscht() -> bool {
+    FENSTER_WUNSCH.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub static LETZTE_ANFRAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn setze_anfrage() {
@@ -1048,15 +943,51 @@ mod tests {
     }
 
     #[test]
-    fn pegel_und_eq_wege() {
+    fn fensterwunsch_wird_einmal_abgeholt() {
+        let z = zustand();
+        let a = route(&z, "POST", "/api/fenster", "");
+        assert_eq!(a.status, 200);
+        assert!(fenster_gewuenscht());
+        assert!(!fenster_gewuenscht());
+    }
+
+    #[test]
+    fn pegel_weg() {
         let z = zustand();
         let a = route(&z, "GET", "/api/levels", "");
         assert_eq!(text(&a), z.params.levels_json());
+        // Die EQ-Abfrage gibt es nicht mehr: Streifen haben keine Filter.
         let a = route(&z, "GET", "/api/eq?strip=0", "");
-        assert!(text(&a).contains(r#""cells""#));
-        let a = route(&z, "GET", "/api/eq?strip=99", "");
         assert_eq!(a.status, 404);
-        assert_eq!(text(&a), r#"{"error":"strip"}"#);
+    }
+
+    #[test]
+    fn altes_preset_laedt_und_filter_bleiben_im_preset() {
+        let z = zustand();
+        let alt = crate::json::parse(
+            r#"{"strips":[{"gain":-3,"eq":true,"comp":true,"gate_schwelle":-30,
+                "sends":[0,1,0,0,0,1,0,0]}],
+                "buses":[{"limiter":true,"mode":3},{},{},{},{},
+                {"filter":{"gate":true,"gate_schwelle":-38,"aec":true,"aec_ref":1}}]}"#,
+        )
+        .unwrap();
+        apply_preset(&z.params, &alt);
+        let bild = z.params.to_json();
+        let s0 = &bild.get("strips").unwrap().as_arr().unwrap()[0];
+        assert_eq!(s0.get("gain").and_then(|x| x.as_f64()), Some(-3.0));
+        assert!(s0.get("eq").is_none() && s0.get("comp").is_none());
+        let busse = bild.get("buses").unwrap().as_arr().unwrap();
+        assert_eq!(busse[0].get("mode").and_then(|x| x.as_f64()), Some(3.0));
+        assert_eq!(busse[0].get("filter"), Some(&Value::Null));
+        let f = busse[5].get("filter").unwrap();
+        assert_eq!(f.get("gate"), Some(&Value::Bool(true)));
+        assert_eq!(f.get("gate_schwelle").and_then(|x| x.as_f64()), Some(-38.0));
+        assert_eq!(f.get("aec"), Some(&Value::Bool(true)));
+        assert_eq!(f.get("aec_ref").and_then(|x| x.as_f64()), Some(1.0));
+        // Rundreise: das eigene Bild wieder einspielen ändert nichts.
+        let vorher = bild.to_json();
+        apply_preset(&z.params, &bild);
+        assert_eq!(z.params.to_json().to_json(), vorher);
     }
 
     #[test]
