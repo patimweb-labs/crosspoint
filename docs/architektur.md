@@ -183,12 +183,15 @@ Shared Memory und zwei lock-freie Ringpuffer spricht. Audio läuft über die
 Core-Audio-HAL-API (`objc2-core-audio`, nicht `cpal` – cpal verbirgt Aggregat-
 Geräte und IOProc). Die **Echo-Referenz** aus ADR 0005 wird auf macOS nicht aus
 Monitor-Ports gebaut, sondern aus einem globalen **Core-Audio-Tap**
-(`AudioHardwareCreateProcessTap`, ab **macOS 14.2**) – das ist näher am
+(`AudioHardwareCreateProcessTap`, seit **macOS 14.2**) – das ist näher am
 Original als der PipeWire-Weg, weil ein Gerät keinen Monitor haben muss. Die
-frühere Notiz „Audio Taps ab macOS 13" war zu früh.
+frühere Notiz „Audio Taps ab macOS 13" war zu früh. Unterstützt wird nur die
+jeweils **aktuelle macOS-Version** (Frage 1, beantwortet am 2026-11-21), die
+Taps sind damit immer vorhanden – und damit **nur Apple Silicon**: macOS 26
+(Tahoe) war die letzte Version für Intel-Macs.
 
-Aufwand **180–286 h** in sechs Schritten, jeder einzeln lauffähig; ohne eigenes
-Plugin 120–186 h. Dazu 99 €/Jahr Developer Program und Testhardware. Die Zahl
+Aufwand **174–278 h** in sechs Schritten, jeder einzeln lauffähig; ohne eigenes
+Plugin 114–178 h. Dazu 99 €/Jahr Developer Program und Testhardware. Die Zahl
 liegt über den früher genannten 170–240 h, weil dort die Trait-Grenze (a) und
 der Ersatz für `echo.rs` (e) fehlten. Risiko: das Plugin läuft im `coreaudiod`,
 ein Absturz dort nimmt den Ton des ganzen Macs mit.

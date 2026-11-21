@@ -11,6 +11,11 @@ Mixer. Dieser Plan trennt beides: erst die Grenze (Schritte a), dann ein
 zweites Backend dahinter (b–f). Nichts hier wird gebaut, bevor nicht jemand mit
 einem Mac und einem Entwicklerkonto daneben sitzt.
 
+Fragen 1 und 2 aus §7 sind **am 2026-11-21 beantwortet**: unterstützt wird nur
+die jeweils **aktuelle macOS-Version** – keine Rückwärtskompatibilität – und
+damit **nur Apple Silicon**. Taps sind damit immer vorhanden, der
+Universal-Binary-Weg entfällt ersatzlos. Fragen 3–6 sind offen.
+
 ## 1. Ist-Analyse am Code
 
 Gemessen mit `wc -l` über `crates/*/src` und `src` (ohne Tests, Stand
@@ -183,7 +188,6 @@ pub struct Umgebung {
     pub tray: bool,
     pub autostart: AutostartArt,      // XdgDesktop | LaunchAgent | Flatpak
     pub virtuelle_geraete: Virtuell,  // PwModule { skript: PathBuf } | HalPlugin { installiert: bool } | BlackHole | Keine
-    pub taps: bool,                   // Core-Audio-Taps vorhanden (macOS 14.2+)
 }
 ```
 
@@ -191,6 +195,11 @@ Das Fenster rendert daraus: „Virtuelle Geräte: HAL-Plugin, nicht installiert 
 installieren" statt einer Zeile mit `cfg!(target_os = "macos")`. Der
 Web-Fernbedienung reicht ein Feld mehr im JSON (`"platform": "macos"`), das
 `web/index.html` heute schon nicht auswertet und deshalb nicht bricht.
+
+Ein Feld `taps` gibt es **nicht mehr**: die Untergrenze ist die jeweils aktuelle
+macOS-Version (Frage 1, beantwortet), und die Taps sind seit 14.2 dabei – sie
+können also nicht fehlen. Fehlt der Zugriff, ist das die TCC-Berechtigung, ein
+Fehlerzustand im Modell, kein Plattformmerkmal.
 
 ## 3. macOS im Einzelnen
 
@@ -222,7 +231,7 @@ Programm auf Kanal 3. Auf macOS geht das **ohne Kernel-Treiber**: ein
 | Kommunikation Plugin ↔ App | Shared Memory + zwei lock-freie Ringpuffer (Eingang: App schreibt, Plugin liest; Ausgang umgekehrt) + POSIX-Semaphore oder `os_unfair_lock`-freie Zähler. Format ist fest 32 bit float, verschränkt, 48 kHz – **kein** Resampling im Plugin (das wäre im coreaudiod der sichere Weg zum Aussetzer) |
 | Anmeldung | `Info.plist` mit `CFBundlePackageType` `BNDL`, `AudioServerPlugIn_...`-Einträgen; Neustart `sudo launchctl kickstart -k system/com.apple.audio.coreaudiod` |
 | Signatur | Plugin muss mit Developer ID signiert sein; Installation über `installer`-Paket (pkgsigniert) oder einen Helfer mit Adminrechten |
-| Apple Silicon | Plugin als `arm64`+`x86_64` bauen, Universal; die Signatur gilt je Architektur |
+| Apple Silicon | **Nur `arm64`.** macOS 26 (Tahoe) war die letzte Version für Intel-Macs, ab macOS 27 läuft macOS ausschließlich auf Apple Silicon. Ein `x86_64`-Slice wäre toter Ballast |
 
 **Alternativen, bewertet:**
 
@@ -240,8 +249,10 @@ Das ist die Stelle, an der macOS **besser** ist als Linux. Heute sucht
 `crosspoint:echo_ref_L/R` – genau das, was ADR 0005 beschreibt, und es hat
 unter PipeWire die Einschränkung, dass ein Gerät einen Monitor haben muss.
 
-Auf macOS gibt es ab **14.2** `AudioHardwareCreateProcessTap`
-(`CATapDescription`): ein Tap kopiert die Ausgabe eines Prozesses, einer Gruppe
+Auf macOS gibt es seit **14.2** `AudioHardwareCreateProcessTap`
+(`CATapDescription`) – und da die Untergrenze die jeweils aktuelle
+macOS-Version ist (Frage 1), ist es immer vorhanden: ein Tap kopiert die
+Ausgabe eines Prozesses, einer Gruppe
 oder – als globaler Stereo-Mixdown – **des ganzen Systems**, ohne es zu
 verändern. Der Tap wird in ein privates Aggregat-Gerät gehängt
 (`AudioHardwareCreateAggregateDevice` mit `kAudioAggregateDeviceTapList`) und
@@ -307,11 +318,11 @@ Fenster im Dock. Das ist ein `Umgebung`-Feld, kein `cfg`.
 | Punkt | Befund | Aufwand |
 |---|---|---|
 | Form | `.app`-Bundle + `.dmg` (Drag-and-drop). Kein Flatpak, kein AppImage – beides gibt es auf macOS nicht | 6–10 h |
-| Universal | `cargo build --target aarch64-apple-darwin` und `x86_64-apple-darwin`, dann `lipo -create`. Das HAL-Plugin ist C++ → CMake/Xcode im CI | 8–12 h |
+| Architektur | Nur `cargo build --target aarch64-apple-darwin`. **Kein** `x86_64`-Slice, kein `lipo`, kein Intel-Job – macOS 27 und folgende laufen nur noch auf Apple Silicon. Das HAL-Plugin ist C++ → CMake/Xcode im CI | 4–6 h |
 | Signatur | Developer ID Application; Hardened Runtime; Entitlements (`com.apple.security.device.audio-input` nur falls sandboxed – wir sind es nicht) | 8–12 h |
 | Notarisierung | `notarytool submit --wait` + `stapler staple`; braucht Apple-ID, Team-ID, app-spezifisches Passwort oder API-Key als CI-Secret | 6–10 h |
 | Kosten | Apple Developer Program **99 €/Jahr**, einmalig einzurichten, jährlich zu verlängern. Ohne Konto: App läuft nur nach „Rechtsklick → Öffnen", Plugin gar nicht | – |
-| CI | `macos-14`-Runner (arm64) + `macos-13` (Intel). GitHub rechnet macOS-Minuten **10-fach**; ein Vollbau dürfte 8–15 min je Architektur brauchen → spürbar, aber bezahlbar im Free-Kontingent | 8–12 h |
+| CI | nur `macos-14`-Runner (arm64), `macos-13` (Intel) entfällt. GitHub rechnet macOS-Minuten **10-fach**; ein Vollbau dürfte 8–15 min brauchen → spürbar, aber bezahlbar im Free-Kontingent | 6–9 h |
 | Release | `release.yml` bekommt einen `macos`-Job; `release-please` schreibt zusätzlich in die `.app`-Version. Kein Flatpak-Quellen-Nachziehen | 4–6 h |
 
 ## 4. Reihenfolge: sechs Schritte, jeder lauffähig
@@ -383,10 +394,10 @@ zweite, **kürzere** Umsetzung.
 **Fertig, wenn:** ADR 0005 auf macOS nachweisbar ist – 30 dB Echo-Unterdrückung
 mit Boxen und Mikrofon, gemessen wie in ADR 0005 beschrieben.
 
-### (f) Pakete, Signatur, Notarisierung, CI — **24–36 h**
+### (f) Pakete, Signatur, Notarisierung, CI — **18–28 h**
 
-`.app`, `.dmg`, Universal, Developer ID, `notarytool`, `macos-14`-Job in
-`release.yml`, `README`-Abschnitt „macOS".
+`.app`, `.dmg` (arm64), Developer ID, `notarytool`, `macos-14`-Job allein in
+`release.yml`, `README`-Abschnitt „macOS“. Kein `lipo`, kein zweiter Slice.
 
 **Fertig, wenn:** ein fremder Mac das `.dmg` lädt, die App ohne Warnung startet,
 das Plugin mit Adminrechten installiert und nach einem Reboot funktioniert.
@@ -400,8 +411,8 @@ das Plugin mit Adminrechten installiert und nach einem Reboot funktioniert.
 | (c) | BlackHole als Zwischenlösung | 12–20 |
 | (d) | eigenes HAL-Plugin | 60–100 |
 | (e) | Taps für Echo und Eingänge | 20–30 |
-| (f) | `.app`/`.dmg`, Signatur, Notarisierung, CI | 24–36 |
-| | **Summe** | **180–286 h** |
+| (f) | `.app`/`.dmg` (arm64), Signatur, Notarisierung, CI | 18–28 |
+| | **Summe** | **174–278 h** |
 
 Die frühere Schätzung in `docs/architektur.md` nannte 170–240 h. Der
 Unterschied kommt aus zwei Posten, die dort fehlten: die Trait-Grenze (a,
@@ -409,7 +420,7 @@ Unterschied kommt aus zwei Posten, die dort fehlten: die Trait-Grenze (a,
 Nebenschauplatz, sondern der Ersatz für `echo.rs` – ohne sie wiederholt sich der
 Fehler aus ADR 0005 auf dem Mac.
 
-**Ohne eigenes Plugin** (a+b+c+e+f): 120–186 h. Das ist der ehrliche
+**Ohne eigenes Plugin** (a+b+c+e+f): 114–178 h. Das ist der ehrliche
 „Zwischenlösung"-Preis, und es ist die Zahl, mit der man anfangen sollte:
 erreicht nach (b) bereits einen benutzbaren Mixer.
 
@@ -426,20 +437,22 @@ Notarisierung, und die Zeit, die ein Fehler im `coreaudiod` kostet.
 | **n IOProcs statt einem Callback** | Takt-Drift zwischen Geräten, Aussetzer hörbar als Knacken | Aggregate-Geräte statt Handarbeit; Ringe mit Füllstandsanzeige im Modell („xruns: 3") |
 | **Latenz** | 2 Puffer mehr als heute | im Modell als Zahl führen und im Fenster zeigen; kein „low latency"-Versprechen im README |
 | **Notarisierung** | unklare Ablehnungen, Wartezeit, `stapler`-Fehler | früh einen leeren Build durch den ganzen Weg schicken, nicht erst bei (f) |
-| **Universal-Binary** | HAL-Plugin ist C++ → zwei Architekturen, zwei Signaturschritte | CI von Anfang an zweistellig bauen, nicht nachträglich |
 | **TCC** | Berechtigung fehlt → stiller leerer Puffer, wirkt wie „kaputt" | Zustand im Modell, Hinweis im Fenster mit Weg zu den Systemeinstellungen |
 | **AGENTS.md §2.10** | „mal schnell ein `cfg!(target_os)`" im Fenster | Prüfung im Review: `grep -r "cfg(target_os" crates/fenster` muss leer bleiben; Unterschiede nur über `Umgebung` |
 | **Wartung** | zwei Backends, zwei Tray-Wege, zwei Paketwege | die Linux-Seite bleibt unverändert; alles Neue liegt in `backend/*/macos.rs` und `packaging/macos/` – ein `git rm -r` entfernt es restlos |
 
 ## 7. Offene Fragen an den Nutzer
 
-1. **Welche macOS-Version ist die Untergrenze?** Vorschlag **14.2** – darunter
-   gibt es keine Taps, und Echo-Referenz plus Eingänge müssten über
-   BlackHole-Monitore nachgebaut werden (Rückschritt gegenüber ADR 0005). Die
-   Notiz in `docs/architektur.md` nannte „ab macOS 13"; das war zu früh.
-2. **Apple Silicon oder auch Intel?** Universal kostet ~30 % mehr Arbeit in
-   Signatur und CI. Wenn der Nutzerkreis neu ist: **nur arm64** anfangen,
-   Universal später.
+1. ~~Welche macOS-Version ist die Untergrenze?~~ **Beantwortet am 2026-11-21**,
+   wörtlich: „ja es reicht die neuste version :)“. Also **nur die jeweils
+   aktuelle macOS-Version**, keine Rückwärtskompatibilität. Folge: die Taps
+   (seit 14.2) sind immer vorhanden, die Prüfung `taps: bool` entfällt, und
+   ältere Versionen werden nicht getestet. Der frühere Vorschlag 14.2 und die
+   Notiz „ab macOS 13“ in `docs/architektur.md` sind damit erledigt.
+2. ~~Apple Silicon oder auch Intel?~~ **Beantwortet am 2026-11-21** (mit
+   Frage 1): **nur Apple Silicon**. macOS 26 (Tahoe) war die letzte Version für
+   Intel-Macs; ab macOS 27 läuft macOS ausschließlich auf Apple Silicon. Kein
+   Universal Binary, kein `lipo`, kein `macos-13`-Job, HAL-Plugin nur `arm64`.
 3. **Gibt es ein Entwicklerkonto (99 €/Jahr)?** Ohne es ist (d) nicht
    auslieferbar; (b) geht auch ohne.
 4. **Steht ein Mac zum Testen bereit?** Welcher, mit welchem Audio-Interface?
@@ -458,6 +471,9 @@ Notarisierung, und die Zeit, die ein Fehler im `coreaudiod` kostet.
 Apple:
 
 - Core Audio Taps: <https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps>
+- macOS 26 (Tahoe) ist die letzte Version für Intel-Macs (WWDC25, Platform State
+  of the Union): <https://www.heise.de/en/news/macOS-26-Tahoe-Last-release-for-Intel-Launchpad-says-goodbye-10438678.html>
+  und <https://arstechnica.com/gadgets/2025/06/one-last-look-at-software-support-as-macos-26-tahoe-winds-down-the-intel-mac-era/>
 - `AudioHardwareCreateProcessTap` (neu in macOS 14.2): <https://sdkdiffs.furnacecreek.org/macos-14.2/CoreAudio.html>
 - Audio Server Plug-in / Driver Extension: <https://developer.apple.com/documentation/coreaudio/building-an-audio-server-plug-in-and-driver-extension>
 - `AudioServerPlugIn.h`: <https://developer.apple.com/documentation/coreaudio/audioserverplugin>

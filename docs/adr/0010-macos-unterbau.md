@@ -40,10 +40,10 @@ Engine.
    Geräte-Sprech gehoben.
 2. **Die Auswahl passiert in `src/`**, der Kompositionswurzel. `crates/fenster`
    bekommt kein `cfg(target_os)` (AGENTS.md §2.10), sondern eine `Umgebung` als
-   Daten – `Plattform`, `tray`, `autostart`, `virtuelle_geraete`, `taps`. Die
-   Ansichten rendern daraus. `cfg` bleibt nur in `Cargo.toml`, wo Cargo es
-   erzwingt.
-3. **macOS-Audio über Core Audio (HAL-API)**, gebunden mit `objc2-core-audio`
+   Daten – `Plattform`, `tray`, `autostart`, `virtuelle_geraete`. Die
+   Ansichten rendern daraus. Ein Feld `taps` gibt es nicht: die Untergrenze ist
+   die jeweils aktuelle macOS-Version, die Taps (14.2) können nicht fehlen.
+   `cfg` bleibt nur in `Cargo.toml`, wo Cargo es erzwingt.3. **macOS-Audio über Core Audio (HAL-API)**, gebunden mit `objc2-core-audio`
    (0.3) statt `cpal`. Begründung: cpal verbirgt Aggregat-Geräte und den
    IOProc, den wir für 18 Kanäle und einen Tap brauchen. Preis: das
    Callback-Modell ändert sich – auf macOS ein IOProc **je Gerät**, nicht ein
@@ -58,21 +58,27 @@ Engine.
    ausdrücklich erlaubt und wird vor dem eigenen Plugin gebaut – er beweist den
    Rest der App, bevor ein Fehler im `coreaudiod` den Ton eines ganzen Macs
    mitnimmt.
-5. **Echo-Referenz und Eingänge über Core-Audio-Taps** (macOS 14.2+), nicht
+5. **Echo-Referenz und Eingänge über Core-Audio-Taps** (seit macOS 14.2, also
+   auf jeder unterstützten Version), nicht
    über Monitor-Geräte. Ein globaler Stereo-Tap ersetzt die Monitor-Suche aus
    `echo.rs`; Prozess-Taps ersetzen `pw-link` für „Programm X auf Streifen 3".
    Damit ist die Echo-Referenz auf macOS **näher an ADR 0005** als unter
    PipeWire, wo ein Gerät einen Monitor haben muss.
-6. **Untergrenze macOS 14.2**, weil darunter keine Taps existieren.
+6. **Untergrenze: die jeweils aktuelle macOS-Version** – keine
+   Rückwärtskompatibilität (Frage 1, beantwortet am 2026-11-21). Damit sind die
+   Taps immer vorhanden. Folge: **nur Apple Silicon**, weil macOS 26 (Tahoe)
+   die letzte Version für Intel-Macs war und macOS ab 27 ausschließlich auf
+   Apple Silicon läuft. Kein Universal Binary, kein `lipo`, kein Intel-CI-Job
+   (`macos-13` entfällt), HAL-Plugin nur `arm64`.
 7. **Pakete: `.app` + `.dmg`, Developer ID signiert und notarisiert**
    (ADR 0004 gilt weiter für Linux; macOS bekommt keinen vierten Linux-Weg).
-   Universal Binary, CI-Job auf `macos-14`. Kosten: 99 €/Jahr
+   CI-Job auf `macos-14`, arm64 allein. Kosten: 99 €/Jahr
    Developer Program.
 8. **Reihenfolge in sechs Schritten**, jeder einzeln lauffähig:
    (a) Grenzen einziehen, Linux grün · (b) Core-Audio-Backend ohne virtuelle
    Geräte · (c) BlackHole · (d) eigenes HAL-Plugin · (e) Taps · (f) Pakete.
    Nach (b) ist entscheidbar, ob der Rest das Geld wert ist. Summe
-   **180–286 h**, ohne eigenes Plugin 120–186 h.
+   **174–278 h**, ohne eigenes Plugin 114–178 h.
 
 ## Alternativen
 
@@ -89,7 +95,7 @@ Engine.
 
 ## Kosten
 
-- **Arbeit:** 180–286 h nach [../plan-macos.md](../plan-macos.md) §5, davon
+- **Arbeit:** 174–278 h nach [../plan-macos.md](../plan-macos.md) §5, davon
   24–40 h für (a) – und die fallen **auch ohne macOS** an, weil sie die
   Testbarkeit ohne PipeWire verbessern.
 - **Geld:** 99 €/Jahr Developer Program; Testhardware (Mac mini M4 und
@@ -123,13 +129,15 @@ Engine.
 
 ## Offene Punkte (blockieren die Umsetzung, nicht diesen Beschluss)
 
-1. macOS-Untergrenze bestätigen: 14.2 (Taps) – oder Verzicht auf Taps.
-2. Apple Silicon allein oder Universal.
+1. ~~macOS-Untergrenze?~~ **Beantwortet am 2026-11-21**: die jeweils aktuelle
+   macOS-Version, keine Rückwärtskompatibilität – siehe Entscheidung 6.
+2. ~~Apple Silicon allein oder Universal?~~ **Beantwortet am 2026-11-21**: nur
+   Apple Silicon, siehe Entscheidung 6.
 3. Entwicklerkonto vorhanden?
 4. Mac zum Testen vorhanden (Modell, Audio-Interface)?
 5. BlackHole-Zwischenschritt gewünscht oder direkt das eigene Plugin?
 6. Gerätenamen identisch zu Linux (`CROSSPOINT-Input`,
    `CROSSPOINT-Output-B1..B3`) – bestätigen.
 
-Solange 1–4 offen sind, wird **nichts** davon gebaut; Schritt (a) ist der
+Solange 3–6 offen sind, wird **nichts** davon gebaut; Schritt (a) ist der
 einzige, der ohne Antworten sinnvoll ist, und er ist auch ohne macOS nützlich.
