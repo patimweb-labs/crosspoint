@@ -71,10 +71,7 @@ impl Pult {
         let mut ab = 0;
         while ab < n {
             let frames = BLOCK.min(n - ab);
-            let mut io = Io {
-                ins: [[std::ptr::null(); 2]; STRIPS],
-                outs: [[std::ptr::null_mut(); 2]; BUSES],
-            };
+            let mut io = Io::leer();
             for s in 0..STRIPS {
                 for c in 0..2 {
                     io.ins[s][c] = unsafe { self.ins[s * 2 + c].as_ptr().add(ab) };

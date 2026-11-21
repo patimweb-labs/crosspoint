@@ -93,10 +93,7 @@ fn process_allokiert_nichts() {
     ins[0][..N].copy_from_slice(&signal);
     ins[1][..N].copy_from_slice(&signal);
 
-    let mut io = Io {
-        ins: [[std::ptr::null(); 2]; STRIPS],
-        outs: [[std::ptr::null_mut(); 2]; BUSES],
-    };
+    let mut io = Io::leer();
     for k in 0..STRIPS {
         for c in 0..2 {
             io.ins[k][c] = ins[k * 2 + c].as_ptr();

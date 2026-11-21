@@ -27,6 +27,7 @@ use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::{Message, Role, WebSocket};
 
 use crate::devices::DeviceMap;
+use crate::effekte::FX_NAMEN;
 use crate::engine::Params;
 use crate::json::{self, Value};
 use crate::macros_io::MacroControl;
@@ -667,6 +668,40 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
                     }
                 }
             }
+            // Effekt-Sends, Klangbausteine, Programme.
+            if let Some(werte) = s.get("fx_send").and_then(|x| x.as_arr()) {
+                for (w, x) in werte.iter().enumerate().take(FX_NAMEN.len()) {
+                    if let Some(x) = x.as_f64() {
+                        params.set("strip", i, &format!("send_{}", FX_NAMEN[w]), x as f32);
+                    }
+                }
+            }
+            if let Some(werte) = s.get("fx_post").and_then(|x| x.as_arr()) {
+                for (w, x) in werte.iter().enumerate().take(FX_NAMEN.len()) {
+                    if let Some(b) = x.as_bool() {
+                        params.set("strip", i, &format!("post_{}", FX_NAMEN[w]), b as u8 as f32);
+                    }
+                }
+            }
+            for key in ["karaoke", "farbe"] {
+                if let Some(x) = s.get(key).and_then(|x| x.as_f64()) {
+                    params.set("strip", i, key, x as f32);
+                }
+            }
+            for key in ["muc", "green", "insert"] {
+                if let Some(b) = s.get(key).and_then(|x| x.as_bool()) {
+                    params.set("strip", i, key, if b { 1.0 } else { 0.0 });
+                }
+            }
+            // Programme zuletzt: ihre Werte stehen schon oben, das Setzen der
+            // Nummer schreibt sie nur noch einmal gleich.
+            if let Some(prg) = s.get("prg").and_then(|x| x.as_arr()) {
+                for (m, x) in crate::programme::Modul::ALLE.iter().zip(prg) {
+                    if let Some(n) = x.as_f64() {
+                        crate::programme::waehlen(params, i, *m, n as u32);
+                    }
+                }
+            }
         }
     }
     if let Some(buses) = v.get("buses").and_then(|x| x.as_arr()) {
@@ -680,13 +715,40 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
             if let Some(x) = b.get("trim").and_then(|x| x.as_f64()) {
                 params.set("bus", i, "trim", x as f32);
             }
-            for key in ["mute", "mono", "eq", "limiter"] {
+            for key in [
+                "mute", "mono", "eq", "limiter", "cross", "c5", "green", "insert", "vaio",
+                "monitor",
+            ] {
                 if let Some(x) = b.get(key).and_then(|x| x.as_bool()) {
                     params.set("bus", i, key, if x { 1.0 } else { 0.0 });
                 }
             }
+            // `sel` nur einschalten: Ausschalten ist kein Zustand (ein Bus ist
+            // immer gewaehlt) und wuerde sonst den gerade gesetzten loeschen.
+            if b.get("sel").and_then(|x| x.as_bool()) == Some(true) {
+                params.set("bus", i, "sel", 1.0);
+            }
+            for key in ["mode", "c5_threshold", "c5_ceiling"] {
+                if let Some(x) = b.get(key).and_then(|x| x.as_f64()) {
+                    params.set("bus", i, key, x as f32);
+                }
+            }
+            if let Some(werte) = b.get("fx_ret").and_then(|x| x.as_arr()) {
+                for (w, x) in werte.iter().enumerate().take(FX_NAMEN.len()) {
+                    if let Some(x) = x.as_f64() {
+                        params.set("bus", i, &format!("ret_{}", FX_NAMEN[w]), x as f32);
+                    }
+                }
+            }
             if let Some(Value::Str(name)) = b.get("label") {
                 params.set_text("bus", i, "label", name);
+            }
+        }
+    }
+    if let Some(Value::Obj(fx)) = v.get("fx") {
+        for (k, x) in fx {
+            if let Some(x) = x.as_f64() {
+                params.set("fx", 0, k, x as f32);
             }
         }
     }

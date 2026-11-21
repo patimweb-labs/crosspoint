@@ -33,7 +33,6 @@
 //! Warteschleife des Binaries – nie dem Ton.
 
 use std::path::PathBuf;
-use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -216,6 +215,153 @@ impl Drop for Lauf {
 Audio-Thread
 ================================================================== */
 
+/// Zusatzports fuer Effekte: FX1/FX2-Sends mit Rueckwegen und je Streifen und
+/// Bus ein Insert-Paar (`strip1_ins_L` hinaus, `strip1_ret_L` herein).
+#[derive(Default)]
+struct EffektPorts {
+    fx_out: [[Option<Port<AudioOut>>; 2]; 2],
+    fx_ret: [[Option<Port<AudioIn>>; 2]; 2],
+    strip_ins: [[Option<Port<AudioOut>>; 2]; STRIPS],
+    strip_ret: [[Option<Port<AudioIn>>; 2]; STRIPS],
+    bus_ins: [[Option<Port<AudioOut>>; 2]; BUSES],
+    bus_ret: [[Option<Port<AudioIn>>; 2]; BUSES],
+}
+
+/// Fuellt Zeiger aus Eingangsports.
+fn zeiger_ein<const N: usize>(
+    ports: &[[Option<Port<AudioIn>>; 2]; N],
+    ziel: &mut [[*const f32; 2]; N],
+    ps: &ProcessScope,
+) {
+    for (paar, z) in ports.iter().zip(ziel.iter_mut()) {
+        for (port, zeiger) in paar.iter().zip(z.iter_mut()) {
+            if let Some(p) = port.as_ref() {
+                *zeiger = p.as_slice(ps).as_ptr();
+            }
+        }
+    }
+}
+
+/// Fuellt Zeiger aus Ausgangsports.
+fn zeiger_aus<const N: usize>(
+    ports: &mut [[Option<Port<AudioOut>>; 2]; N],
+    ziel: &mut [[*mut f32; 2]; N],
+    ps: &ProcessScope,
+) {
+    for (paar, z) in ports.iter_mut().zip(ziel.iter_mut()) {
+        for (port, zeiger) in paar.iter_mut().zip(z.iter_mut()) {
+            if let Some(p) = port.as_mut() {
+                *zeiger = p.as_mut_slice(ps).as_mut_ptr();
+            }
+        }
+    }
+}
+
+impl EffektPorts {
+    fn eintragen(&mut self, io: &mut Io, ps: &ProcessScope) {
+        zeiger_aus(&mut self.fx_out, &mut io.fx_out, ps);
+        zeiger_ein(&self.fx_ret, &mut io.fx_ret, ps);
+        zeiger_aus(&mut self.strip_ins, &mut io.strip_ins, ps);
+        zeiger_ein(&self.strip_ret, &mut io.strip_ret, ps);
+        zeiger_aus(&mut self.bus_ins, &mut io.bus_ins, ps);
+        zeiger_ein(&self.bus_ret, &mut io.bus_ret, ps);
+    }
+
+    /// Legt alle Ports an und liefert je Streifen und Bus die Ports, an denen
+    /// der Waechter sieht, ob der Insert-Weg verbunden ist.
+    fn anlegen(&mut self, jack: &Jack) -> Result<Vec<InsertWache>, String> {
+        let paar_aus = |name: &str| -> Result<[Option<Port<AudioOut>>; 2], String> {
+            Ok([
+                Some(jack.port_out(&format!("{name}_L"))?),
+                Some(jack.port_out(&format!("{name}_R"))?),
+            ])
+        };
+        let paar_ein = |name: &str| -> Result<[Option<Port<AudioIn>>; 2], String> {
+            Ok([
+                Some(jack.port_in(&format!("{name}_L"))?),
+                Some(jack.port_in(&format!("{name}_R"))?),
+            ])
+        };
+        for ext in 0..2 {
+            self.fx_out[ext] = paar_aus(&format!("fx{}", ext + 1))?;
+            self.fx_ret[ext] = paar_ein(&format!("fx{}_ret", ext + 1))?;
+        }
+        let mut wache = Vec::new();
+        for s in 0..STRIPS {
+            self.strip_ins[s] = paar_aus(&format!("strip{}_ins", s + 1))?;
+            self.strip_ret[s] = paar_ein(&format!("strip{}_ret", s + 1))?;
+            wache.push(InsertWache::neu(
+                false,
+                s,
+                &self.strip_ins[s][0],
+                &self.strip_ret[s][0],
+            ));
+        }
+        for (b, name) in BUS_NAMES.iter().enumerate() {
+            self.bus_ins[b] = paar_aus(&format!("bus{name}_ins"))?;
+            self.bus_ret[b] = paar_ein(&format!("bus{name}_ret"))?;
+            wache.push(InsertWache::neu(
+                true,
+                b,
+                &self.bus_ins[b][0],
+                &self.bus_ret[b][0],
+            ));
+        }
+        Ok(wache.into_iter().flatten().collect())
+    }
+}
+
+/// Beobachtet ein Insert-Paar: bereit ist der Weg erst, wenn Ausgang **und**
+/// Rueckweg verbunden sind – ein Insert ohne Rueckweg machte den Kanal stumm.
+struct InsertWache {
+    bus: bool,
+    index: usize,
+    hinaus: Port<jack::Unowned>,
+    herein: Port<jack::Unowned>,
+}
+
+impl InsertWache {
+    fn neu(
+        bus: bool,
+        index: usize,
+        hinaus: &Option<Port<AudioOut>>,
+        herein: &Option<Port<AudioIn>>,
+    ) -> Option<InsertWache> {
+        Some(InsertWache {
+            bus,
+            index,
+            hinaus: hinaus.as_ref()?.clone_unowned(),
+            herein: herein.as_ref()?.clone_unowned(),
+        })
+    }
+
+    fn pruefen(&self, params: &Params) {
+        let verbunden =
+            |p: &Port<jack::Unowned>| p.connected_count().map(|n| n > 0).unwrap_or(false);
+        let bereit = verbunden(&self.hinaus) && verbunden(&self.herein);
+        let ziel = if self.bus {
+            &params.buses[self.index].ins_bereit
+        } else {
+            &params.strips[self.index].ins_bereit
+        };
+        ziel.store(bereit, Ordering::Relaxed);
+    }
+}
+
+/// Waechter-Thread: alle 300 ms nachsehen, welche Insert-Wege verbunden sind.
+/// Laeuft, bis der Client wegfaellt (dann schlagen die Abfragen fehl und
+/// melden „nicht verbunden“ – harmlos).
+fn insert_wache_starten(wache: Vec<InsertWache>, params: Arc<Params>, ende: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        while !SHUTDOWN.load(Ordering::SeqCst) && !ende.load(Ordering::SeqCst) {
+            for w in &wache {
+                w.pruefen(&params);
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+    });
+}
+
 struct Rt {
     params: Arc<Params>,
     dsp: EngineDsp,
@@ -225,6 +371,8 @@ struct Rt {
     outs: [[Option<Port<AudioOut>>; 2]; BUSES],
     /// Ausgangspaare fuer empfangenes VBAN-Audio (`vban_L`/`vban_R`).
     vban_out: [Option<Port<AudioOut>>; 2],
+    /// Effektwege und Inserts (siehe [`EffektPorts`]).
+    fx: EffektPorts,
     tape: Arc<TapeControl>,
     vban: Arc<VbanControl>,
     vban_ring: Arc<Ring>,
@@ -321,10 +469,8 @@ impl Rt {
 
     fn run(&mut self, ps: &ProcessScope) {
         let frames = ps.n_frames() as usize;
-        let mut io = Io {
-            ins: [[ptr::null(); 2]; STRIPS],
-            outs: [[ptr::null_mut(); 2]; BUSES],
-        };
+        let mut io = Io::leer();
+        self.fx.eintragen(&mut io, ps);
         for s in 0..STRIPS {
             for c in 0..2 {
                 if let Some(p) = self.ins[s][c].as_ref() {
@@ -427,6 +573,18 @@ static WIRE_SPERRE: Mutex<()> = Mutex::new(());
 /// Gesetzt, sobald abgeschaltet wird - ab dann wird nichts mehr angelegt.
 static ABBAU: AtomicBool = AtomicBool::new(false);
 
+/// Fuehrt eine Aenderung am Graphen unter der Sperre von `wire` aus; nach
+/// [`ABBAU`] nicht mehr (dann `false`). Fuer Waechter, die selbst Knoten
+/// anlegen (`vaio`).
+fn unter_wire_sperre(f: &mut dyn FnMut()) -> bool {
+    let _sperre = WIRE_SPERRE.lock().unwrap_or_else(|e| e.into_inner());
+    if ABBAU.load(Ordering::SeqCst) || SHUTDOWN.load(Ordering::SeqCst) {
+        return false;
+    }
+    f();
+    true
+}
+
 /// Legt die virtuellen Knoten an bzw. raeumt sie ab. Damit haengen die Geraete
 /// am Leben der Engine: laeuft die Engine, gibt es sie; wird sie beendet,
 /// verschwinden sie wieder. CROSSPOINT_NO_WIRE=1 schaltet das ab.
@@ -516,6 +674,7 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         ins: std::array::from_fn(|_| [None, None]),
         outs: std::array::from_fn(|_| [None, None]),
         vban_out: [None, None],
+        fx: EffektPorts::default(),
         tape: tape.clone(),
         vban: vban.clone(),
         vban_ring: vban_ring.clone(),
@@ -564,6 +723,8 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         Some(jack.port_out("vban_L").expect("Port")),
         Some(jack.port_out("vban_R").expect("Port")),
     ];
+    // Effektwege (FX1/FX2) und Insert-Paare je Streifen und Bus.
+    let insert_wache = rt.fx.anlegen(&jack)?;
 
     // Ab `activate` ruft JACK `run` je Block auf. Der Client wird im `Lauf`
     // gehalten: faellt er weg (Abschalten), verschwinden seine Ports.
@@ -581,6 +742,8 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         println!("  bus{name}_L / bus{name}_R");
     }
     println!("  vban_L / vban_R (VBAN-Eingang, /api/vban/recv)");
+    println!("  fx1_L/R -> fx1_ret_L/R, fx2_L/R -> fx2_ret_L/R (externe Effekte)");
+    println!("  strip<n>_ins_L/R -> strip<n>_ret_L/R, bus<X>_ins_L/R -> bus<X>_ret_L/R (Inserts)");
     println!("\nVerdrahtung: scripts/crosspoint-wire.sh up\n");
 
     let tape_ordner = konfig.preset.with_file_name("tape");
@@ -655,13 +818,15 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         );
     }
     wire("up");
+    // A-Busse, die zusaetzlich als virtuelles Geraet erscheinen sollen.
+    crate::vaio::spawn(params.clone(), server_name.clone(), unter_wire_sperre);
 
     // OSC-Eingang: `/strip/<n>/<param>` und `/bus/<n>/<param>` landen ueber
     // dieselbe Funktion wie `/api/set` in den Parametern (fuer MIDIMonster).
     let osc_halt = crate::osc::spawn(params.clone());
     // Effekt-Host: mod-host/Carla als betreuter Kindprozess (fehlt er, nur
     // eine Logzeile, die Engine laeuft weiter).
-    crate::fx::spawn(params.clone());
+    crate::fx::spawn(params.clone(), &server_name);
 
     // Jetzt stehen die Busports im Graphen: gemerkte Zuordnungen anwenden.
     if crate::restore::deaktiviert() {
@@ -681,6 +846,7 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
     crate::wache::spawn_wache(devices.clone(), crate::inputs::mapping_path());
 
     let ende = Arc::new(AtomicBool::new(false));
+    insert_wache_starten(insert_wache, params.clone(), ende.clone());
     {
         let ende_w = ende.clone();
         let grenze = konfig

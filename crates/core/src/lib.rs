@@ -19,6 +19,7 @@ pub mod aufraeumen;
 pub mod autostart;
 pub mod devices;
 pub mod dsp;
+pub mod effekte;
 pub mod engine;
 /// Effekt-Host (mod-host/Carla als betreute Kindprozesse).
 pub mod fx;
@@ -28,17 +29,20 @@ pub mod jack;
 pub mod json;
 /// Start des ganzen Prozesses (Engine, Adapter, Aufpasser) an einer Stelle.
 pub mod lauf;
+pub mod lv2;
 pub mod macros_io;
 /// OSC-Eingang (`/strip/<n>/<param>`) für MIDIMonster und Fader.
 pub mod osc;
 /// Pegelbank: der Audio-Thread schreibt, die Oberfläche liest.
 pub mod pegel;
 pub mod pfade;
+pub mod programme;
 /// PipeWire-Graph (`pw-dump`) als Grundlage der Geräteerkennung.
 pub mod pw;
 pub mod remote_api;
 /// Zustand beim Start wiederherstellen, Änderungen selbsttätig sichern.
 pub mod restore;
+pub mod vaio;
 /// Wächter über abgesteckte Geräte: Zustand melden, Zuordnung behalten, heilen.
 pub mod wache;
 // Zugabe: RNNoise nur, wenn librnnoise.so.0 per dlopen erreichbar ist.

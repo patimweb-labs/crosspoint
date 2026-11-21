@@ -211,6 +211,19 @@ impl Ziel {
         basis + (self.index() as u32) * (MAX_INSERTS as u32) + (slot as u32)
     }
 
+    /// Insert-Ports der Engine: (hinaus L/R, Rückweg L/R), z. B.
+    /// `crosspoint:strip1_ins_L` und `crosspoint:strip1_ret_L`.
+    pub fn insert_ports(&self, client: &str) -> ([String; 2], [String; 2]) {
+        let stamm = match self {
+            Ziel::Streifen(i) => format!("{client}:strip{}", i + 1),
+            Ziel::Bus(i) => format!("{client}:bus{}", BUS_NAMES.get(*i).copied().unwrap_or("A1")),
+        };
+        (
+            [format!("{stamm}_ins_L"), format!("{stamm}_ins_R")],
+            [format!("{stamm}_ret_L"), format!("{stamm}_ret_R")],
+        )
+    }
+
     /// Portnamen der Engine für diesen Kanal (L, R).
     pub fn ports(&self) -> (String, String) {
         match self {
@@ -796,6 +809,25 @@ impl Carla {
         }
     }
 
+    /// Startet Carla losgelöst (Knopf in der Oberfläche).
+    pub fn starten(&self) -> Result<(), String> {
+        let mut cmd = match self {
+            Carla::JackMulti(pfad) => Command::new(pfad),
+            Carla::Flatpak => {
+                let mut c = Command::new("flatpak");
+                c.args(["run", CARLA_FLATPAK]);
+                c
+            }
+            Carla::NichtInstalliert => return Err("Carla ist nicht installiert".to_string()),
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Carla nicht startbar: {e}"))
+    }
+
     /// JSON-Form `{aktiv, status, startbefehl, hinweis}`.
     pub fn als_json(&self) -> Value {
         let mut felder = vec![
@@ -1216,9 +1248,66 @@ fn host_starten(erkennung: &Erkennung, port: u16, grenze: Duration) -> Start {
     }
 }
 
+/// Audio-Ports eines Plugins (Symbole), wie sie das Verzeichnis kennt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortSatz {
+    pub ein: Vec<String>,
+    pub aus: Vec<String>,
+}
+
+/// Die Verbindungen einer Kette: Insert-Ausgang → Plugin 1 → … → Rückweg.
+///
+/// mod-host nennt die Ports einer Instanz `effect_<n>:<symbol>`. Ein
+/// Mono-Plugin bekommt den linken Kanal, sein Ausgang geht auf beide Seiten
+/// weiter; zwei Mono-Stufen hintereinander bleiben mono.
+pub fn verkabelung(
+    ziel: Ziel,
+    client: &str,
+    stufen: &[(u32, PortSatz)],
+) -> Result<Vec<(String, String)>, String> {
+    let (hinaus, herein) = ziel.insert_ports(client);
+    let mut quelle: Vec<String> = hinaus.to_vec();
+    let mut v = Vec::new();
+    for (instanz, ports) in stufen {
+        if ports.ein.is_empty() || ports.aus.is_empty() {
+            return Err(format!("Instanz {instanz}: kein Audio-Ein- oder -Ausgang"));
+        }
+        let ein: Vec<String> = ports
+            .ein
+            .iter()
+            .map(|s| format!("effect_{instanz}:{s}"))
+            .collect();
+        if ein.len() == 1 {
+            v.push((quelle[0].clone(), ein[0].clone()));
+        } else {
+            for (k, e) in ein.iter().take(2).enumerate() {
+                let q = quelle.get(k).unwrap_or(&quelle[0]);
+                v.push((q.clone(), e.clone()));
+            }
+        }
+        quelle = ports
+            .aus
+            .iter()
+            .take(2)
+            .map(|s| format!("effect_{instanz}:{s}"))
+            .collect();
+    }
+    for (k, r) in herein.iter().enumerate() {
+        let q = quelle.get(k).unwrap_or(&quelle[0]);
+        v.push((q.clone(), r.clone()));
+    }
+    Ok(v)
+}
+
 /// Schreibt eine ganze Kette in den Host: alte Instanzen weg, neue anlegen,
-/// Parameter setzen, Bypass schalten.
-fn kette_anwenden(verbindung: &mut Verbindung, ziel: Ziel, kette: &[Insert]) -> Result<(), String> {
+/// Parameter setzen, Bypass schalten, Ports verbinden.
+fn kette_anwenden(
+    verbindung: &mut Verbindung,
+    ziel: Ziel,
+    kette: &[Insert],
+    client: &str,
+    verzeichnis: &[crate::lv2::Plugin],
+) -> Result<(), String> {
     for platz in 0..MAX_INSERTS {
         // Fehlende Instanzen sind normal: mod-host antwortet mit Fehlercode.
         let _ = verbindung.remove(ziel.instanz(platz));
@@ -1239,6 +1328,28 @@ fn kette_anwenden(verbindung: &mut Verbindung, ziel: Ziel, kette: &[Insert]) -> 
                 .map_err(|e| format!("{} Platz {platz} Bypass: {e}", ziel.titel()))?;
         }
     }
+    if kette.is_empty() {
+        return Ok(());
+    }
+    let mut stufen = Vec::new();
+    for (platz, insert) in kette.iter().enumerate() {
+        let plugin = verzeichnis
+            .iter()
+            .find(|p| p.uri == insert.uri)
+            .ok_or_else(|| format!("{}: Plugin nicht installiert", insert.uri))?;
+        stufen.push((
+            ziel.instanz(platz),
+            PortSatz {
+                ein: plugin.ein.clone(),
+                aus: plugin.aus.clone(),
+            },
+        ));
+    }
+    for (von, nach) in verkabelung(ziel, client, &stufen)? {
+        verbindung
+            .connect(&von, &nach)
+            .map_err(|e| format!("{von} -> {nach}: {e}"))?;
+    }
     Ok(())
 }
 
@@ -1246,6 +1357,12 @@ fn kette_anwenden(verbindung: &mut Verbindung, ziel: Ziel, kette: &[Insert]) -> 
 
 struct Lauf {
     zustand: FxZustand,
+    /// JACK-Name der Engine (`crosspoint` oder `--client`).
+    client: String,
+    /// Parameter der Engine: der Insert-Schalter folgt der Kette.
+    params: Option<Arc<Params>>,
+    /// Installierte LV2-Plugins (beim ersten Bedarf gelesen).
+    verzeichnis: Option<Vec<crate::lv2::Plugin>>,
     verbindung: Option<Verbindung>,
     host: HostStatus,
     kind: Option<Child>,
@@ -1258,6 +1375,9 @@ impl Lauf {
     fn neu() -> Lauf {
         Lauf {
             zustand: zustand_laden(&pfad()),
+            client: "crosspoint".to_string(),
+            params: None,
+            verzeichnis: None,
             verbindung: None,
             host: HostStatus::default(),
             kind: None,
@@ -1293,15 +1413,19 @@ fn lauf_sperren() -> std::sync::MutexGuard<'static, Option<Lauf>> {
 ///
 /// Der Aufruf kehrt sofort zurück. Fehlt `mod-host`, passiert nichts weiter
 /// als eine Logzeile; Crosspoint läuft unverändert.
-pub fn spawn(params: Arc<Params>) {
+pub fn spawn(params: Arc<Params>, client: &str) {
     if std::env::var_os("CROSSPOINT_NO_FX").is_some() {
         println!("fx: Inserts abgeschaltet (CROSSPOINT_NO_FX)");
         return;
     }
     // Zustand jetzt laden, damit `/api/fx` sofort antwortet.
     {
-        let guard = lauf_sperren();
-        if let Some(lauf) = guard.as_ref() {
+        let mut guard = lauf_sperren();
+        if let Some(lauf) = guard.as_mut() {
+            lauf.client = client.to_string();
+            lauf.params = Some(params.clone());
+            // Ketten, die gespeichert sind, schalten ihren Insert-Weg ein.
+            insert_schalter_folgen(lauf);
             let anzahl: usize = lauf.zustand.streifen.iter().map(Vec::len).sum();
             println!(
                 "fx: {} Inserts geladen ({} Streifen, {} Busse), mod-host Port {}",
@@ -1389,17 +1513,73 @@ fn pflege(erkennung: &Erkennung) -> bool {
     for i in 0..BUSES {
         ketten.push((Ziel::Bus(i), lauf.zustand.busse[i].clone()));
     }
+    let client = lauf.client.clone();
+    let verzeichnis = verzeichnis_von(lauf);
     if let Some(verbindung) = lauf.verbindung.as_mut() {
         for (ziel, kette) in ketten {
             if kette.is_empty() {
                 continue;
             }
-            if let Err(fehler) = kette_anwenden(verbindung, ziel, &kette) {
+            if let Err(fehler) = kette_anwenden(verbindung, ziel, &kette, &client, &verzeichnis) {
                 eprintln!("fx: {} nicht uebernommen: {fehler}", ziel.titel());
             }
         }
     }
     true
+}
+
+/// Das Plugin-Verzeichnis, beim ersten Mal von der Platte gelesen.
+fn verzeichnis_von(lauf: &mut Lauf) -> Vec<crate::lv2::Plugin> {
+    lauf.verzeichnis
+        .get_or_insert_with(crate::lv2::verzeichnis)
+        .clone()
+}
+
+/// Der Insert-Schalter jedes Kanals folgt seiner Kette: eine Kette ist da,
+/// also läuft das Signal durch sie (sobald der Host die Ports verbunden hat).
+fn insert_schalter_folgen(lauf: &Lauf) {
+    let Some(params) = lauf.params.as_ref() else {
+        return;
+    };
+    for (i, kette) in lauf.zustand.streifen.iter().enumerate() {
+        if !kette.is_empty() {
+            params.set("strip", i, "insert", 1.0);
+        }
+    }
+    for (i, kette) in lauf.zustand.busse.iter().enumerate() {
+        if !kette.is_empty() {
+            params.set("bus", i, "insert", 1.0);
+        }
+    }
+}
+
+/// JACK-Name der Engine, an dem die Insert-Ports hängen.
+pub fn client() -> String {
+    lauf_sperren()
+        .as_ref()
+        .map(|lauf| lauf.client.clone())
+        .unwrap_or_else(|| "crosspoint".to_string())
+}
+
+/// Installierte LV2-Effekte (für die Auswahl in der Oberfläche).
+pub fn plugins() -> Vec<crate::lv2::Plugin> {
+    let mut guard = lauf_sperren();
+    match guard.as_mut() {
+        Some(lauf) => verzeichnis_von(lauf),
+        None => Vec::new(),
+    }
+}
+
+/// Liest das Plugin-Verzeichnis neu (nach einer Installation).
+pub fn plugins_neu_lesen() -> usize {
+    let mut guard = lauf_sperren();
+    match guard.as_mut() {
+        Some(lauf) => {
+            lauf.verzeichnis = Some(crate::lv2::verzeichnis());
+            lauf.verzeichnis.as_ref().map(Vec::len).unwrap_or(0)
+        }
+        None => 0,
+    }
 }
 
 /// Zustand des Hosts (für `/api/fx` und die Oberfläche).
@@ -1443,9 +1623,20 @@ pub fn set_chain(ziel: Ziel, kette: Vec<Insert>) -> Result<(), String> {
     kette_setzen(&mut lauf.zustand, ziel, kette)?;
     zustand_sichern(&lauf.zustand, &pfad())?;
     let kette = lauf.zustand.kette(ziel).to_vec();
+    // Leere Kette: Insert-Weg aus, sonst bliebe ein unverbundener Weg offen.
+    if let Some(params) = lauf.params.as_ref() {
+        let (art, i) = match ziel {
+            Ziel::Streifen(i) => ("strip", i),
+            Ziel::Bus(i) => ("bus", i),
+        };
+        params.set(art, i, "insert", if kette.is_empty() { 0.0 } else { 1.0 });
+    }
+    let client = lauf.client.clone();
+    let verzeichnis = verzeichnis_von(lauf);
     if let Some(verbindung) = lauf.verbindung.as_mut() {
-        if let Err(fehler) = kette_anwenden(verbindung, ziel, &kette) {
+        if let Err(fehler) = kette_anwenden(verbindung, ziel, &kette, &client, &verzeichnis) {
             eprintln!("fx: {} nicht uebernommen: {fehler}", ziel.titel());
+            return Err(fehler);
         }
     }
     Ok(())
@@ -1999,5 +2190,74 @@ mod tests {
                 .as_bool(),
             Some(false)
         );
+    }
+
+    fn satz(ein: &[&str], aus: &[&str]) -> PortSatz {
+        PortSatz {
+            ein: ein.iter().map(|s| s.to_string()).collect(),
+            aus: aus.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn verkabelung_stereo_kette() {
+        let ziel = Ziel::Streifen(0);
+        let v = verkabelung(
+            ziel,
+            "crosspoint",
+            &[
+                (100, satz(&["in_l", "in_r"], &["out_l", "out_r"])),
+                (101, satz(&["l", "r"], &["ol", "or"])),
+            ],
+        )
+        .expect("Kette");
+        assert_eq!(
+            v,
+            vec![
+                ("crosspoint:strip1_ins_L".into(), "effect_100:in_l".into()),
+                ("crosspoint:strip1_ins_R".into(), "effect_100:in_r".into()),
+                ("effect_100:out_l".into(), "effect_101:l".into()),
+                ("effect_100:out_r".into(), "effect_101:r".into()),
+                ("effect_101:ol".into(), "crosspoint:strip1_ret_L".into()),
+                ("effect_101:or".into(), "crosspoint:strip1_ret_R".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn verkabelung_mono_stufe_speist_beide_seiten() {
+        let v = verkabelung(Ziel::Bus(5), "cp", &[(505, satz(&["in"], &["out"]))]).expect("Kette");
+        assert_eq!(
+            v,
+            vec![
+                ("cp:busB1_ins_L".into(), "effect_505:in".into()),
+                ("effect_505:out".into(), "cp:busB1_ret_L".into()),
+                ("effect_505:out".into(), "cp:busB1_ret_R".into()),
+            ]
+        );
+        // Mono-Ausgang vor einer Stereo-Stufe: beide Eingaenge aus derselben Quelle.
+        let v = verkabelung(
+            Ziel::Streifen(1),
+            "cp",
+            &[
+                (110, satz(&["in"], &["out"])),
+                (111, satz(&["a", "b"], &["x", "y"])),
+            ],
+        )
+        .expect("Kette");
+        assert!(v.contains(&("effect_110:out".into(), "effect_111:a".into())));
+        assert!(v.contains(&("effect_110:out".into(), "effect_111:b".into())));
+    }
+
+    #[test]
+    fn verkabelung_lehnt_plugins_ohne_audio_ab() {
+        assert!(verkabelung(Ziel::Streifen(0), "cp", &[(100, satz(&[], &["out"]))]).is_err());
+    }
+
+    #[test]
+    fn insert_ports_heissen_wie_in_der_engine() {
+        let (h, r) = Ziel::Bus(0).insert_ports("crosspoint");
+        assert_eq!(h[1], "crosspoint:busA1_ins_R");
+        assert_eq!(r[0], "crosspoint:busA1_ret_L");
     }
 }
