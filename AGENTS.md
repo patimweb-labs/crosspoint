@@ -107,6 +107,19 @@ Grenze falsch gezogen.
 - Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `build:`, `ci:`).
 - `release-please` mit `bump-minor-pre-major: true` (0.x bleibt unter 1.0, auch bei
   Breaking Changes) und `extra-files` für die `.metainfo.xml`.
+- **Versionen stehen nur in `Cargo.toml`.** Wer eine Zahl braucht, nimmt
+  `CARGO_PKG_VERSION` oder die Ausgabe von release-please; keine Literale in
+  Skripten, Manifesten, Workflows oder der Oberfläche.
+  `packaging/linux/de.weppelmann.Crosspoint.metainfo.xml` hängt per `extra-files`
+  (xpath auf das erste `<release>`) an der Release-Version. Ein Datum kennt
+  release-please nicht – das schreibt `packaging/linux/metainfo.py` aus dem
+  Changelog, aufgerufen im Release-Workflow vor dem Paketbau; die CI prüft dort
+  nur die Version und meldet ein abweichendes Datum.
+- **Die 1.0.0 bleibt.** Sie entstand am 21.11.2026 aus einem `feat!` (PR #8),
+  weil `bump-minor-pre-major: true` in `release-please-config.json` fehlte; das
+  Release `v1.0.0` ist veröffentlicht. Die Einstellung steht jetzt drin und
+  wirkt wieder unterhalb von 1.0 – ein `feat!` hebt dort die Minor-Version, nicht
+  die Major-Version. Entscheidung des Nutzers, nicht zurückzudrehen.
 - Kleine Commits, ein Gedanke pro Commit, deutschsprachige Betreffzeile erlaubt.
 - **Immer über einen Branch und einen Pull Request.** `main` ist geschützt: kein
   direkter Push, kein Force-Push, kein Löschen. Ablauf:
