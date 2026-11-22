@@ -1,6 +1,6 @@
 [package]
 name = "crosspoint-core"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 description = "Crosspoint: 8x8-Mixer fuer PipeWire/JACK - Parametermodell, Mixer-Kern und Adapter"
 
