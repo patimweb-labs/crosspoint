@@ -1,6 +1,11 @@
 # Changelog
 
-## [1.0.1](https://github.com/patimweb-labs/crosspoint/compare/v1.0.0...v1.0.1) (2026-11-22)
+## [1.1.0](https://github.com/patimweb-labs/crosspoint/compare/v1.0.0...v1.1.0) (2026-11-22)
+
+
+### Features
+
+* --version und Version unten im DARSTELLUNG-Dialog ([#13](https://github.com/patimweb-labs/crosspoint/issues/13)) ([187563c](https://github.com/patimweb-labs/crosspoint/commit/187563c2b6f09459f34c72facbb0709a6e4d0ea2))
 
 
 ### Bug Fixes
