@@ -1,6 +1,6 @@
 [package]
 name = "crosspoint-fenster"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2021"
 description = "Crosspoint: Fenster in egui direkt auf Arc<Params> (ersetzt die GTK-Oberflaeche)"
 
