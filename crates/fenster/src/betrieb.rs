@@ -149,7 +149,7 @@ pub fn danach(
 /// und Symbol laufen weiter, „Fenster zeigen“ öffnet ein neues. So geht es
 /// unter Wayland und X11 gleich – ein Fenster *verstecken* kann winit unter
 /// Wayland nicht.
-pub fn starten(app_id: &str, a: Args) {
+pub fn starten(app_id: &str, version: &str, a: Args) {
     // Läuft schon eine Instanz, zeigt sie ihr Fenster – eine zweite Engine
     // gäbe es sonst doppelt (gleicher Port, gleiche virtuelle Geräte).
     if laufende_instanz_wecken(&a.listen, a.minimiert) {
@@ -187,7 +187,12 @@ pub fn starten(app_id: &str, a: Args) {
     let mut erstes = true;
     loop {
         if zeigen {
-            let mut o = Oberflaeche::default();
+            // Die Version der Anwendung, nicht die dieses Crates: sie kommt
+            // aus dem Binary (Wurzelpaket) und steht unten in der DARSTELLUNG.
+            let mut o = Oberflaeche {
+                version: Some(version.to_string()),
+                ..Oberflaeche::default()
+            };
             konfig::Datei::laden(&konfig::pfad()).anwenden(&mut o);
             o.echo_geraete = crosspoint::echo::auswahl();
             if let Some(t) = a.theme.as_deref() {

@@ -19,5 +19,5 @@ fn main() {
         return;
     }
     let args = crosspoint_fenster::betrieb::args_lesen();
-    crosspoint_fenster::betrieb::starten("de.weppelmann.Crosspoint", args);
+    crosspoint_fenster::betrieb::starten("de.weppelmann.Crosspoint", VERSION, args);
 }

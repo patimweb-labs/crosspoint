@@ -43,6 +43,21 @@ fn eintrag(name: &str, anzeige: &str) -> Eintrag {
     }
 }
 
+/// Die Version, die das Programm anzeigt: sie steht im **Wurzelpaket**
+/// (`Cargo.toml` oben, AGENTS.md §6) und wird im Betrieb vom Binary ins Modell
+/// gelegt. `env!("CARGO_PKG_VERSION")` wäre hier die Version dieses Crates –
+/// deshalb gelesen, nicht abgefragt.
+fn version_der_wurzel() -> String {
+    let pfad = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let text = std::fs::read_to_string(&pfad).unwrap_or_else(|e| panic!("{}: {e}", pfad.display()));
+    text.lines()
+        .skip_while(|z| z.trim() != "[package]")
+        .skip(1)
+        .find_map(|z| z.trim().strip_prefix("version = "))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .expect("version im [package] der Wurzel-Cargo.toml")
+}
+
 /// Ein Pult wie im Alltag: Mikro auf A1 und B1, Systemton auf A1, Pegel.
 fn beispiel(thema: Thema) -> (Fenster, Arc<Params>) {
     let params = Arc::new(Params::new(48_000.0, 1024));
@@ -78,6 +93,7 @@ fn beispiel(thema: Thema) -> (Fenster, Arc<Params>) {
     };
     let mut o = Oberflaeche {
         thema,
+        version: Some(version_der_wurzel()),
         ..Oberflaeche::default()
     };
     o.geraete = Geraete::Fertig(Box::new(Bestand {
@@ -154,6 +170,24 @@ fn gezeichnete_flaechen(h: &Harness<'static, Fenster>, farbe: egui::Color32) -> 
             _ => None,
         })
         .collect()
+}
+
+/// Die Farbe, in der ein Text gemalt wurde – so lässt sich prüfen, dass eine
+/// Zeile den Token für gedämpfte Schrift trägt und nicht den der Bedienung.
+fn textfarbe(h: &Harness<'static, Fenster>, inhalt: &str) -> Option<egui::Color32> {
+    fn suche(shape: &egui::Shape, inhalt: &str) -> Option<egui::Color32> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == inhalt => {
+                t.galley.job.sections.first().map(|s| s.format.color)
+            }
+            egui::Shape::Vec(teile) => teile.iter().find_map(|s| suche(s, inhalt)),
+            _ => None,
+        }
+    }
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|cs| suche(&cs.shape, inhalt))
 }
 
 #[test]
@@ -1339,6 +1373,68 @@ fn darstellung_hat_rand_und_gleiche_kanten() {
         assert!(
             rechts[0] <= dialog.right() - thema::SPACE_2,
             "{name}: die Knöpfe enden am Rahmen"
+        );
+    }
+}
+
+/// Die Version steht unten in der DARSTELLUNG: gedämpft in der Schrift der
+/// Beschriftungen, linksbündig im Rahmen unter dem Autostart, nichts scrollt –
+/// und die Zahl kommt aus dem Modell (`betrieb::starten` legt sie hinein,
+/// `--version` gibt dieselbe aus).
+#[test]
+fn version_steht_unten_in_der_darstellung() {
+    use crosspoint_fenster::modell::{Aktion, Dialog};
+    use crosspoint_fenster::thema;
+    let zeile = format!("Crosspoint {}", version_der_wurzel());
+    let min = mindestgroesse();
+    for (breite, hoehe, name) in [(ALLTAG.x, ALLTAG.y, "1590"), (min.x, min.y, "Mindestgröße")] {
+        let (mut f, _) = beispiel(Thema::Dunkel);
+        f.ausfuehren(Aktion::Dialog(Some(Dialog::Darstellung)));
+        let mut h = harness(f, (breite, hoehe));
+        h.run_steps(6);
+        let fenster = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(breite, hoehe));
+        let dialog = h.get_by_label("Dialog DARSTELLUNG").rect();
+        assert!(
+            fenster.contains_rect(dialog),
+            "{name}: Dialog {dialog:?} läuft aus dem Fenster {fenster:?}"
+        );
+        // Der zugängliche Name der Zeile ist die Zeile selbst.
+        let text = h.get_by_label(&zeile).rect();
+        assert!(
+            dialog.contains_rect(text),
+            "{name}: {text:?} steht nicht im Dialog {dialog:?}"
+        );
+        // Unten: unter dem Autostart-Kästchen, mit Abstand zum Rahmen und
+        // linksbündig wie die Beschriftungen darüber.
+        let autostart = h
+            .get_all_by_label_contains("Beim Anmelden starten")
+            .next()
+            .expect("Autostart-Text fehlt")
+            .rect();
+        assert!(
+            text.top() > autostart.bottom(),
+            "{name}: die Version steht nicht unter dem Autostart ({text:?} / {autostart:?})"
+        );
+        assert!(
+            text.left() >= dialog.left() && text.right() < dialog.right() - thema::SPACE_2,
+            "{name}: die Version stößt an den Rahmen ({text:?} / {dialog:?})"
+        );
+        assert!(
+            text.bottom() <= dialog.bottom(),
+            "{name}: die Version läuft unten aus dem Dialog ({text:?} / {dialog:?})"
+        );
+        // Gedämpft heißt: der Token für zurückgenommene Schrift, nicht der
+        // für die Beschriftungen.
+        assert_eq!(
+            textfarbe(&h, &zeile),
+            Some(Thema::Dunkel.farben().text_muted),
+            "{name}: die Version steht nicht in der gedämpften Farbe"
+        );
+        assert_eq!(
+            h.query_all_by_role(egui::accesskit::Role::ScrollBar)
+                .count(),
+            0,
+            "{name}: Scrollbalken im Dialog"
         );
     }
 }
