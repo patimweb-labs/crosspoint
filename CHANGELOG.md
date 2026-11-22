@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/patimweb-labs/crosspoint/compare/v1.0.0...v1.0.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **release:** bump-minor-pre-major, metainfo mit Version und Datum aus release-please ([#11](https://github.com/patimweb-labs/crosspoint/issues/11)) ([43a7967](https://github.com/patimweb-labs/crosspoint/commit/43a7967870ed1ba4f9639d15eab98f84833b3184))
+
 ## [1.0.0](https://github.com/patimweb-labs/crosspoint/compare/v0.5.2...v1.0.0) (2026-11-21)
 
 
