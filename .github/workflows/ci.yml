@@ -75,6 +75,11 @@ jobs:
           sudo apt-get install -y -qq desktop-file-utils appstream
           desktop-file-validate packaging/linux/*.desktop
           appstreamcli validate --no-net packaging/linux/*.metainfo.xml
+      # Die Version der metainfo schreibt release-please (extra-files) aus der
+      # Cargo.toml; sie darf hier nicht auseinanderlaufen. Das Datum meldet das
+      # Skript nur - es kommt aus dem Changelog und wird beim Paketbau gesetzt.
+      - name: Version der metainfo passt zur Cargo.toml
+        run: python3 packaging/linux/metainfo.py --pruefen
 
   flatpak:
     name: Flatpak bauen

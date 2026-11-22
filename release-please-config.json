@@ -4,8 +4,16 @@
     ".": {
       "release-type": "rust",
       "package-name": "crosspoint",
+      "bump-minor-pre-major": true,
       "changelog-path": "CHANGELOG.md",
-      "include-component-in-tag": false
+      "include-component-in-tag": false,
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "packaging/linux/de.weppelmann.Crosspoint.metainfo.xml",
+          "xpath": "/component/releases/release[1]/@version"
+        }
+      ]
     }
   }
 }
