@@ -152,6 +152,10 @@ cargo build --release --features ui                # Engine und Fenster (egui)
 packaging/linux/paket.sh                           # dist/: tar.gz und AppImage (braucht appimagetool)
 ```
 
+`crosspoint --version` (oder `-V`, auch bei `crosspoint-engine`) gibt die
+Version aus und beendet sich sofort – ohne JACK, ohne Fenster; dieselbe Zahl
+steht unten im DARSTELLUNG-Dialog.
+
 `crosspoint-wire.sh up` legt `crosspoint_in_1..3` (Anwendungen spielen hinein →
 Streifen 6..8, Anzeigename `CROSSPOINT-Input-1..3`) und `crosspoint_out_B1..3`
 (Anwendungen nehmen auf ← Busse B1..B3, Anzeigename `CROSSPOINT-Output-B1..B3`)

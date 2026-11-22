@@ -53,7 +53,21 @@ impl Default for Args {
 
 pub const HILFE: &str = "crosspoint [--theme dark|light|mono] \
 [--dialog presets|vban|midi|darstellung] [--size 1600x920] [--client NAME] [--listen ADDR] \
-[--minimized (nur Tray-Icon)] [--schliessen-nach SEKUNDEN (Selbsttest)]";
+[--minimized (nur Tray-Icon)] [--schliessen-nach SEKUNDEN (Selbsttest)] [--version]";
+
+/// `--version`/`-V`: eine Zeile ausgeben und `true` melden – **vor** jeder
+/// Wirkung (kein JACK, keine Instanzprüfung, kein Fenster).
+///
+/// Die Zahl kommt vom Wurzelpaket (`env!("CARGO_PKG_VERSION")` im Binary):
+/// dieses Crate kennt seine Verpackung nicht. Ohne die Option wird nichts
+/// ausgegeben und `false` gemeldet.
+pub fn version_ausgeben(version: &str, args: impl Iterator<Item = String>) -> bool {
+    if !args.into_iter().any(|a| a == "--version" || a == "-V") {
+        return false;
+    }
+    println!("crosspoint {version}");
+    true
+}
 
 pub fn args_aus(mut it: impl Iterator<Item = String>) -> Args {
     let mut a = Args::default();
@@ -489,5 +503,11 @@ mod tests {
         let leer = args_aus(std::iter::empty());
         assert_eq!(leer.client, "crosspoint");
         assert!(!leer.minimiert);
+        // Ohne `--version` gibt `version_ausgeben` nichts aus und meldet
+        // `false` – der Start geht weiter.
+        assert!(!version_ausgeben(
+            "1.0.0",
+            ["--theme", "mono"].into_iter().map(String::from)
+        ));
     }
 }
