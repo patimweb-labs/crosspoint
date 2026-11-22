@@ -128,6 +128,14 @@ Themes (`dark`, `light`, `mono`), keine Nutzer-Themes, kein Theme-Editor.
   Skalenzahlen stehen immer da; reicht die Höhe nicht für die Makrofelder,
   zeigt die Leiste nur ihre Kopfzeile. Wählbar bleiben Theme und Zahl der
   Makrofelder – gespeichert in `~/.config/crosspoint/fenster.json`.
+- **Die Version ist eine Zeile, keine Einstellung.** Unten im
+  DARSTELLUNG-Dialog steht gedämpft `Crosspoint <version>`. Die Zahl kommt
+  nicht aus dem Fenster-Crate – dort stünde die Version der Bibliothek –,
+  sondern aus dem Wurzelpaket: `src/bin/crosspoint.rs` liest
+  `env!("CARGO_PKG_VERSION")`, gibt sie an `betrieb::starten` weiter, das sie
+  ins Feld `Oberflaeche::version` legt. Dieselbe Zahl gibt
+  `crosspoint --version` aus und beendet sich dabei, **bevor** eine Instanz
+  geprüft oder JACK geöffnet wird.
 
 ## Plattformen: Linux ausgeliefert, macOS im Unterbau
 

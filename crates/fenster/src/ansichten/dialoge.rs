@@ -478,4 +478,19 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>
             }
             ui.end_row();
         });
+    // Unten die Version – gedämpft und linksbündig im Rahmen, wie die
+    // Beschriftungen oben. Sie ist keine Einstellung, sondern eine Auskunft:
+    // dieselbe Zahl, die `crosspoint --version` ausgibt.
+    if let Some(version) = &o.version {
+        ui.add_space(thema::SPACE_2);
+        ui.add(
+            Label::new(bausteine::text(
+                f,
+                &format!("Crosspoint {version}"),
+                false,
+                true,
+            ))
+            .truncate(),
+        );
+    }
 }

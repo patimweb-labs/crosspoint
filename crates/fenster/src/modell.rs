@@ -159,6 +159,11 @@ impl Pegel {
 /// Alles, was das Fenster neben `Params` weiß.
 #[derive(Debug, Clone)]
 pub struct Oberflaeche {
+    /// Version des Wurzelpakets (`CARGO_PKG_VERSION`), wie `--version` sie
+    /// ausgibt. Sie kommt von außen (`betrieb::starten`), nicht aus diesem
+    /// Crate: hier steht nur die Zahl, die in der DARSTELLUNG unten steht.
+    /// `None` = unbekannt, dann bleibt die Zeile weg.
+    pub version: Option<String>,
     pub thema: Thema,
     /// Bus, den der Master-Zug bedient.
     pub master_bus: usize,
@@ -193,6 +198,7 @@ pub struct Oberflaeche {
 impl Default for Oberflaeche {
     fn default() -> Self {
         Oberflaeche {
+            version: None,
             thema: Thema::default(),
             master_bus: 0,
             dialog: None,

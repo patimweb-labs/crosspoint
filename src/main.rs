@@ -14,11 +14,18 @@ fn main() {
             "--client" => konfig.client_name = args.next().unwrap_or(konfig.client_name),
             "--listen" => konfig.listen = args.next().unwrap_or(konfig.listen),
             "-h" | "--help" => {
-                println!("crosspoint-engine [--client NAME] [--listen ADDR] [--headless]");
+                println!("crosspoint-engine [--client NAME] [--listen ADDR] [--version]");
                 println!("  startet die Engine und die Web-UI auf 127.0.0.1:8770");
+                println!("  --version/-V: Version ausgeben, sonst nichts starten");
                 println!(
                     "  CROSSPOINT_NO_RESTORE=1: Zustand nicht wiederherstellen, kein Autosave"
                 );
+                return;
+            }
+            // Wie `crosspoint --version`: eine Zeile, dann Schluss – nichts
+            // wird angelegt, keine Geräte, kein JACK.
+            "-V" | "--version" => {
+                println!("crosspoint {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             other => {

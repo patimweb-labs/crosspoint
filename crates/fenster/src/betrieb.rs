@@ -53,7 +53,21 @@ impl Default for Args {
 
 pub const HILFE: &str = "crosspoint [--theme dark|light|mono] \
 [--dialog presets|vban|midi|darstellung] [--size 1600x920] [--client NAME] [--listen ADDR] \
-[--minimized (nur Tray-Icon)] [--schliessen-nach SEKUNDEN (Selbsttest)]";
+[--minimized (nur Tray-Icon)] [--schliessen-nach SEKUNDEN (Selbsttest)] [--version]";
+
+/// `--version`/`-V`: eine Zeile ausgeben und `true` melden – **vor** jeder
+/// Wirkung (kein JACK, keine Instanzprüfung, kein Fenster).
+///
+/// Die Zahl kommt vom Wurzelpaket (`env!("CARGO_PKG_VERSION")` im Binary):
+/// dieses Crate kennt seine Verpackung nicht. Ohne die Option wird nichts
+/// ausgegeben und `false` gemeldet.
+pub fn version_ausgeben(version: &str, args: impl Iterator<Item = String>) -> bool {
+    if !args.into_iter().any(|a| a == "--version" || a == "-V") {
+        return false;
+    }
+    println!("crosspoint {version}");
+    true
+}
 
 pub fn args_aus(mut it: impl Iterator<Item = String>) -> Args {
     let mut a = Args::default();
@@ -135,7 +149,7 @@ pub fn danach(
 /// und Symbol laufen weiter, „Fenster zeigen“ öffnet ein neues. So geht es
 /// unter Wayland und X11 gleich – ein Fenster *verstecken* kann winit unter
 /// Wayland nicht.
-pub fn starten(app_id: &str, a: Args) {
+pub fn starten(app_id: &str, version: &str, a: Args) {
     // Läuft schon eine Instanz, zeigt sie ihr Fenster – eine zweite Engine
     // gäbe es sonst doppelt (gleicher Port, gleiche virtuelle Geräte).
     if laufende_instanz_wecken(&a.listen, a.minimiert) {
@@ -173,7 +187,12 @@ pub fn starten(app_id: &str, a: Args) {
     let mut erstes = true;
     loop {
         if zeigen {
-            let mut o = Oberflaeche::default();
+            // Die Version der Anwendung, nicht die dieses Crates: sie kommt
+            // aus dem Binary (Wurzelpaket) und steht unten in der DARSTELLUNG.
+            let mut o = Oberflaeche {
+                version: Some(version.to_string()),
+                ..Oberflaeche::default()
+            };
             konfig::Datei::laden(&konfig::pfad()).anwenden(&mut o);
             o.echo_geraete = crosspoint::echo::auswahl();
             if let Some(t) = a.theme.as_deref() {
@@ -489,5 +508,11 @@ mod tests {
         let leer = args_aus(std::iter::empty());
         assert_eq!(leer.client, "crosspoint");
         assert!(!leer.minimiert);
+        // Ohne `--version` gibt `version_ausgeben` nichts aus und meldet
+        // `false` – der Start geht weiter.
+        assert!(!version_ausgeben(
+            "1.0.0",
+            ["--theme", "mono"].into_iter().map(String::from)
+        ));
     }
 }
