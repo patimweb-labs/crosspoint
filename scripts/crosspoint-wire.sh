@@ -41,18 +41,19 @@ sweep() {
 }
 
 
-# Erzeugt eine echte Aufnahmequelle (kein "Monitor", den KDE ausblendet).
-# Ohne das erscheinen die virtuellen Geraete nur unter Ausgabe, nicht unter
-# Eingabe - Monitore filtert die Oberflaeche weg.
+# Erzeugt ein virtuelles Mikrofon (media.class Audio/Source/Virtual): ein
+# Knoten mit Eingangsports (input_FL/FR), der in anderen Programmen **nur**
+# unter Eingabe erscheint – nicht zusaetzlich als Lautsprecher, wie es ein
+# Null-Sink mit Monitor taete. Der Bus wird direkt auf die Ports gelegt.
 mic() {
-  local ziel="$1" master="$2" desc="$3"
+  local ziel="$1" desc="$2" id
   if pactl list short sources | awk '{print $2}' | grep -qx "$ziel"; then
     echo "  Quelle $ziel existiert bereits" >&2
     return 0
   fi
-  local id
-  id=$(pactl load-module module-remap-source master="$master" source_name="$ziel" \
-        "source_properties=device.description=$desc" 2>/dev/null)
+  id=$(pactl load-module module-null-sink media.class=Audio/Source/Virtual \
+        "sink_name=$ziel" channel_map=front-left,front-right \
+        "sink_properties=device.description=\"$desc\"" 2>/dev/null)
   if [ -n "$id" ]; then
     echo "$id $ziel" >> "$MODFILE"
     echo "  Quelle $ziel -> $desc"
@@ -84,8 +85,11 @@ up)
   # Erst aufraeumen: Reste einer abgestuerzten Instanz wuerden sonst als
   # Duplikate neben den neuen Geraeten stehen.
   sweep || true
+  # Virt In 1..3: Lautsprecher, in die Programme spielen (nur Ausgabe).
   for i in 1 2 3; do sink "crosspoint_in_$i" "CROSSPOINT-Input-$i"; done
-  for b in B1 B2 B3; do sink "crosspoint_out_$b" "CROSSPOINT-Output-$b"; done
+  # B1..B3: Mikrofone, die Programme aufnehmen (nur Eingabe). Der Knotenname
+  # crosspoint_mic_* bleibt, damit gemerkte Auswahlen in Discord & Co. gelten.
+  for b in B1 B2 B3; do mic "crosspoint_mic_$b" "CROSSPOINT-Output-$b"; done
   sleep 0.5
   for i in 1 2 3; do
     s=$((5 + i))
@@ -93,16 +97,8 @@ up)
     link "crosspoint_in_$i:monitor_FR" "$CLIENT:strip${s}_R"
   done
   for b in B1 B2 B3; do
-    link "$CLIENT:bus${b}_L" "crosspoint_out_$b:playback_FL"
-    link "$CLIENT:bus${b}_R" "crosspoint_out_$b:playback_FR"
-  done
-  # Aufnahmeseite sichtbar machen: je virtueller Eingang und je virtueller
-  # Bus-Ausgabe eine echte Quelle.
-  for i in 1 2 3; do
-    mic "crosspoint_mic_in_$i" "crosspoint_in_$i.monitor" "CROSSPOINT-Input-$i"
-  done
-  for b in B1 B2 B3; do
-    mic "crosspoint_mic_$b" "crosspoint_out_$b.monitor" "CROSSPOINT-Output-$b"
+    link "$CLIENT:bus${b}_L" "crosspoint_mic_$b:input_FL"
+    link "$CLIENT:bus${b}_R" "crosspoint_mic_$b:input_FR"
   done
 
   for bus in A1 A2 A3 A4 A5; do

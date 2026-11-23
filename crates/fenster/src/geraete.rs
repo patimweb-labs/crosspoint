@@ -149,7 +149,7 @@ pub fn bestand_aus(
             fehlt: false,
         })
         .collect();
-    b.senken = devices::sinks(&graph, false)
+    b.senken = devices::bus_ziele(&graph, false)
         .into_iter()
         .map(|s| Eintrag {
             name: s.name,
