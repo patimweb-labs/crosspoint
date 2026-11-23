@@ -1048,22 +1048,14 @@ pub fn blaettern(blatt: usize, blaetter: usize, vor: bool) -> usize {
     }
 }
 
-/// Nächstes Blatt im MIDI-Dialog: innerhalb der Seite weiter, am Rand auf die
-/// Nachbarseite (und von der ersten zurück auf die letzte).
-pub fn midi_blaettern(seite: usize, blatt: usize, vor: bool) -> (usize, usize) {
-    use crate::midimonster::{seiten_blaetter, SEITEN};
-    let seite = seite % SEITEN;
+/// Nächstes Blatt im MIDI-Dialog – nur innerhalb des Abschnitts, am Rand
+/// bleibt es stehen. Den Abschnitt wählt sein Reiter, nicht das Blättern.
+pub fn midi_blaettern(seite: usize, blatt: usize, vor: bool) -> usize {
+    let letztes = crate::midimonster::seiten_blaetter(seite) - 1;
     if vor {
-        if blatt + 1 < seiten_blaetter(seite) {
-            (seite, blatt + 1)
-        } else {
-            ((seite + 1) % SEITEN, 0)
-        }
-    } else if blatt > 0 {
-        (seite, blatt - 1)
+        (blatt + 1).min(letztes)
     } else {
-        let zurueck = (seite + SEITEN - 1) % SEITEN;
-        (zurueck, seiten_blaetter(zurueck) - 1)
+        blatt.saturating_sub(1)
     }
 }
 
@@ -1387,14 +1379,16 @@ mod tests {
             assert!(zeilen <= seiten_blaetter(seite) * BLATT_ZEILEN);
         }
         assert_eq!(seiten_blaetter(5), 6);
-        // Vorwärts über das Seitenende: nächste Seite, erstes Blatt.
-        assert_eq!(midi_blaettern(5, 5, true), (0, 0));
-        // Rückwärts vom ersten Blatt: letzte Seite, letztes Blatt.
-        assert_eq!(midi_blaettern(0, 0, false), (5, 5));
-        assert_eq!(midi_blaettern(5, 0, false), (4, seiten_blaetter(4) - 1));
-        // Innerhalb der Seite bleibt es bei der Seite.
-        assert_eq!(midi_blaettern(5, 1, true), (5, 2));
-        assert_eq!(midi_blaettern(5, 2, false), (5, 1));
+        // Blättern bleibt im Abschnitt und hält an seinen Rändern.
+        assert_eq!(midi_blaettern(5, 5, true), 5);
+        assert_eq!(midi_blaettern(5, 0, false), 0);
+        assert_eq!(
+            midi_blaettern(0, 0, true),
+            0,
+            "ein Blatt: nichts zu blättern"
+        );
+        assert_eq!(midi_blaettern(5, 1, true), 2);
+        assert_eq!(midi_blaettern(5, 2, false), 1);
     }
 
     #[test]

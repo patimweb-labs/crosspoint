@@ -7,8 +7,20 @@
 
 use std::path::{Path, PathBuf};
 
-/// Seiten des Dialogs (wie im Original).
+/// Abschnitte des Dialogs (wie die Seiten im Original).
 pub const SEITEN: usize = 6;
+
+/// Name eines Abschnitts – steht auf seinem Reiter im MIDI-Dialog.
+pub fn seiten_titel(seite: usize) -> &'static str {
+    match seite.min(SEITEN - 1) {
+        0 => "KANAL-FADER",
+        1 => "BUSSE & PTT",
+        2 => "PAN",
+        3 => "MUTE",
+        4 => "SOLO",
+        _ => "FREIE CC",
+    }
+}
 /// CC-Nummern der Zusatzzeilen "Control Change n".
 pub const FREIE_CCS: usize = 56;
 /// Zeilen je Blatt im Dialog: mehr passen im kleinsten Fenster nicht hin,
@@ -204,6 +216,11 @@ impl Karte {
     /// Anzahl gebundener Zeilen.
     pub fn gebunden(&self) -> usize {
         self.zeilen.iter().filter(|z| z.cc.is_some()).count()
+    }
+
+    /// Gebundene Ziele eines Abschnitts.
+    pub fn gebunden_auf(&self, seite: usize) -> usize {
+        self.seite(seite).iter().filter(|z| z.cc.is_some()).count()
     }
 }
 
@@ -403,6 +420,22 @@ pub fn midi_geraete() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Jeder Abschnitt hat einen eigenen Namen, und der Zähler je Abschnitt
+    /// zählt nur dessen Ziele.
+    #[test]
+    fn abschnitte_mit_namen_und_zaehler() {
+        let namen: std::collections::BTreeSet<_> = (0..SEITEN).map(seiten_titel).collect();
+        assert_eq!(namen.len(), SEITEN);
+        let mut k = Karte::leer();
+        k.alle();
+        k.binden("/strip/0/gain", 7);
+        k.binden("/strip/3/mute", 8);
+        assert_eq!(k.gebunden_auf(0), 1);
+        assert_eq!(k.gebunden_auf(3), 1);
+        assert_eq!(k.gebunden_auf(5), 0);
+        assert_eq!(k.gebunden(), 2);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let dir =
