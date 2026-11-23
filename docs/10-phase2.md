@@ -58,7 +58,7 @@ Intellipan/Voice Color · Sends `R/D/Fx1/Fx2` mit Pre/Post · Bus-Returns ·
 
 ## 4. Verpackung
 
-macOS (CoreAudio) · Flathub-Einreichung · release-please-Kette einmal
+Flathub-Einreichung · release-please-Kette einmal
 vollständig · Launcher-Skripte durch das eine Binary ersetzen
 
 ## 5. Optimierungen aus dem Audit (laufend)
