@@ -1,7 +1,8 @@
 //! Ein Zug des Pults: Kanal, Bus oder Master.
 //!
-//! Aufbau von oben: Gerätewahl, Kopf (Name, Nummer, Unterzeile), Faderblock,
-//! beim Kanal Pan und Zuordnung A1..B3, unten die Schalter. Die Schalter
+//! Aufbau von oben: Gerätewahl, Kopf (Name, Nummer, Unterzeile), Faderblock
+//! (beim Kanal links daneben die Zuordnung A1..B3 als Spalte), beim Kanal
+//! Pan, unten die Schalter. Die Schalter
 //! stehen bei allen Zügen auf derselben Höhe; der Fader nimmt den Rest.
 //!
 //! An den virtuellen Bussen (und am Master, wenn er einen bedient) stehen
@@ -94,6 +95,12 @@ fn inhalt(
     y += logik::ZUG_KOPF + pad;
 
     // Fader: der Rest der Höhe, oben und unten von den festen Zeilen begrenzt.
+    // Beim Kanal bleibt links ein Streifen für die Zuordnungsspalte frei.
+    let spalte = if ist_kanal {
+        logik::ZUG_ZUORDNUNG_BREITE + pad
+    } else {
+        0.0
+    };
     let fader = Rect::from_min_size(
         Pos2::new(links, y),
         Vec2::new(breite, mass.fader(r.height())),
@@ -107,6 +114,7 @@ fn inhalt(
             f,
             &name,
             fader.size(),
+            spalte,
             werte.gain,
             o.pegel.db[idx],
             o.pegel.spitze[idx],
@@ -116,18 +124,11 @@ fn inhalt(
         }
     });
 
-    // Pan und Zuordnung gibt es nur am Kanal; danach folgen bei allen Zügen
-    // die Schalterreihen und beim Filterbus die Lämpchenzeile.
+    // Pan gibt es nur am Kanal; danach folgen bei allen Zügen die
+    // Schalterreihen und beim Filterbus die Lämpchenzeile.
     let pan_y = if ist_kanal {
         let oben = y;
         y += thema::SIZE_PAN + thema::SPACE_5 + pad;
-        Some(oben)
-    } else {
-        None
-    };
-    let zuordnung_y = if ist_kanal {
-        let oben = y;
-        y += 2.0 * (logik::ZUG_ZUORDNUNG + pad);
         Some(oben)
     } else {
         None
@@ -148,16 +149,11 @@ fn inhalt(
         });
     }
 
-    if let (Some(zy), Ziel::Kanal(kanal)) = (zuordnung_y, ziel) {
-        let w = (breite - 3.0 * pad) / 4.0;
+    if let Ziel::Kanal(kanal) = ziel {
         for (bus, bus_name) in BUS_NAMES.iter().enumerate() {
-            let (reihe, spalte) = (bus / 4, bus % 4);
             let rb = Rect::from_min_size(
-                Pos2::new(
-                    links + spalte as f32 * (w + pad),
-                    zy + reihe as f32 * (logik::ZUG_ZUORDNUNG + pad),
-                ),
-                Vec2::new(w, logik::ZUG_ZUORDNUNG),
+                Pos2::new(links, fader.top() + logik::zuordnung_oben(bus)),
+                Vec2::new(logik::ZUG_ZUORDNUNG_BREITE, logik::ZUG_ZUORDNUNG),
             );
             let an = crate::state::send_an(&k.params, kanal, bus);
             ui.scope_builder(UiBuilder::new().max_rect(rb), |ui| {

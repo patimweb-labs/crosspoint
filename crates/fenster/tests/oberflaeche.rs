@@ -1670,3 +1670,33 @@ fn theme_nur_in_darstellung_und_midimonster_verlinkt() {
     h.run_steps(4);
     assert!(h.query_by_label("midimonster.net").is_some());
 }
+
+/// Feedback zu 2.0.0: in der Startgröße standen A1..B3 nur als „…“ da. Die
+/// Zuordnung steht jetzt als Spalte neben dem Fader; jedes Kürzel ist in
+/// allen acht Kanälen ausgeschrieben – im Alltag und bei Mindestgröße.
+#[test]
+fn zuordnung_ist_ausgeschrieben() {
+    fn zaehle(shape: &egui::Shape, inhalt: &str) -> usize {
+        match shape {
+            egui::Shape::Text(t) => usize::from(t.galley.text() == inhalt),
+            egui::Shape::Vec(teile) => teile.iter().map(|s| zaehle(s, inhalt)).sum(),
+            _ => 0,
+        }
+    }
+    let min = mindestgroesse();
+    for (breite, hoehe) in [(ALLTAG.x, ALLTAG.y), (min.x, min.y)] {
+        let (f, _) = beispiel(Thema::Dunkel);
+        let mut h = harness(f, (breite, hoehe));
+        h.run_steps(4);
+        for kuerzel in ["A2", "A4", "B2"] {
+            let n: usize = h
+                .output()
+                .shapes
+                .iter()
+                .map(|cs| zaehle(&cs.shape, kuerzel))
+                .sum();
+            // Acht Kanäle; Busse tragen ihren Namen zusätzlich im Kopf.
+            assert!(n >= 8, "{breite}×{hoehe}: {kuerzel} nur {n}-mal");
+        }
+    }
+}

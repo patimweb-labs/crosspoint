@@ -34,9 +34,9 @@ einer geratenen Zahl – und `betrieb.rs` setzt sie als
 
 | Grenze | Wert | Woraus |
 |---|---|---|
-| Kanalbreite | 100 px (`SIZE_ZUG_KOMPAKT`) | Zuordnung A1..B3: vier Knöpfe je Reihe, „A1“ misst 15,6 px bei 13 px Schrift – es bleiben 2 px Luft je Seite. Der Busfader hat damit 72 px Blockbreite und zeigt seine Skala in voller Schrift. |
+| Kanalbreite | 100 px (`SIZE_ZUG_KOMPAKT`) | Zuordnung A1..B3 als Spalte links neben dem Fader, 24 px breit („A1“ misst 15,6 px bei 13 px Schrift); dem Kanalfader bleiben 64 px, seine Skala steht in voller Schrift (Nachtrag unten). Der Busfader hat 72 px Blockbreite. |
 | Faderlänge | 179,4 px | Alle neun Zahlen mit 1,15 × Schriftgröße Abstand; der engste Schritt der Skala sind 6 dB (+12 → +6). |
-| Pult | 468,4 px | Zug: höchster Fall ist der Kanal (Kopf, Fader, Pan, Zuordnung, zwei Schalterreihen). |
+| Pult | 468,4 px | Zug: höchster Fall war der Kanal (Kopf, Fader, Pan, Zuordnung, zwei Schalterreihen); seit dem Nachtrag ist es der Filterbus, das Pult wird nicht höher. |
 | **Fenster** | **1642 × 660 px** | Pult (468,4) + Kopfleiste (118) + Makroleiste eingeklappt (66) + Zuschlag fürs Runden der Zeilen. |
 
 Breite und Höhe stehen als Funktion in `logik`, nicht als Zahl in `betrieb.rs`;
@@ -112,3 +112,19 @@ in `fenster.json` werden ignoriert).
   Lage erzeugt, in der das Pult steht (1590 × 640 auf einem 2560 × 1440-
   Bildschirm) und in der Mindestgröße – Bilder in einer Wunschgröße, die es im
   Betrieb nicht gibt, zeigen Fehler nicht.
+
+## Nachtrag 2026-11-23: Zuordnung neben dem Fader
+
+Die Rechnung der Kanalbreite ging nicht auf: vier Knöpfe je Reihe bei 100 px
+Kanal sind je 20 px breit, abzüglich der Polsterung bleiben 12 px – zu wenig
+für „A1“ (15,6 px). In der Startgröße stand die Zuordnung deshalb als „…“ da
+(Feedback zu 2.0.0). Zugleich blieb links im Faderblock Platz ungenutzt.
+
+Die acht Knöpfe stehen jetzt als **eine Spalte links neben dem Fader**
+(`logik::ZUG_ZUORDNUNG_BREITE`, `zuordnung_oben`), oben A1..A5, nach einer
+Lücke B1..B3. Der Fader lässt dafür links einen Streifen frei
+(`bausteine::fader`, Parameter `links_frei`); die Zahlenzeile darunter nutzt
+weiter die ganze Breite. Die zwei Zuordnungsreihen unter dem Pan entfallen,
+der Kanal wird dadurch niedriger. Geprüft von `zuordnung_passt_neben_den_fader`
+(Breite, Höhe, Skala in voller Schrift) und `zuordnung_ist_ausgeschrieben`
+(alle Kürzel gezeichnet, im Alltag und in der Mindestgröße).
