@@ -21,8 +21,17 @@ const LABEL_BREITE: f32 = thema::SPACE_6 * 4.0;
 /// das Maß, aus dem er seine Breite nimmt.
 const AUTOSTART: &str = "Beim Anmelden starten (nur Tray-Icon)";
 
-/// Die Makrofeld-Zahlen, die zur Wahl stehen.
-const MAKROFELDER: [usize; 6] = [5, 8, 10, 16, 40, 80];
+/// Die Makrofeld-Zahlen, die zur Wahl stehen; `0` = keine Makroleiste.
+const MAKROFELDER: [usize; 7] = logik::MAKRO_ANZAHLEN;
+
+/// Beschriftung eines Anzahl-Knopfs.
+fn anzahl_text(n: usize) -> String {
+    if n == 0 {
+        "AUS".to_string()
+    } else {
+        n.to_string()
+    }
+}
 
 /// Breite eines Textes in der Schrift der Beschriftungen – gemessen, nicht
 /// geschätzt: die Dialoge nehmen ihre Breite aus ihrem Inhalt, damit kein Text
@@ -63,11 +72,14 @@ pub fn darstellung_breite(ctx: &egui::Context) -> f32 {
         })
         .sum::<f32>()
         + 2.0 * thema::SPACE_1;
+    // Die Makroknöpfe sind gleich breit: das längste Wort gibt die Breite
+    // aller vor.
     let makros = MAKROFELDER
         .iter()
-        .map(|n| text_breite(ctx, &n.to_string(), knopfschrift.clone()) + 2.0 * thema::SPACE_2)
-        .sum::<f32>()
-        + 5.0 * thema::SPACE_1;
+        .map(|n| text_breite(ctx, &anzahl_text(*n), knopfschrift.clone()) + 2.0 * thema::SPACE_2)
+        .fold(0.0, f32::max)
+        * MAKROFELDER.len() as f32
+        + (MAKROFELDER.len() - 1) as f32 * thema::SPACE_1;
     LABEL_BREITE + thema::SPACE_2 + kaestchen.max(themen).max(makros)
 }
 
@@ -486,10 +498,11 @@ fn darstellung(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>
             ui.end_row();
             ui.add(Label::new(bausteine::text(f, "MAKROFELDER", true, false)));
             ui.horizontal(|ui| {
-                let je = (regler - 5.0 * thema::SPACE_1) / MAKROFELDER.len() as f32;
+                let luecken = (MAKROFELDER.len() - 1) as f32 * thema::SPACE_1;
+                let je = (regler - luecken) / MAKROFELDER.len() as f32;
                 for n in MAKROFELDER {
                     let gewaehlt = o.makro_anzahl == n;
-                    let knopf = egui::Button::selectable(gewaehlt, n.to_string());
+                    let knopf = egui::Button::selectable(gewaehlt, anzahl_text(n));
                     if ui.add_sized([je, thema::SIZE_CONTROL_SM], knopf).clicked() && !gewaehlt {
                         a.push(Aktion::MakroAnzahl(n));
                     }

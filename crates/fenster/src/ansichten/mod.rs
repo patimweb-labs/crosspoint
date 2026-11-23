@@ -44,9 +44,12 @@ pub fn pult(
             kopf::kopf(ui, f, o, k, laeuft, &mut a);
             kopf::tape(ui, f, o, k, jetzt, &mut a);
         });
-    egui::Panel::bottom("makros")
-        .frame(egui::Frame::new().fill(f.bg_canvas).inner_margin(rand))
-        .show(ui, |ui| makros::makros(ui, f, o, jetzt, &mut a));
+    // Ohne Makrofelder (DARSTELLUNG › AUS) gibt es die Leiste gar nicht.
+    if o.makro_anzahl > 0 {
+        egui::Panel::bottom("makros")
+            .frame(egui::Frame::new().fill(f.bg_canvas).inner_margin(rand))
+            .show(ui, |ui| makros::makros(ui, f, o, jetzt, &mut a));
+    }
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()

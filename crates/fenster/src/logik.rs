@@ -842,30 +842,77 @@ const TAPE_ZEILE: f32 = if thema::SIZE_CONTROL_MD > zeile(thema::FONT_SIZE_LG) {
 /// Kante eines Makrofelds.
 pub const MAKRO_FELD: f32 = thema::SPACE_6 * 3.0;
 
-/// Höhe der Makroleiste: Kopfzeile und, wenn aufgeklappt, das Raster.
-pub fn makros_hoehe(eingeklappt: bool, anzahl: usize) -> f32 {
-    let kopfzeile = thema::SIZE_CONTROL_MD;
-    let raster = if eingeklappt {
-        0.0
-    } else {
-        let reihen = anzahl.div_ceil(makro_spalten(anzahl)).max(1) as f32;
-        thema::SPACE_1 + reihen * MAKRO_FELD + (reihen - 1.0) * thema::SPACE_2
-    };
-    // Rand der Leiste und Rahmen der Leiste
-    2.0 * thema::SPACE_2 + 2.0 * thema::SIZE_BORDER + 2.0 * thema::SPACE_2 + kopfzeile + raster
+/// Kleinste Kante eines Makrofelds: reicht die Höhe auch dafür nicht, zeigt
+/// die Leiste nur ihre Kopfzeile.
+pub const MAKRO_FELD_MIN: f32 = thema::SPACE_6 * 2.0;
+
+/// Wie die Makrofelder stehen: so viele nebeneinander, wie in die Breite
+/// passen, alle Reihen (bis auf die letzte) gleich lang.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MakroRaster {
+    pub spalten: usize,
+    pub reihen: usize,
+    pub kante: f32,
 }
 
-/// Höhe, ab der die Makroleiste aufgeklappt stehen darf: erst dann bleibt
-/// dem Pult seine Mindesthöhe. Darunter zeigt sie nur ihre Kopfzeile.
-pub fn makros_offen_ab(anzahl: usize) -> f32 {
-    KOPF_HOEHE + pult_mindesthoehe() + makros_hoehe(false, anzahl)
+impl MakroRaster {
+    pub fn hoehe(&self) -> f32 {
+        self.reihen as f32 * self.kante + (self.reihen as f32 - 1.0) * thema::SPACE_2
+    }
 }
 
-/// Ob die Makroleiste nur die Kopfzeile zeigt: bei zu wenig Platz immer. Der
-/// gespeicherte Wunsch des Nutzers (`gewuenscht`) bleibt davon unberührt und
-/// gilt wieder, sobald das Fenster hoch genug ist.
-pub fn makros_eingeklappt(gewuenscht: bool, fensterhoehe: f32, anzahl: usize) -> bool {
-    gewuenscht || fensterhoehe < makros_offen_ab(anzahl)
+/// Raster für `anzahl` Felder auf `breite` × `hoehe` (Innenmaß der Leiste).
+///
+/// Erst wird die volle Kante [`MAKRO_FELD`] versucht; reicht die Höhe nicht,
+/// werden die Felder in Schritten von [`thema::SPACE_1`] kleiner, bis
+/// [`MAKRO_FELD_MIN`]. `None`: es passt nicht, die Leiste klappt zu. Die
+/// Reihen werden gleichmäßig gefüllt – 16 Felder bei Platz für 15 stehen als
+/// 8 + 8, nicht als 15 + 1.
+pub fn makro_raster(anzahl: usize, breite: f32, hoehe: f32) -> Option<MakroRaster> {
+    if anzahl == 0 {
+        return None;
+    }
+    let mut kante = MAKRO_FELD;
+    while kante >= MAKRO_FELD_MIN {
+        let passt = (((breite + thema::SPACE_2) / (kante + thema::SPACE_2)) as usize).max(1);
+        let reihen = anzahl.div_ceil(passt);
+        let raster = MakroRaster {
+            spalten: anzahl.div_ceil(reihen),
+            reihen,
+            kante,
+        };
+        if raster.hoehe() <= hoehe {
+            return Some(raster);
+        }
+        kante -= thema::SPACE_1;
+    }
+    None
+}
+
+/// Höhe der Makroleiste ohne Raster: Kopfzeile, Rand und Rahmen.
+pub fn makros_kopfhoehe() -> f32 {
+    2.0 * thema::SPACE_2 + 2.0 * thema::SIZE_BORDER + 2.0 * thema::SPACE_2 + thema::SIZE_CONTROL_MD
+}
+
+/// Höhe, die das Raster bei dieser Fensterhöhe haben darf: was nach Kopf,
+/// Mindesthöhe des Pults und Kopfzeile der Leiste übrig bleibt.
+pub fn makro_rasterhoehe(fensterhoehe: f32) -> f32 {
+    fensterhoehe - KOPF_HOEHE - pult_mindesthoehe() - makros_kopfhoehe() - thema::SPACE_1
+}
+
+/// Das Raster, das die Leiste zeigt – `None` heißt: nur die Kopfzeile, weil
+/// der Nutzer eingeklappt hat oder der Platz nicht reicht. Der gespeicherte
+/// Wunsch (`gewuenscht`) bleibt davon unberührt.
+pub fn makro_raster_im_fenster(
+    gewuenscht_eingeklappt: bool,
+    anzahl: usize,
+    breite: f32,
+    fensterhoehe: f32,
+) -> Option<MakroRaster> {
+    if gewuenscht_eingeklappt {
+        return None;
+    }
+    makro_raster(anzahl, breite, makro_rasterhoehe(fensterhoehe))
 }
 
 /// Mindestgröße des Fensters (Innenmaß): die 17 Züge nebeneinander und
@@ -878,7 +925,7 @@ pub fn mindestfenster() -> egui::Vec2 {
             + zugluecken()
             + 2.0 * thema::SPACE_2,
         // Zuschlag: die Zeilen runden sich auf ganze Punkte auf.
-        KOPF_HOEHE + pult_mindesthoehe() + makros_hoehe(true, 0) + thema::SPACE_2,
+        KOPF_HOEHE + pult_mindesthoehe() + makros_kopfhoehe() + thema::SPACE_2,
     )
 }
 
@@ -1014,28 +1061,27 @@ pub const MAKRO_SEITEN: usize = 6;
 pub const MAKRO_FELDER: usize = 80;
 
 /// Seiten bei einer Felderzahl: so viele, wie in die 80 Felder passen,
-/// höchstens [`MAKRO_SEITEN`]. Seite `s` zeigt Feld `s·anzahl ..`.
+/// höchstens [`MAKRO_SEITEN`]. Seite `s` zeigt Feld `s·anzahl ..`. Ohne
+/// Felder (`0`) gibt es eine leere Seite.
 pub fn makro_seiten(anzahl: usize) -> usize {
+    if anzahl == 0 {
+        return 1;
+    }
     (MAKRO_FELDER / anzahl.max(1)).clamp(1, MAKRO_SEITEN)
 }
 
-/// Erlaubte Anzahlen der Makrofelder; alles andere wird 5.
+/// Erlaubte Anzahlen der Makrofelder; `0` heißt: keine Makroleiste. Alles
+/// andere wird 5.
 pub fn makro_anzahl_pruefen(n: usize) -> usize {
-    if [5, 8, 10, 16, 40, 80].contains(&n) {
+    if MAKRO_ANZAHLEN.contains(&n) {
         n
     } else {
         5
     }
 }
 
-/// Spalten des Makrorasters.
-pub fn makro_spalten(anzahl: usize) -> usize {
-    match anzahl {
-        16 | 40 => 8,
-        80 => 10,
-        _ => 5,
-    }
-}
+/// Wählbare Anzahlen der Makrofelder (DARSTELLUNG); `0` = keine Leiste.
+pub const MAKRO_ANZAHLEN: [usize; 7] = [0, 5, 8, 10, 16, 40, 80];
 
 /// Leuchtet ein Makrofeld gerade?
 pub fn makro_leuchtet(o: &Oberflaeche, i: usize, jetzt: Instant) -> bool {
@@ -1247,11 +1293,11 @@ mod tests {
         let jetzt = Instant::now();
         assert!(makro_leuchtet(&o, 3, jetzt));
         assert!(!makro_leuchtet(&o, 3, jetzt + MAKRO_LEUCHTEN * 2));
-        assert_eq!(makro_spalten(80), 10);
         assert_eq!(makro_seiten(5), 6);
         assert_eq!(makro_seiten(40), 2);
         assert_eq!(makro_seiten(80), 1);
         assert_eq!(makro_anzahl_pruefen(12), 5);
+        assert_eq!(makro_anzahl_pruefen(0), 0);
     }
 
     #[test]
@@ -1440,16 +1486,37 @@ mod tests {
 
     #[test]
     fn makroleiste_klappt_bei_knapper_hoehe_ein() {
-        let min = mindestfenster().y;
-        let anzahl = 5;
-        // Bei Mindesthöhe nur die Kopfzeile, der Wunsch bleibt gespeichert.
-        assert!(makros_eingeklappt(false, min, anzahl));
-        assert!(makros_eingeklappt(true, min + 600.0, anzahl));
+        let min = mindestfenster();
+        // Bei Mindesthöhe nur die Kopfzeile, eingeklappt bleibt eingeklappt.
+        assert_eq!(makro_raster_im_fenster(false, 5, min.x, min.y), None);
+        assert_eq!(makro_raster_im_fenster(true, 5, 1900.0, 1080.0), None);
         // Genug Platz: der Wunsch des Nutzers gilt.
-        assert!(!makros_eingeklappt(false, 1080.0, anzahl));
-        assert!(makros_offen_ab(anzahl) > min);
-        assert!(makros_hoehe(false, anzahl) > makros_hoehe(true, anzahl));
-        // Mehr Felder brauchen mehr Platz und damit ein höheres Fenster.
-        assert!(makros_offen_ab(80) > makros_offen_ab(5));
+        assert!(makro_raster_im_fenster(false, 5, 1900.0, 1080.0).is_some());
+        // Keine Felder: keine Leiste.
+        assert_eq!(makro_raster(0, 1900.0, 1000.0), None);
+    }
+
+    /// Feedback zu 2.0.0: 8 standen als 5 + 3, 10 als 5 + 5, 40 und 80 gar
+    /// nicht. Jetzt so viele nebeneinander, wie hineinpassen.
+    #[test]
+    fn makrofelder_nutzen_die_breite() {
+        let breite = 1580.0;
+        let hoch = makro_rasterhoehe(1080.0);
+        let r = |n| makro_raster(n, breite, hoch).expect("passt");
+        let pro_reihe = ((breite + thema::SPACE_2) / (MAKRO_FELD + thema::SPACE_2)) as usize;
+        assert!(pro_reihe >= 10, "Platz für {pro_reihe}");
+        assert_eq!((r(5).spalten, r(5).reihen), (5, 1));
+        assert_eq!((r(8).spalten, r(8).reihen), (8, 1));
+        assert_eq!((r(10).spalten, r(10).reihen), (10, 1));
+        // 16 passen nicht in eine Reihe: zwei gleich lange statt 15 + 1.
+        assert_eq!((r(16).spalten, r(16).reihen), (8, 2));
+        for n in [40, 80] {
+            let raster = r(n);
+            assert!(raster.spalten * raster.reihen >= n);
+            assert!(raster.hoehe() <= hoch, "{n} Felder passen in Full HD");
+            assert!(raster.kante >= MAKRO_FELD_MIN);
+        }
+        // Volle Kante, solange die Höhe reicht.
+        assert_eq!(r(5).kante, MAKRO_FELD);
     }
 }
