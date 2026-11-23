@@ -233,10 +233,11 @@ struct Rt {
     vban_ring: Arc<Ring>,
     vban_recv_ring: Arc<Ring>,
     pegel: Arc<Pegelbank>,
-    /// Meter-Ballistik: gehaltener Spitzenwert je Streifen und Bus. Ohne Halt
-    /// fiele die Anzeige in jedem Block ohne Sample auf Null und flackerte.
-    halte_s: [f32; STRIPS],
-    halte_b: [f32; BUSES],
+    /// Meter-Ballistik: gehaltener Spitzenwert je Streifen und Bus, links und
+    /// rechts. Ohne Halt fiele die Anzeige in jedem Block ohne Sample auf Null
+    /// und flackerte.
+    halte_s: [[f32; 2]; STRIPS],
+    halte_b: [[f32; 2]; BUSES],
     /// Blockpuffer fuer den VBAN-Eingang (fest, keine Allokation im Callback).
     vban_buf: Vec<f32>,
     vban_pos: usize,
@@ -296,30 +297,39 @@ impl Rt {
         }
     }
 
-    /// Spitzenwert eines Stereopaars im aktuellen Block.
+    /// Spitzenwert eines Kanals im aktuellen Block (0 ohne Puffer).
     #[inline]
-    fn spitze(links: *const f32, rechts: *const f32, frames: usize) -> f32 {
+    fn spitze(kanal: *const f32, frames: usize) -> f32 {
         let mut peak = 0.0f32;
-        if links.is_null() {
+        if kanal.is_null() {
             return peak;
         }
         unsafe {
             for i in 0..frames {
-                let l = *links.add(i);
-                let l = if l < 0.0 { -l } else { l };
-                if l > peak {
-                    peak = l;
-                }
-                if !rechts.is_null() {
-                    let r = *rechts.add(i);
-                    let r = if r < 0.0 { -r } else { r };
-                    if r > peak {
-                        peak = r;
-                    }
+                let v = *kanal.add(i);
+                let v = if v < 0.0 { -v } else { v };
+                if v > peak {
+                    peak = v;
                 }
             }
         }
         peak
+    }
+
+    /// Spitze links und rechts mit Halt; ohne rechten Puffer zeigt rechts
+    /// dasselbe wie links (Mono-Quelle).
+    #[inline]
+    fn halten(halt: &mut [f32; 2], paar: [*const f32; 2], frames: usize) -> [f32; 2] {
+        let links = Self::spitze(paar[0], frames);
+        let rechts = if paar[1].is_null() {
+            links
+        } else {
+            Self::spitze(paar[1], frames)
+        };
+        for (h, peak) in halt.iter_mut().zip([links, rechts]) {
+            *h = if peak > *h { peak } else { *h * 0.72 };
+        }
+        *halt
     }
 
     fn run(&mut self, ps: &ProcessScope) {
@@ -351,24 +361,17 @@ impl Rt {
         // Pegel der Eingaenge: Spitze dieses Blocks mit Halt, direkt aus den
         // Puffern. Danach der DSP, danach die Ausgaenge - gemessen wird der
         // Block, den der Ton wirklich gesehen hat.
-        let mut strip_pegel = [0.0f32; STRIPS];
+        let mut strip_pegel = [[0.0f32; 2]; STRIPS];
         for (s, ziel) in strip_pegel.iter_mut().enumerate() {
-            let peak = Self::spitze(io.ins[s][0], io.ins[s][1], frames);
-            let alt = self.halte_s[s];
-            let neu = if peak > alt { peak } else { alt * 0.72 };
-            self.halte_s[s] = neu;
-            *ziel = neu;
+            *ziel = Self::halten(&mut self.halte_s[s], io.ins[s], frames);
         }
 
         self.dsp.process(&self.params, &io, frames);
 
-        let mut bus_pegel = [0.0f32; BUSES];
+        let mut bus_pegel = [[0.0f32; 2]; BUSES];
         for (b, ziel) in bus_pegel.iter_mut().enumerate() {
-            let peak = Self::spitze(io.outs[b][0], io.outs[b][1], frames);
-            let alt = self.halte_b[b];
-            let neu = if peak > alt { peak } else { alt * 0.72 };
-            self.halte_b[b] = neu;
-            *ziel = neu;
+            let paar = [io.outs[b][0] as *const f32, io.outs[b][1] as *const f32];
+            *ziel = Self::halten(&mut self.halte_b[b], paar, frames);
         }
         self.pegel.schreibe_block(&strip_pegel, &bus_pegel);
 
@@ -535,8 +538,8 @@ pub fn starte(konfig: Konfig) -> Result<Lauf, String> {
         vban_ring: vban_ring.clone(),
         vban_recv_ring: vban_recv_ring.clone(),
         pegel: pegel.clone(),
-        halte_s: [0.0; STRIPS],
-        halte_b: [0.0; BUSES],
+        halte_s: [[0.0; 2]; STRIPS],
+        halte_b: [[0.0; 2]; BUSES],
         vban_buf: vec![0.0f32; crate::vban_io::RECV_BLOCK_FRAMES * 2],
         vban_pos: 0,
         vban_len: 0,

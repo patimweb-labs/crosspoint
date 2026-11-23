@@ -128,19 +128,19 @@ pub const ANZEIGEN: usize = 17;
 /// Index der Master-Anzeige.
 pub const MASTER_ANZEIGE: usize = 16;
 
-/// Pegelanzeige je Zug: geglätteter Wert und gehaltene Spitze (dB).
-/// Gerechnet in `logik::pegel_ticken`, gezeichnet in den Zügen.
+/// Pegelanzeige je Zug, links und rechts: geglätteter Wert und gehaltene
+/// Spitze (dB). Gerechnet in `logik::pegel_ticken`, gezeichnet in den Zügen.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pegel {
-    pub db: [f32; ANZEIGEN],
-    pub spitze: [f32; ANZEIGEN],
+    pub db: [[f32; 2]; ANZEIGEN],
+    pub spitze: [[f32; 2]; ANZEIGEN],
 }
 
 impl Default for Pegel {
     fn default() -> Self {
         Pegel {
-            db: [crate::fmt::DB_MIN; ANZEIGEN],
-            spitze: [crate::fmt::DB_MIN; ANZEIGEN],
+            db: [[crate::fmt::DB_MIN; 2]; ANZEIGEN],
+            spitze: [[crate::fmt::DB_MIN; 2]; ANZEIGEN],
         }
     }
 }
@@ -153,6 +153,12 @@ impl Pegel {
             Ziel::Bus(i) => 8 + i,
             Ziel::Master => MASTER_ANZEIGE,
         }
+    }
+
+    /// Der lautere Kanal einer Anzeige – für die Zahl unter dem Fader.
+    pub fn summe(&self, index: usize) -> f32 {
+        let [l, r] = self.db[index];
+        l.max(r)
     }
 }
 
