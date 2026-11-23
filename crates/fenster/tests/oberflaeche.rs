@@ -1645,3 +1645,28 @@ fn umbenennen_endet_mit_enter_klick_daneben_und_esc() {
     assert_eq!(params.label("strip", 0).as_deref(), Some("Sprecher"), "Esc");
     assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none());
 }
+
+/// Feedback zu 2.0.0: „dunkel, hell, mono“ stand an zwei Stellen. Gewählt
+/// wird nur noch in DARSTELLUNG; der MIDI-Dialog verlinkt MIDIMonster.
+#[test]
+fn theme_nur_in_darstellung_und_midimonster_verlinkt() {
+    use crosspoint_fenster::modell::{Aktion, Dialog};
+    let (f, _) = beispiel(Thema::Dunkel);
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    for t in ["dunkel", "hell", "mono"] {
+        assert!(h.query_by_label(t).is_none(), "{t} steht im Kopf");
+    }
+    let (mut f, _) = beispiel(Thema::Dunkel);
+    f.ausfuehren(Aktion::Dialog(Some(Dialog::Darstellung)));
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    for t in ["dunkel", "hell", "mono"] {
+        assert_eq!(h.get_all_by_label(t).count(), 1, "{t} einmal");
+    }
+    let (mut f, _) = beispiel(Thema::Dunkel);
+    f.ausfuehren(Aktion::Dialog(Some(Dialog::Midi)));
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    assert!(h.query_by_label("midimonster.net").is_some());
+}

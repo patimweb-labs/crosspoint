@@ -9,7 +9,7 @@ use egui::{RichText, Ui};
 use crate::bausteine::{self, alpha};
 use crate::logik::{self, Kern};
 use crate::modell::{Aktion, Dialog, Meldung, Oberflaeche, Tape};
-use crate::thema::{self, Farben, Thema};
+use crate::thema::{self, Farben};
 pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a: &mut Vec<Aktion>) {
     bausteine::rahmen(f, f.bg_panel)
         .inner_margin(egui::Margin::symmetric(
@@ -60,7 +60,7 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                         _ => None,
                     };
                     if let Some(text) = text {
-                        let frei = (ui.available_width() - thema::SPACE_6 * 19.0).max(0.0);
+                        let frei = (ui.available_width() - thema::SPACE_6 * 15.5).max(0.0);
                         ui.allocate_ui(egui::Vec2::new(frei, zeile.y), |ui| {
                             ui.add(egui::Label::new(text).truncate());
                         });
@@ -80,30 +80,6 @@ pub fn kopf(ui: &mut Ui, f: &Farben, o: &Oberflaeche, k: &Kern, laeuft: bool, a:
                                 a.push(Aktion::Dialog(if offen { None } else { Some(d) }));
                             }
                         }
-                        // Im RTL-Lauf landet das zuerst gesetzte Element rechts.
-                        egui::ComboBox::from_id_salt("thema")
-                            .selected_text(o.thema.anzeige())
-                            .width(thema::SPACE_6 * 2.5)
-                            .show_ui(ui, |ui| {
-                                for t in Thema::ALLE {
-                                    let gewaehlt = o.thema == t;
-                                    let knopf = egui::Button::image_and_text(
-                                        bausteine::thema_icon(t)
-                                            .bild(thema::FONT_SIZE_MD, f.text_muted),
-                                        t.anzeige(),
-                                    )
-                                    .selected(gewaehlt)
-                                    .frame_when_inactive(gewaehlt);
-                                    if ui.add(knopf).clicked() {
-                                        a.push(Aktion::Thema(t));
-                                    }
-                                }
-                            })
-                            .response
-                            .on_hover_text("Theme");
-                        // … deshalb erst jetzt, damit Sonne/Mond/Kontrast links
-                        // vom Feld stehen und das gewählte Theme zeigen.
-                        bausteine::icon(ui, bausteine::thema_icon(o.thema), f.text_muted);
                         let (icon, text, farbe) = if laeuft {
                             (bausteine::Icon::Aktivitaet, "LAEUFT", f.accent_default)
                         } else {
