@@ -183,8 +183,8 @@ pub fn fader(
     groesse: Vec2,
     links_frei: f32,
     gain_db: f32,
-    pegel_db: f32,
-    spitze_db: f32,
+    pegel_db: [f32; 2],
+    spitze_db: [f32; 2],
 ) -> FaderAntwort {
     let (rect, platz) = ui.allocate_exact_size(groesse, Sense::hover());
     // Bedient wird nur der Teil rechts vom freien Streifen: dort liegen
@@ -332,7 +332,7 @@ pub fn fader(
     let feld_w = (rect.width() - pad * 2.0 - 1.0) * 0.5;
     for (i, (text, farbe)) in [
         (fmt::gain_text(gain), f.text_default),
-        (fmt::db_text(pegel_db), f.accent_default),
+        (fmt::db_text(pegel_db[0].max(pegel_db[1])), f.accent_default),
     ]
     .into_iter()
     .enumerate()
@@ -509,37 +509,45 @@ pub fn sichtbare_schiene(ui: &mut Ui, f: &Farben) {
     ui.spacing_mut().slider_rail_height = thema::SIZE_FADER_BAHN;
 }
 
-/// Senkrechte Pegelsäule mit Segmenten und Spitzenmarke.
-pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: f32, spitze: f32) {
+/// Senkrechte Pegelsäule, links und rechts nebeneinander, mit Segmenten und
+/// Spitzenmarke je Kanal.
+pub fn pegelsaeule(p: &egui::Painter, f: &Farben, r: Rect, db: [f32; 2], spitze: [f32; 2]) {
     let ecke = CornerRadius::same(thema::RADIUS_MD as u8);
     p.rect_filled(r, ecke, alpha(f.bg_canvas, 0.95));
+    // Links und rechts nebeneinander, getrennt durch eine Linienbreite; ohne
+    // Rand an den Seiten, damit jede Säule ihre 3 px behält.
+    let innen = r;
+    let breite = (innen.width() - thema::SIZE_BORDER) * 0.5;
     let seg_h = r.height() / PEGEL_SEGMENTE as f32;
-    for i in 0..PEGEL_SEGMENTE {
-        let seg_db = pos_db((i as f32 + 1.0) / PEGEL_SEGMENTE as f32);
-        let y = r.bottom() - (i as f32 + 1.0) * seg_h;
-        let farbe = if seg_db <= db {
-            // Oben am Anschlag wird das Signal bernsteinfarben – die Farbe des
-            // Kreuzungspunkts im Zeichen (ADR 0008).
-            match segment_stufe(seg_db) {
-                Stufe::Spitze => f.signal_default,
-                Stufe::Laut => alpha(f.signal_default, 0.9),
-                Stufe::Normal => f.accent_default,
-            }
-        } else {
-            alpha(f.border_subtle, 0.26)
-        };
-        let seg = Rect::from_min_size(
-            Pos2::new(r.left() + 1.0, y + 0.6),
-            Vec2::new(r.width() - 2.0, (seg_h - 1.4).max(0.8)),
-        );
-        p.rect_filled(seg, CornerRadius::ZERO, farbe);
-    }
-    if spitze > DB_MIN + 5.0 {
-        let y = r.top() + (1.0 - fader_pos(spitze)) * r.height();
-        p.line_segment(
-            [Pos2::new(r.left() + 1.0, y), Pos2::new(r.right() - 1.0, y)],
-            Stroke::new(1.5, alpha(f.signal_default, 0.9)),
-        );
+    for k in 0..2 {
+        let links = innen.left() + k as f32 * (breite + thema::SIZE_BORDER);
+        for i in 0..PEGEL_SEGMENTE {
+            let seg_db = pos_db((i as f32 + 1.0) / PEGEL_SEGMENTE as f32);
+            let y = r.bottom() - (i as f32 + 1.0) * seg_h;
+            let farbe = if seg_db <= db[k] {
+                // Oben am Anschlag wird das Signal bernsteinfarben – die Farbe
+                // des Kreuzungspunkts im Zeichen (ADR 0008).
+                match segment_stufe(seg_db) {
+                    Stufe::Spitze => f.signal_default,
+                    Stufe::Laut => alpha(f.signal_default, 0.9),
+                    Stufe::Normal => f.accent_default,
+                }
+            } else {
+                alpha(f.border_subtle, 0.26)
+            };
+            let seg = Rect::from_min_size(
+                Pos2::new(links, y + 0.6),
+                Vec2::new(breite, (seg_h - 1.4).max(0.8)),
+            );
+            p.rect_filled(seg, CornerRadius::ZERO, farbe);
+        }
+        if spitze[k] > DB_MIN + 5.0 {
+            let y = r.top() + (1.0 - fader_pos(spitze[k])) * r.height();
+            p.line_segment(
+                [Pos2::new(links, y), Pos2::new(links + breite, y)],
+                Stroke::new(1.5, alpha(f.signal_default, 0.9)),
+            );
+        }
     }
 }
 

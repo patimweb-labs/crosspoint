@@ -955,39 +955,42 @@ pub fn pan_text(pan: f32) -> String {
 }
 
 /// Ein Takt der Pegelanzeigen: Anstieg schnell, Abfall langsam, Spitze
-/// hält und sinkt um 0,45 dB je Takt (wie in der GTK-Oberfläche).
-/// `roh` sind die linearen Spitzenwerte aus der Pegelbank.
-pub fn pegel_ticken(p: &mut crate::modell::Pegel, roh: &[f32; crate::modell::ANZEIGEN]) {
-    for (i, &wert) in roh.iter().enumerate() {
-        let ziel = crate::fmt::lin_to_db(wert);
-        let alt = p.db[i];
-        let neu = if ziel > alt {
-            alt + (ziel - alt) * 0.72
-        } else {
-            alt + (ziel - alt) * 0.22
-        };
-        p.db[i] = neu;
-        p.spitze[i] = if neu > p.spitze[i] {
-            neu
-        } else {
-            (p.spitze[i] - 0.45).max(crate::fmt::DB_MIN)
-        };
+/// hält und sinkt um 0,45 dB je Takt (wie in der GTK-Oberfläche) – links und
+/// rechts getrennt. `roh` sind die linearen Spitzenwerte aus der Pegelbank.
+pub fn pegel_ticken(p: &mut crate::modell::Pegel, roh: &[[f32; 2]; crate::modell::ANZEIGEN]) {
+    for (i, paar) in roh.iter().enumerate() {
+        for (k, &wert) in paar.iter().enumerate() {
+            let ziel = crate::fmt::lin_to_db(wert);
+            let alt = p.db[i][k];
+            let neu = if ziel > alt {
+                alt + (ziel - alt) * 0.72
+            } else {
+                alt + (ziel - alt) * 0.22
+            };
+            p.db[i][k] = neu;
+            p.spitze[i][k] = if neu > p.spitze[i][k] {
+                neu
+            } else {
+                (p.spitze[i][k] - 0.45).max(crate::fmt::DB_MIN)
+            };
+        }
     }
 }
 
-/// Rohpegel aller Anzeigen aus der Pegelbank; der Master zeigt seinen Bus.
+/// Rohpegel aller Anzeigen aus der Pegelbank (links, rechts); der Master
+/// zeigt seinen Bus.
 pub fn pegel_lesen(
     bank: &crosspoint::pegel::Pegelbank,
     master_bus: usize,
-) -> [f32; crate::modell::ANZEIGEN] {
-    let mut r = [0.0; crate::modell::ANZEIGEN];
+) -> [[f32; 2]; crate::modell::ANZEIGEN] {
+    let mut r = [[0.0; 2]; crate::modell::ANZEIGEN];
     for (i, w) in r.iter_mut().enumerate().take(8) {
-        *w = bank.strip(i);
+        *w = bank.strip_lr(i);
     }
     for b in 0..BUSES {
-        r[8 + b] = bank.bus(b);
+        r[8 + b] = bank.bus_lr(b);
     }
-    r[crate::modell::MASTER_ANZEIGE] = bank.bus(master_bus);
+    r[crate::modell::MASTER_ANZEIGE] = bank.bus_lr(master_bus);
     r
 }
 
@@ -1254,23 +1257,29 @@ mod tests {
     #[test]
     fn pegel_steigt_schnell_und_faellt_langsam() {
         let mut p = crate::modell::Pegel::default();
-        let mut roh = [0.0f32; crate::modell::ANZEIGEN];
-        roh[0] = 1.0; // 0 dB
+        let mut roh = [[0.0f32; 2]; crate::modell::ANZEIGEN];
+        roh[0] = [1.0, 0.0]; // links 0 dB, rechts still
         pegel_ticken(&mut p, &roh);
-        assert!(p.db[0] > -20.0, "nach einem Takt {}", p.db[0]);
+        assert!(p.db[0][0] > -20.0, "nach einem Takt {}", p.db[0][0]);
         for _ in 0..20 {
             pegel_ticken(&mut p, &roh);
         }
-        assert!(p.db[0] > -0.1);
-        roh[0] = 0.0;
+        assert!(p.db[0][0] > -0.1);
+        assert_eq!(p.db[0][1], crate::fmt::DB_MIN, "rechts bleibt still");
+        assert!(p.summe(0) > -0.1);
+        roh[0] = [0.0, 0.0];
         pegel_ticken(&mut p, &roh);
-        assert!(p.db[0] < -10.0 && p.db[0] > -20.0, "Abfall {}", p.db[0]);
         assert!(
-            (p.spitze[0] - (-0.45)).abs() < 0.2,
-            "Spitze {}",
-            p.spitze[0]
+            p.db[0][0] < -10.0 && p.db[0][0] > -20.0,
+            "Abfall {}",
+            p.db[0][0]
         );
-        assert_eq!(p.db[1], crate::fmt::DB_MIN);
+        assert!(
+            (p.spitze[0][0] - (-0.45)).abs() < 0.2,
+            "Spitze {}",
+            p.spitze[0][0]
+        );
+        assert_eq!(p.db[1], [crate::fmt::DB_MIN; 2]);
     }
 
     #[test]

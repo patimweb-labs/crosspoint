@@ -246,7 +246,7 @@
     },
     "pegel": {
       "breite": {
-        "$value": "6px"
+        "$value": "7px"
       }
     },
     "zug": {

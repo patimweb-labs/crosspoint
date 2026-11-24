@@ -71,8 +71,9 @@ fn beispiel(thema: Thema) -> (Fenster, Arc<Params>) {
     params.set_text("bus", 5, "label", "Discord");
     params.set("bus", 0, "gain", -6.0);
     let pegel = Arc::new(Pegelbank::neu());
-    for (i, w) in [(0, 0.35), (5, 0.2)] {
-        pegel.schreibe_strip(i, w);
+    // Links und rechts verschieden: die Anzeige ist stereo.
+    for (i, w) in [(0, [0.35, 0.12]), (5, [0.2, 0.2])] {
+        pegel.schreibe_strip_lr(i, w);
     }
     for (b, w) in [(0, 0.3), (5, 0.25)] {
         pegel.schreibe_bus(b, w);
