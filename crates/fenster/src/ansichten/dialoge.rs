@@ -367,7 +367,25 @@ fn midi(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>, breit
             true,
         )));
     });
-    // Ein Blatt je Seite: so viele Zeilen, wie im kleinsten Fenster Platz
+    // Abschnitte als Reiter: Name und wie viele Ziele darin gebunden sind.
+    // Kein Aufklappen – ein offener Abschnitt mit 56 Zeilen bräuchte eine
+    // Scrollleiste (ADR 0007).
+    ui.horizontal_wrapped(|ui| {
+        for s in 0..crate::midimonster::SEITEN {
+            let n = m.karte.gebunden_auf(s);
+            let titel = crate::midimonster::seiten_titel(s);
+            let text = if n > 0 {
+                format!("{titel} · {n}")
+            } else {
+                titel.to_string()
+            };
+            let gewaehlt = m.seite == s;
+            if ui.add(egui::Button::selectable(gewaehlt, text)).clicked() && !gewaehlt {
+                a.push(Aktion::MidiSeite(s));
+            }
+        }
+    });
+    // Ein Blatt je Abschnitt: so viele Zeilen, wie im kleinsten Fenster Platz
     // haben – kein Scrollen (ADR 0007). Die drei Spalten stehen bündig.
     let erste = (breite * 0.45).max(thema::SPACE_6 * 5.0);
     let zweite = (breite * 0.3).max(thema::SPACE_6 * 4.0);
@@ -402,30 +420,28 @@ fn midi(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, a: &mut Vec<Aktion>, breit
                 ui.end_row();
             }
         });
-    ui.horizontal(|ui| {
-        let n = crate::midimonster::seiten_blaetter(m.seite);
-        if bausteine::kopfknopf(ui, f, "<< ZURÜCK", None).clicked() {
-            let (seite, blatt) = logik::midi_blaettern(m.seite, m.blatt, false);
-            a.push(Aktion::MidiSeite(seite));
-            a.push(Aktion::MidiBlatt(blatt));
-        }
-        ui.add(Label::new(bausteine::text(
-            f,
-            &format!(
-                "SEITE {}/{} · BLATT {}/{n}",
-                m.seite + 1,
-                crate::midimonster::SEITEN,
-                m.blatt + 1
-            ),
-            false,
-            true,
-        )));
-        if bausteine::kopfknopf(ui, f, "WEITER >>", None).clicked() {
-            let (seite, blatt) = logik::midi_blaettern(m.seite, m.blatt, true);
-            a.push(Aktion::MidiSeite(seite));
-            a.push(Aktion::MidiBlatt(blatt));
-        }
-    });
+    // Blättern nur, wo ein Abschnitt mehr Zeilen hat als ein Blatt.
+    let n = crate::midimonster::seiten_blaetter(m.seite);
+    if n > 1 {
+        ui.horizontal(|ui| {
+            if bausteine::kopfknopf(ui, f, "<< ZURÜCK", None).clicked() {
+                a.push(Aktion::MidiBlatt(logik::midi_blaettern(
+                    m.seite, m.blatt, false,
+                )));
+            }
+            ui.add(Label::new(bausteine::text(
+                f,
+                &format!("BLATT {}/{n}", m.blatt + 1),
+                false,
+                true,
+            )));
+            if bausteine::kopfknopf(ui, f, "WEITER >>", None).clicked() {
+                a.push(Aktion::MidiBlatt(logik::midi_blaettern(
+                    m.seite, m.blatt, true,
+                )));
+            }
+        });
+    }
     if !m.status.is_empty() {
         ui.add(Label::new(bausteine::text(f, &m.status, false, true)).truncate());
     }

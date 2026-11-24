@@ -501,6 +501,19 @@ fn bilder_in_allen_themes() {
             bild.save(ziel.join(format!("darstellung-{}.png", thema.name())))
                 .unwrap();
         }
+        // Der MIDI-Dialog mit seinen Abschnitten als Reiter.
+        let (mut f, _) = beispiel(thema);
+        f.ausfuehren(crosspoint_fenster::modell::Aktion::Dialog(Some(
+            crosspoint_fenster::modell::Dialog::Midi,
+        )));
+        let mut h = harness(f, (min.x, min.y));
+        h.run_steps(6);
+        assert!(h.query_by_label("FREIE CC").is_some(), "Reiter fehlen");
+        if let Some(ziel) = &ziel {
+            let bild = h.render().expect("zeichnen (wgpu)");
+            bild.save(ziel.join(format!("midi-{}.png", thema.name())))
+                .unwrap();
+        }
     }
 }
 
@@ -678,27 +691,33 @@ fn midi_liste_kommt_in_blaettern() {
     use crosspoint_fenster::modell::{Aktion, Dialog};
     let (mut f, _) = beispiel(Thema::Dunkel);
     f.ausfuehren(Aktion::Dialog(Some(Dialog::Midi)));
-    f.ausfuehren(Aktion::MidiSeite(5));
     let g = mindestgroesse();
     let mut h = harness(f, (g.x, g.y));
     h.run_steps(6);
     assert!(h.query_by_label("SAVE MIDI MAP").is_some());
-    liegt_im_fenster(&h, &["SAVE MIDI MAP", "SEITE 6/6 · BLATT 1/6"]);
+    // Feedback zu 2.0.0: Seiten und Blätter waren unübersichtlich. Jetzt
+    // stehen die Abschnitte als Reiter da; wer nur acht Ziele hat, blättert
+    // gar nicht.
+    liegt_im_fenster(&h, &["SAVE MIDI MAP", "KANAL-FADER", "FREIE CC"]);
+    assert!(h.query_by_label("Gain Fader Strip #8").is_some());
+    assert!(
+        h.query_by_label("WEITER >>").is_none(),
+        "acht Zeilen, ein Blatt"
+    );
+    h.get_by_label("FREIE CC").click();
+    h.run_steps(3);
     assert!(h.query_by_label("Control Change 0").is_some());
     assert!(
         h.query_by_label("Control Change 55").is_none(),
         "alle 56 Zeilen auf einem Blatt"
     );
-    for _ in 0..5 {
+    for _ in 0..6 {
         h.get_by_label("WEITER >>").click();
         h.run_steps(3);
     }
-    liegt_im_fenster(&h, &["SEITE 6/6 · BLATT 6/6", "Control Change 50"]);
+    // Am Ende bleibt es stehen – kein Sprung in einen anderen Abschnitt.
+    liegt_im_fenster(&h, &["BLATT 6/6", "Control Change 50"]);
     assert!(h.query_by_label("Control Change 55").is_some());
-    // Über das Ende hinaus geht es vorn weiter.
-    h.get_by_label("WEITER >>").click();
-    h.run_steps(3);
-    liegt_im_fenster(&h, &["SEITE 1/6 · BLATT 1/1"]);
 }
 
 /// Auch die übrigen Dialoge stehen im kleinsten Fenster und im
