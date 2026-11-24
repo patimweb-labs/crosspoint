@@ -423,13 +423,18 @@ fn zugkopf(
                 .char_limit(crosspoint::engine::MAX_LABEL)
                 .font(egui::FontId::new(thema::FONT_SIZE_MD, thema::fett())),
         );
+        // Der Fokus wird jedes Bild neu verlangt; `lost_focus` meldet damit nie
+        // etwas. Enter und ein Klick daneben werden deshalb selbst ausgewertet.
         resp.request_focus();
         if resp.changed() {
             a.push(Aktion::UmbenennenText(text));
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             a.push(Aktion::UmbenennenEnde(false));
-        } else if resp.lost_focus() {
+        } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+            || resp.clicked_elsewhere()
+            || resp.lost_focus()
+        {
             a.push(Aktion::UmbenennenEnde(true));
         }
         return;

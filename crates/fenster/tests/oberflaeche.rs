@@ -1568,3 +1568,61 @@ fn trim_delay_menue_hat_namen_und_schienen() {
         );
     }
 }
+
+/// Umbenennen per Doppelklick: Enter und ein Klick daneben übernehmen den
+/// Namen, Esc verwirft ihn (Feedback zu 2.0.0: nur Esc schloss das Feld).
+#[test]
+fn umbenennen_endet_mit_enter_klick_daneben_und_esc() {
+    let (f, params) = beispiel(Thema::Dunkel);
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    let umbenennen = |h: &mut Harness<'static, Fenster>, alt: &str, neu: &str| {
+        // Abstand zum letzten Klick, sonst zählt egui ihn zum Doppelklick.
+        h.run_steps(12);
+        let name = format!("{alt} (Doppelklick: umbenennen)");
+        h.get_by_label(&name).click();
+        h.run_steps(1);
+        h.get_by_label(&name).click();
+        h.run_steps(3);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        h.get_by_role(egui::accesskit::Role::TextInput)
+            .type_text(neu);
+        h.run_steps(2);
+    };
+
+    umbenennen(&mut h, "Mikro", "Gesang");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(params.label("strip", 0).as_deref(), Some("Gesang"), "Enter");
+    assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none());
+
+    umbenennen(&mut h, "Gesang", "Sprecher");
+    h.get_all_by_label("M").next().expect("M").hover();
+    let wo = h.get_all_by_label("M").next().expect("M").rect().center();
+    h.event(egui::Event::PointerButton {
+        pos: wo,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.event(egui::Event::PointerButton {
+        pos: wo,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+    assert_eq!(
+        params.label("strip", 0).as_deref(),
+        Some("Sprecher"),
+        "Klick daneben"
+    );
+    assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none());
+
+    umbenennen(&mut h, "Sprecher", "Weg");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(params.label("strip", 0).as_deref(), Some("Sprecher"), "Esc");
+    assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none());
+}
