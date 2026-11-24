@@ -90,7 +90,8 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
         d.titel(),
         breite,
         |ui| {
-            subtitel(ui, f, unter);
+            let link = (d == Dialog::Midi).then_some(MIDIMONSTER);
+            subtitel(ui, f, unter, link);
             match d {
                 Dialog::Presets => presets(ui, f, o, k, a, breite),
                 Dialog::Vban => vban(ui, f, o, k, a),
@@ -105,10 +106,18 @@ pub fn dialog(ctx: &egui::Context, f: &Farben, o: &mut Oberflaeche, k: &Kern, a:
 }
 
 /// Unter dem Titel: was der Dialog tut – linksbündig in einer Zeile.
-fn subtitel(ui: &mut Ui, f: &Farben, text: &str) {
-    ui.add(Label::new(bausteine::text(f, text, false, true)).truncate());
+fn subtitel(ui: &mut Ui, f: &Farben, text: &str, link: Option<(&str, &str)>) {
+    ui.horizontal(|ui| {
+        ui.add(Label::new(bausteine::text(f, text, false, true)).truncate());
+        if let Some((name, ziel)) = link {
+            ui.hyperlink_to(name, ziel);
+        }
+    });
     ui.separator();
 }
+
+/// Woher MIDIMonster kommt – der MIDI-Dialog nennt es, ohne es zu erklären.
+const MIDIMONSTER: (&str, &str) = ("midimonster.net", "https://midimonster.net");
 
 /// Ein Feld in fester Breite, linksbündig.
 fn feld<R>(
