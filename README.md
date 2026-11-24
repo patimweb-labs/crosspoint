@@ -157,9 +157,10 @@ Version aus und beendet sich sofort – ohne JACK, ohne Fenster; dieselbe Zahl
 steht unten im DARSTELLUNG-Dialog.
 
 `crosspoint-wire.sh up` legt `crosspoint_in_1..3` (Anwendungen spielen hinein →
-Streifen 6..8, Anzeigename `CROSSPOINT-Input-1..3`) und `crosspoint_out_B1..3`
-(Anwendungen nehmen auf ← Busse B1..B3, Anzeigename `CROSSPOINT-Output-B1..B3`)
-als `null-sink` an; die Hardware-Busse A1..A5 kommen über `CROSSPOINT_A1` …
+Streifen 6..8, Anzeigename `CROSSPOINT-Input-1..3`) als Lautsprecher an und
+`crosspoint_mic_B1..3` (Anwendungen nehmen auf ← Busse B1..B3, Anzeigename
+`CROSSPOINT-Output-B1..B3`) als virtuelle Mikrofone – jedes Gerät erscheint
+nur in einer Richtung; die Hardware-Busse A1..A5 kommen über `CROSSPOINT_A1` …
 `CROSSPOINT_A5`. Die Engine ruft das Skript beim Start selbst auf
 (`CROSSPOINT_NO_WIRE=1` schaltet das ab).
 

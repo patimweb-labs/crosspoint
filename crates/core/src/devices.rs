@@ -99,6 +99,17 @@ pub fn sinks(graph: &Graph, mit_monitoren: bool) -> Vec<Sink> {
         .collect()
 }
 
+/// Geräte, auf die ein Hardware-Bus (A1..A5) gelegt werden darf: alle
+/// Ausgabegeräte außer Crosspoints eigenen (`crosspoint_in_*`,
+/// `crosspoint_out_*`). Läge A1 auf `CROSSPOINT-Input-1`, käme sein Ton über
+/// Virt In 1 wieder ins Pult – eine Schleife, die brummt und pfeift.
+pub fn bus_ziele(graph: &Graph, mit_monitoren: bool) -> Vec<Sink> {
+    sinks(graph, mit_monitoren)
+        .into_iter()
+        .filter(|s| !crate::inputs::ist_eigen(&s.name))
+        .collect()
+}
+
 /// Ausgabegeräte aus dem PipeWire-Graph; Monitore bleiben ausgeblendet.
 pub fn list_sinks(zugriff: &dyn Zugriff) -> Result<Vec<Sink>, String> {
     list_sinks_mit(zugriff, false)
@@ -370,6 +381,11 @@ impl DeviceMap {
                 node.media_class
             ));
         }
+        if crate::inputs::ist_eigen(sink) {
+            return Err(format!(
+                "'{sink}' gehört zu Crosspoint – ein Bus darauf ergäbe eine Rückkopplung"
+            ));
+        }
 
         let bus_ports = [bus_port(&bus, "L"), bus_port(&bus, "R")];
         for verbindung in graph.offene_links(&bus_ports) {
@@ -433,7 +449,7 @@ impl DeviceMap {
     pub fn status_json(&self, zugriff: &dyn Zugriff, mit_monitoren: bool) -> String {
         let graph = zugriff.graph();
         let (liste, fehler) = match &graph {
-            Ok(g) => (sinks(g, mit_monitoren), Value::Null),
+            Ok(g) => (bus_ziele(g, mit_monitoren), Value::Null),
             Err(e) => (Vec::new(), Value::str(e.clone())),
         };
 
@@ -605,6 +621,28 @@ mod tests {
             liste.iter().any(|s| s.name == "crosspoint_out_B1"),
             "{liste:?}"
         );
+    }
+
+    /// Feedback zu 2.0.0: die eigenen CROSSPOINT-Geräte ließen sich an A1–A5
+    /// wählen und erzeugten so eine Rückkopplung.
+    #[test]
+    fn eigene_geraete_sind_kein_bus_ziel() {
+        let fake = fake();
+        let graph = fake.graph().unwrap();
+        let ziele = bus_ziele(&graph, false);
+        assert!(ziele.iter().any(|s| s.name == CORSAIR));
+        assert!(
+            ziele.iter().all(|s| !s.name.starts_with("crosspoint")),
+            "{ziele:?}"
+        );
+
+        let pfad = tmp_path("eigen");
+        let _ = std::fs::remove_file(&pfad);
+        let mut map = DeviceMap::new(&pfad);
+        let fehler = map.assign(&fake, "A1", "crosspoint_out_B1").unwrap_err();
+        assert!(fehler.contains("Rückkopplung"), "{fehler}");
+        assert!(fake.aktionen().is_empty(), "nichts verbunden");
+        let _ = std::fs::remove_file(&pfad);
     }
 
     #[test]
@@ -841,7 +879,8 @@ mod tests {
         let json = map.status_json(&fake, false);
         let wert = crate::json::parse(&json).unwrap();
         let sinks = wert.get("sinks").unwrap().as_arr().unwrap();
-        assert_eq!(sinks.len(), 3);
+        // Ohne die eigenen Geräte: sie sind kein Ziel für A1..A5.
+        assert_eq!(sinks.len(), 2);
         assert_eq!(sinks[0].get("id").unwrap().as_f64(), Some(443.0));
         assert_eq!(
             sinks[0].get("desc").unwrap(),
