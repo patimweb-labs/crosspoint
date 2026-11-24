@@ -10,21 +10,24 @@ use crate::modell::{Aktion, Oberflaeche};
 use crate::thema::{self, Farben};
 
 pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut Vec<Aktion>) {
-    // Bei knapper Höhe zeigt die Leiste nur ihre Kopfzeile, damit dem Pult
-    // seine Mindesthöhe bleibt (der gespeicherte Wunsch bleibt unberührt).
-    let eingeklappt = logik::makros_eingeklappt(
-        o.makros_eingeklappt,
-        ui.ctx().content_rect().height(),
-        o.makro_anzahl,
-    );
-    let erzwungen = eingeklappt && !o.makros_eingeklappt;
     bausteine::rahmen(f, f.bg_panel)
         .inner_margin(egui::Margin::same(thema::SPACE_2 as i8))
         .show(ui, |ui| {
+            // Bei knapper Höhe zeigt die Leiste nur ihre Kopfzeile, damit dem
+            // Pult seine Mindesthöhe bleibt (der gespeicherte Wunsch bleibt
+            // unberührt). Die Spalten folgen der Breite der Leiste.
+            let raster = logik::makro_raster_im_fenster(
+                o.makros_eingeklappt,
+                o.makro_anzahl,
+                ui.available_width(),
+                ui.ctx().content_rect().height(),
+            );
+            let eingeklappt = raster.is_none();
+            let erzwungen = eingeklappt && !o.makros_eingeklappt;
             let seiten = logik::makro_seiten(o.makro_anzahl);
             ui.horizontal(|ui| {
                 let titel = ui.label(
-                    RichText::new("MACRO")
+                    RichText::new("MAKRO")
                         .font(egui::FontId::new(thema::FONT_SIZE_MD, thema::fett()))
                         .color(f.text_default),
                 );
@@ -70,11 +73,10 @@ pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut 
                     }
                 });
             });
-            if eingeklappt {
+            let Some(raster) = raster else {
                 return;
-            }
+            };
             ui.add_space(thema::SPACE_1);
-            let spalten = logik::makro_spalten(o.makro_anzahl);
             egui::Grid::new("makrofelder")
                 .spacing(Vec2::splat(thema::SPACE_2))
                 .show(ui, |ui| {
@@ -82,10 +84,10 @@ pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut 
                         let erste = o.makro_seite * o.makro_anzahl;
                         let nr = erste + i;
                         let leuchtet = logik::makro_leuchtet(o, nr, jetzt);
-                        if feld(ui, f, nr, leuchtet).clicked() {
+                        if feld(ui, f, nr, raster.kante, leuchtet).clicked() {
                             a.push(Aktion::Makro(nr));
                         }
-                        if (i + 1) % spalten == 0 {
+                        if (i + 1) % raster.spalten == 0 {
                             ui.end_row();
                         }
                     }
@@ -93,9 +95,9 @@ pub fn makros(ui: &mut Ui, f: &Farben, o: &Oberflaeche, jetzt: Instant, a: &mut 
         });
 }
 
-fn feld(ui: &mut Ui, f: &Farben, nr: usize, an: bool) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(logik::MAKRO_FELD), egui::Sense::click());
-    let name = format!("MACRO {}", nr + 1);
+fn feld(ui: &mut Ui, f: &Farben, nr: usize, kante: f32, an: bool) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(kante), egui::Sense::click());
+    let name = format!("MAKRO {}", nr + 1);
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
     let (flaeche, linie, schrift, unter) = if an {
         (

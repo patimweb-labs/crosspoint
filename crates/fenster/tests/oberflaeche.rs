@@ -1353,7 +1353,7 @@ fn darstellung_hat_rand_und_gleiche_kanten() {
             .iter()
             .map(|n| h.get_by_label(n).rect())
             .collect();
-        let makros: Vec<egui::Rect> = ["5", "8", "10", "16", "40", "80"]
+        let makros: Vec<egui::Rect> = ["AUS", "5", "8", "10", "16", "40", "80"]
             .iter()
             .map(|n| h.get_by_label(n).rect())
             .collect();
@@ -1383,7 +1383,7 @@ fn darstellung_hat_rand_und_gleiche_kanten() {
                 "{name}: die Zeilen beginnen bei {links:?}"
             );
         }
-        let rechts = [themen[2].right(), makros[5].right(), text.right()];
+        let rechts = [themen[2].right(), makros[6].right(), text.right()];
         for x in rechts {
             assert!(
                 (x - rechts[0]).abs() < 0.5,
@@ -1700,4 +1700,36 @@ fn zuordnung_ist_ausgeschrieben() {
             assert!(n >= 8, "{breite}×{hoehe}: {kuerzel} nur {n}-mal");
         }
     }
+}
+
+/// Feedback zu 2.0.0: bei 40 und 80 Feldern war keins zu sehen, und eine
+/// Wahl „keine“ fehlte. In Full HD stehen jetzt alle Felder da; mit 0 gibt
+/// es die Leiste gar nicht.
+#[test]
+fn makrofelder_in_full_hd_und_keine() {
+    for n in [5, 8, 10, 16, 40, 80] {
+        let (mut f, _) = beispiel(Thema::Dunkel);
+        f.o.makro_anzahl = n;
+        let mut h = harness(f, (1920.0, 1080.0));
+        h.run_steps(4);
+        assert!(
+            h.query_by_label(&format!("MAKRO {n}")).is_some(),
+            "{n} Felder: das letzte fehlt"
+        );
+        let erstes = h.get_by_label("MAKRO 1").rect();
+        let letztes = h.get_by_label(&format!("MAKRO {n}")).rect();
+        assert!(
+            letztes.bottom() <= 1080.0,
+            "{n} Felder: unten abgeschnitten"
+        );
+        if n <= 10 {
+            assert_eq!(erstes.top(), letztes.top(), "{n} Felder in einer Reihe");
+        }
+    }
+    let (mut f, _) = beispiel(Thema::Dunkel);
+    f.o.makro_anzahl = 0;
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    assert!(h.query_by_label("MAKRO 1").is_none());
+    assert!(h.query_by_label("EINKLAPPEN").is_none());
 }
