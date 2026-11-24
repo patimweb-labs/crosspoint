@@ -168,19 +168,29 @@ pub struct FaderAntwort {
 /// Faderblock eines Zugs: Skala links, Bahn mit Füllung und Griff, Pegel
 /// rechts, darunter Verstärkung und Pegel als Zahl.
 ///
+/// `links_frei`: so breit bleibt links neben Skala und Bahn Platz für andere
+/// Bedienelemente (die Zuordnung A1..B3 am Kanal). Die Zahlenzeile darunter
+/// nutzt trotzdem die ganze Breite.
+///
 /// Bedienung: ziehen, Mausrad (±0,5 dB), Doppelklick → 0 dB, Pfeiltasten bei
 /// Fokus (±0,5 dB, mit Umschalt ±3 dB). Für Screenreader ist er ein Regler
 /// mit Namen und Wert.
+#[allow(clippy::too_many_arguments)]
 pub fn fader(
     ui: &mut Ui,
     f: &Farben,
     name: &str,
     groesse: Vec2,
+    links_frei: f32,
     gain_db: f32,
     pegel_db: f32,
     spitze_db: f32,
 ) -> FaderAntwort {
-    let (rect, response) = ui.allocate_exact_size(groesse, Sense::click_and_drag());
+    let (rect, platz) = ui.allocate_exact_size(groesse, Sense::hover());
+    // Bedient wird nur der Teil rechts vom freien Streifen: dort liegen
+    // Skala, Bahn und Pegel. Was links steht, bekommt seine Klicks selbst.
+    let bedien = Rect::from_min_max(Pos2::new(rect.left() + links_frei, rect.top()), rect.max);
+    let response = ui.interact(bedien, platz.id.with("fader"), Sense::click_and_drag());
     let pad = thema::SPACE_1;
     let wert_h = thema::FONT_SIZE_SM + thema::SPACE_1;
     let top = rect.top() + pad + thema::SPACE_2;
@@ -262,7 +272,7 @@ pub fn fader(
     // Skala: alle neun Zahlen, nie ausgedünnt. Reicht die Breite nicht für die
     // kleine Schrift, wird sie kleiner (`logik::fader_skala_schrift`).
     let skala_rechts = x_bahn - thema::SPACE_1;
-    let fs = logik::fader_skala_schrift(rect.width());
+    let fs = logik::fader_skala_schrift(bedien.width());
     for (db, text) in SKALA {
         let y = top + (1.0 - fader_pos(db)) * len;
         let haupt = db == 0.0;

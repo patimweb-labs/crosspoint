@@ -668,8 +668,26 @@ pub const ZUG_GERAET: f32 = thema::SIZE_CONTROL_SM;
 pub const ZUG_KOPF: f32 = thema::SPACE_6 + thema::SPACE_2;
 /// Höhe einer Schalterreihe (M, S, MONO, FILTER …).
 pub const ZUG_REIHE: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_1;
-/// Höhe einer Zuordnungsreihe (A1..A4, A5..B3).
+/// Höhe eines Zuordnungsknopfs (A1..B3).
 pub const ZUG_ZUORDNUNG: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_2;
+/// Breite der Zuordnungsspalte links neben dem Fader eines Kanals: zwei
+/// Zeichen in kleiner Schrift (15,6 px) und die Polsterung des Schalters –
+/// nicht breiter, damit die Skala auch im schmalsten Kanal in der kleinen
+/// Schrift steht.
+pub const ZUG_ZUORDNUNG_BREITE: f32 = thema::SIZE_CONTROL_SM - thema::SPACE_1;
+
+/// Oberkante des Zuordnungsknopfs `bus` in der Spalte, gemessen vom oberen
+/// Rand des Faderblocks. Zwischen A5 und B1 steht eine Lücke mehr: oben die
+/// Hardware-Busse, unten die virtuellen.
+pub fn zuordnung_oben(bus: usize) -> f32 {
+    let gruppe = if bus >= 5 { ZUG_RAND } else { 0.0 };
+    bus as f32 * (ZUG_ZUORDNUNG + ZUG_RAND) + gruppe
+}
+
+/// Höhe der ganzen Zuordnungsspalte (A1..B3 mit Lücken).
+pub fn zuordnung_hoehe() -> f32 {
+    zuordnung_oben(BUSES - 1) + ZUG_ZUORDNUNG
+}
 /// Höhe der Lämpchenzeile am FILTER-Knopf.
 pub const ZUG_LAEMPCHEN: f32 = thema::FONT_SIZE_SM + thema::SPACE_2;
 /// Rahmenlinie eines Zugs (oben und unten je einmal).
@@ -680,7 +698,7 @@ pub const ZUG_RAHMEN: f32 = thema::SIZE_BORDER;
 /// [`pult_mindesthoehe`] rechnet daraus die Mindesthöhe des Fensters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ZugMass {
-    /// Pan und Zuordnung (nur Kanäle, sonst 0).
+    /// Pan (nur Kanäle, sonst 0); die Zuordnung steht neben dem Fader.
     pub kanal_teil: f32,
     /// Zwei Reihen Schalter mit ihren Lücken.
     pub schalter: f32,
@@ -690,11 +708,11 @@ pub struct ZugMass {
 
 impl ZugMass {
     /// `filterbus`: der Zug zeigt am FILTER-Knopf eine Lämpchenzeile.
-    /// `kanal`: der Zug hat Pan und die Zuordnung A1..B3.
+    /// `kanal`: der Zug hat Pan (und neben dem Fader die Zuordnung A1..B3).
     pub fn fuer(filterbus: bool, kanal: bool) -> Self {
         ZugMass {
             kanal_teil: if kanal {
-                thema::SIZE_PAN + thema::SPACE_5 + ZUG_RAND + 2.0 * (ZUG_ZUORDNUNG + ZUG_RAND)
+                thema::SIZE_PAN + thema::SPACE_5 + ZUG_RAND
             } else {
                 0.0
             },
@@ -781,10 +799,10 @@ pub fn fader_block_mindestbreite() -> f32 {
     fader_rechts() + SKALA_JE_SCHRIFT * SKALA_SCHRIFT_MIN
 }
 
-/// Mindestbreite eines Kanals: die Zuordnungsknöpfe A1..B3 brauchen Platz für
-/// zwei Zeichen (15,6 px bei [`thema::FONT_SIZE_SM`]), der Fader seine Skala.
+/// Mindestbreite eines Kanals: links die Zuordnungsspalte
+/// ([`ZUG_ZUORDNUNG_BREITE`]), rechts der Fader mit seiner Skala.
 /// [`thema::SIZE_ZUG_KOMPAKT`] ist der kleinste Zug der Tokens und reicht für
-/// beides.
+/// beides (geprüft in `zuordnung_passt_neben_den_fader`).
 pub fn kanal_mindestbreite() -> f32 {
     thema::SIZE_ZUG_KOMPAKT
 }
@@ -1389,6 +1407,26 @@ mod tests {
         );
         assert_eq!(midi_blaettern(5, 1, true), 2);
         assert_eq!(midi_blaettern(5, 2, false), 1);
+    }
+
+    /// Feedback zu 2.0.0: in der Startgröße standen A1..B3 nur als „…“ da –
+    /// vier Knöpfe in einer Reihe waren zu schmal für zwei Zeichen. Als
+    /// Spalte neben dem Fader passen sie, ohne dem Fader die Skala zu nehmen.
+    #[test]
+    fn zuordnung_passt_neben_den_fader() {
+        // Zwei Zeichen in kleiner Schrift (fett, Monospace ≈ 0,6 em je Zeichen).
+        let zwei_zeichen = 2.0 * 0.6 * thema::FONT_SIZE_SM;
+        assert!(ZUG_ZUORDNUNG_BREITE - 2.0 * thema::SPACE_1 >= zwei_zeichen);
+        // Breite: Spalte, Lücke und Fader im schmalsten Kanal – die Skala
+        // bleibt in der kleinen Schrift.
+        let innen = kanal_mindestbreite() - 2.0 * ZUG_RAND;
+        let fader = innen - ZUG_ZUORDNUNG_BREITE - ZUG_RAND;
+        assert!(fader >= fader_block_mindestbreite());
+        assert_eq!(fader_skala_schrift(fader), thema::FONT_SIZE_SM);
+        // Höhe: die Spalte ist nie höher als der kleinste Faderblock.
+        assert!(zuordnung_hoehe() <= fader_block_mindesthoehe());
+        // Lücke zwischen A5 und B1.
+        assert!(zuordnung_oben(5) - zuordnung_oben(4) > zuordnung_oben(4) - zuordnung_oben(3));
     }
 
     #[test]
