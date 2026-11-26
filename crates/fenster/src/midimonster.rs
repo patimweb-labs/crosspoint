@@ -73,7 +73,7 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
         // Crosspoint hat acht Streifen (0..7); die zweite Seite fuehrt
         // deshalb die acht Busse statt weiterer virtueller Streifen.
         1 => {
-            for (i, name) in crosspoint::BUS_NAMES.iter().enumerate() {
+            for (i, name) in crosspoint_modell::BUS_NAMES.iter().enumerate() {
                 z.push(Zeile::neu(
                     format!("Gain Fader Bus {name}"),
                     format!("/bus/{i}/gain"),
@@ -82,8 +82,8 @@ pub fn seiten_ziele(seite: usize) -> Vec<Zeile> {
             // Push-to-Talk gehört auf dieselbe Seite wie die Busse: erst `ptt`
             // einschalten (der Bus ist dann stumm), dann `ptt_offen` auf die
             // Taste legen. Nur die virtuellen Busse B1–B3 haben die Filter.
-            for i in crosspoint::engine::ERSTER_VIRTUELLER..crosspoint::BUSES {
-                let name = crosspoint::BUS_NAMES[i];
+            for i in crosspoint_modell::params::ERSTER_VIRTUELLER..crosspoint_modell::BUSES {
+                let name = crosspoint_modell::BUS_NAMES[i];
                 z.push(Zeile::neu(
                     format!("Push to Talk Bus {name} (stumm bis Taste)"),
                     format!("/bus/{i}/ptt"),
@@ -555,9 +555,9 @@ mod tests {
                 if let [ziel @ ("strip" | "bus"), n, _] = teile.as_slice() {
                     let n: usize = n.parse().unwrap();
                     let grenze = if *ziel == "strip" {
-                        crosspoint::STRIPS
+                        crosspoint_modell::STRIPS
                     } else {
-                        crosspoint::BUSES
+                        crosspoint_modell::BUSES
                     };
                     assert!(n < grenze, "{} zeigt ins Leere", z.ziel);
                 }

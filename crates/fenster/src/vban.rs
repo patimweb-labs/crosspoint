@@ -4,8 +4,8 @@
 //! (`crosspoint::vban_io::konfig_json`). So zeigen Web und Fenster dieselben
 //! Zahlen, und die Oberflaeche rechnet nichts selbst.
 
-use crosspoint::json::Value;
-use crosspoint::vban_io::{VbanControl, VbanRecvControl};
+use crosspoint_modell::json::Value;
+use crosspoint_schnittstelle::haende::Netz;
 
 /// Eine Zeile der Incoming- bzw. Outgoing-Tabelle.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,23 +91,20 @@ fn zeilen(v: Option<&Value>, weg_feld: &str) -> Vec<VbanZeile> {
         .unwrap_or_default()
 }
 
-/// Stand aus dem JSON von `konfig_json` lesen.
-pub fn stand_aus_json(json: &str) -> VbanStand {
-    let Ok(v) = crosspoint::json::parse(json) else {
-        return VbanStand::default();
-    };
+/// Stand aus dem JSON des Kerns lesen (dieselbe Form wie `/api/vban`).
+pub fn stand_aus_json(v: &Value) -> VbanStand {
     VbanStand {
         senden: weg(v.get("senden"), "frames", "fehler"),
         empfangen: weg(v.get("empfangen"), "pakete", "verworfen"),
-        samplerate: zahl(&v, "samplerate").max(0.0) as u32,
+        samplerate: zahl(v, "samplerate").max(0.0) as u32,
         incoming: zeilen(v.get("incoming"), "ziel"),
         outgoing: zeilen(v.get("outgoing"), "source"),
     }
 }
 
-/// Aktueller Stand direkt aus den Steuerungen des Kerns.
-pub fn stand(send: &VbanControl, recv: &VbanRecvControl, sample_rate: u32) -> VbanStand {
-    stand_aus_json(&crosspoint::vban_io::konfig_json(send, recv, sample_rate))
+/// Aktueller Stand, wie ihn der Kern meldet.
+pub fn stand(netz: &dyn Netz, sample_rate: u32) -> VbanStand {
+    stand_aus_json(&netz.stand(sample_rate))
 }
 
 /// Eingaben des Formulars (Text wie getippt).
@@ -151,8 +148,8 @@ impl Formular {
 
     /// Formular anwenden. Ungueltige Werte lassen den Kern unveraendert
     /// (die Pruefung macht `wende_konfig_an`, wie bei der HTTP-Schnittstelle).
-    pub fn anwenden(&self, send: &VbanControl, recv: &VbanRecvControl) -> Result<(), String> {
-        crosspoint::vban_io::wende_konfig_an(send, recv, &self.als_json())
+    pub fn anwenden(&self, netz: &dyn Netz) -> Result<(), String> {
+        netz.anwenden(&self.als_json())
     }
 }
 
@@ -174,12 +171,35 @@ pub fn unterzeile(s: &VbanStand) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    /// Nur für die Tests: die echten VBAN-Steuerungen des Kerns hinter der Naht.
+    struct TestNetz(
+        crosspoint::vban_io::VbanControl,
+        crosspoint::vban_io::VbanRecvControl,
+    );
+
+    impl Netz for TestNetz {
+        fn stand(&self, sample_rate: u32) -> Value {
+            let text = crosspoint::vban_io::konfig_json(&self.0, &self.1, sample_rate);
+            crosspoint::json::parse(&text).unwrap_or(Value::Null)
+        }
+        fn anwenden(&self, json: &Value) -> Result<(), String> {
+            crosspoint::vban_io::wende_konfig_an(&self.0, &self.1, json)
+        }
+    }
+
+    fn netz() -> Arc<TestNetz> {
+        Arc::new(TestNetz(
+            crosspoint::vban_io::VbanControl::new(),
+            crosspoint::vban_io::VbanRecvControl::new(),
+        ))
+    }
 
     #[test]
     fn stand_kommt_aus_dem_kern() {
-        let send = VbanControl::new();
-        let recv = VbanRecvControl::new();
-        let s = stand(&send, &recv, 48_000);
+        let netz = netz();
+        let s = stand(netz.as_ref(), 48_000);
         assert_eq!(s.samplerate, 48_000);
         assert!(!s.senden.an);
         assert_eq!(s.senden.host, "127.0.0.1");
@@ -196,8 +216,7 @@ mod tests {
 
     #[test]
     fn formular_setzt_sende_und_empfangsweg() {
-        let send = VbanControl::new();
-        let recv = VbanRecvControl::new();
+        let netz = netz();
         let f = Formular {
             senden_an: true,
             host: " 192.168.1.20 ".into(),
@@ -207,8 +226,8 @@ mod tests {
             empfangen_port: 6981.0,
             empfangen_stream: "".into(),
         };
-        f.anwenden(&send, &recv).expect("gueltig");
-        let s = stand(&send, &recv, 48_000);
+        f.anwenden(netz.as_ref()).expect("gueltig");
+        let s = stand(netz.as_ref(), 48_000);
         assert!(s.senden.an);
         assert_eq!(s.senden.host, "192.168.1.20");
         assert_eq!(s.senden.port, 6990);
@@ -220,8 +239,7 @@ mod tests {
 
     #[test]
     fn ungueltiger_port_aendert_nichts() {
-        let send = VbanControl::new();
-        let recv = VbanRecvControl::new();
+        let netz = netz();
         let f = Formular {
             senden_an: true,
             host: "127.0.0.1".into(),
@@ -230,14 +248,14 @@ mod tests {
             empfangen_port: 6980.0,
             ..Default::default()
         };
-        assert!(f.anwenden(&send, &recv).is_err());
-        let s = stand(&send, &recv, 48_000);
+        assert!(f.anwenden(netz.as_ref()).is_err());
+        let s = stand(netz.as_ref(), 48_000);
         assert!(!s.senden.an, "abgewiesenes Formular darf nicht einschalten");
         assert_eq!(s.senden.stream, "crosspointbusA1");
     }
 
     #[test]
     fn kaputtes_json_ergibt_leeren_stand() {
-        assert_eq!(stand_aus_json("kein json"), VbanStand::default());
+        assert_eq!(stand_aus_json(&Value::Null), VbanStand::default());
     }
 }

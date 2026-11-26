@@ -46,8 +46,11 @@ Pult-Modell gewohnt sind, aber kein Windows mehr starten wollen.
 ```
 crates/modell    Parametermodell (Params, Filterkette, Pegelbank, JSON-Form),
                  plattformfrei: nur std + serde (ADR 0012)   → Unit-Tests
+crates/schnittstelle  Naht Fenster↔Kern: Traits für Geräte, Ablage, Betrieb,
+                 Band, Makros, Netz; hängt nur am Modell      → Unit-Tests
 crates/core      Linux-Kern: DSP, Engine (JACK-Client), Adapter (PipeWire, HTTP,
-                 OSC, VBAN, Geräte), Ablage                   → Unit-/Integrationstests
+                 OSC, VBAN, Geräte), Ablage, `kern.rs`
+                 (implementiert die Schnittstelle)            → Unit-/Integrationstests
 crates/fenster   egui-Oberfläche: modell (Summentypen), logik (Aktionen),
                  ansichten (render), bausteine (Fader, Pegel, Schalter),
                  thema (drei Themes aus tokens/*.json)        → Oberflächentests
@@ -61,7 +64,10 @@ packaging/       Linux-Pakete (tar.gz, AppImage), Flatpak-Quellen
 docs/            architektur.md, datenfluss.md, adr/, bilder/
 ```
 
-Richtung der Abhängigkeiten: `vban · tape · macros ← modell ← core ← fenster ← src/`.
+Richtung der Abhängigkeiten: `modell ← schnittstelle ← core`,
+`modell · schnittstelle ← fenster ← src/`. Das Fenster kennt **keinen** Kern;
+welcher läuft, wählt `src/` (ADR 0012). Die CI prüft, dass `crates/fenster`
+keine Plattform-Bibliothek im Baum hat.
 Nie zurück. `fenster` kennt keine PipeWire-Aufrufe und kein JSON, nur `Params`
 (Atomics), den Befehlskanal und die Pegel; `core` kennt kein egui.
 

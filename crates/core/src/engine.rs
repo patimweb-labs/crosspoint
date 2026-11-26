@@ -45,10 +45,8 @@ use crate::agc::Pegelregler;
 use crate::dsp::*;
 use crate::{BUSES, STRIPS};
 
-/// Erster virtueller Bus (B1).
-pub const ERSTER_VIRTUELLER: usize = 5;
-/// Anzahl der virtuellen Busse (B1..B3).
-pub const VIRTUELLE: usize = BUSES - ERSTER_VIRTUELLER;
+// Erster virtueller Bus und ihre Zahl stehen im Modell (ADR 0012).
+pub use crosspoint_modell::params::{ERSTER_VIRTUELLER, VIRTUELLE};
 
 /// −3 dB als Linearwert; Dämpfung für Composite und TV-Mix.
 const MINUS_3DB: f32 = 0.707_945_8;

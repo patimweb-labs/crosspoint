@@ -33,6 +33,7 @@ required-features = ["ui"]
 [workspace]
 members = [
     "crates/modell",
+    "crates/schnittstelle",
     "crates/core",
     "crates/vban",
     "crates/tape",

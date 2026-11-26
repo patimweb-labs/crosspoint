@@ -10,8 +10,8 @@
 
 use egui::{Pos2, Rect, RichText, Ui, UiBuilder, Vec2};
 
-use crosspoint::engine::ERSTER_VIRTUELLER;
-use crosspoint::BUS_NAMES;
+use crosspoint_modell::params::ERSTER_VIRTUELLER;
+use crosspoint_modell::BUS_NAMES;
 
 use crate::bausteine::{self, Art};
 use crate::geraete::{self, KEIN_AUSGANG, KEIN_EINGANG};
@@ -444,7 +444,7 @@ fn zugkopf(
         let resp = ui.put(
             feld,
             egui::TextEdit::singleline(&mut text)
-                .char_limit(crosspoint::engine::MAX_LABEL)
+                .char_limit(crosspoint_modell::params::MAX_LABEL)
                 .font(egui::FontId::new(thema::FONT_SIZE_MD, thema::fett())),
         );
         // Der Fokus wird jedes Bild neu verlangt; `lost_focus` meldet damit nie

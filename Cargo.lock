@@ -854,6 +854,7 @@ name = "crosspoint-core"
 version = "2.2.0"
 dependencies = [
  "crosspoint-modell",
+ "crosspoint-schnittstelle",
  "hound",
  "jack",
  "macros",
@@ -874,6 +875,8 @@ name = "crosspoint-fenster"
 version = "2.2.0"
 dependencies = [
  "crosspoint-core",
+ "crosspoint-modell",
+ "crosspoint-schnittstelle",
  "eframe",
  "egui",
  "egui_extras",
@@ -890,6 +893,13 @@ version = "2.2.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "crosspoint-schnittstelle"
+version = "2.2.0"
+dependencies = [
+ "crosspoint-modell",
 ]
 
 [[package]]

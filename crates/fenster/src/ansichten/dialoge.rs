@@ -233,7 +233,7 @@ fn presets(
 }
 
 fn vban(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, k: &Kern, a: &mut Vec<Aktion>) {
-    let Some((send, recv)) = &k.vban else {
+    let Some(netz) = k.netz() else {
         ui.add(Label::new(bausteine::text(
             f,
             "VBAN ist in diesem Lauf nicht verfügbar",
@@ -242,7 +242,7 @@ fn vban(ui: &mut Ui, f: &Farben, o: &mut Oberflaeche, k: &Kern, a: &mut Vec<Akti
         )));
         return;
     };
-    let stand = crate::vban::stand(send, recv, k.sample_rate);
+    let stand = crate::vban::stand(netz, k.sample_rate);
     ui.add(Label::new(bausteine::text(
         f,
         &crate::vban::unterzeile(&stand),

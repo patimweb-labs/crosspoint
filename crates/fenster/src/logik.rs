@@ -8,29 +8,63 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crosspoint::engine::{AusgangsFilter, Params, ERSTER_VIRTUELLER};
-use crosspoint::macros_io::MacroControl;
-use crosspoint::tape_io::TapeControl;
-use crosspoint::vban_io::{VbanControl, VbanRecvControl};
-use crosspoint::{BUSES, BUS_NAMES, STRIP_NAMES};
+use crosspoint_modell::params::{AusgangsFilter, Params, ERSTER_VIRTUELLER};
+use crosspoint_modell::{BUSES, BUS_NAMES, STRIP_NAMES};
+use crosspoint_schnittstelle::ablage::Ablage;
+use crosspoint_schnittstelle::betrieb::MidiCc;
+use crosspoint_schnittstelle::geraete::Zuordner;
 
-use crate::geraete::{self, Zuordner};
+use crate::geraete;
 use crate::modell::{Aktion, Geraete, Meldung, Oberflaeche, Tape, Umbenennen, Ziel};
 use crate::thema;
+use crosspoint_schnittstelle::haende::{Band, Makros, Netz};
+use crosspoint_schnittstelle::{Betrieb, Schnittstelle};
 
-/// Was eine Aktion im Kern erreichen kann. In Tests sind Tape und Makros
-/// leer, die Geräte gehen an einen Zuordner ohne PipeWire.
+/// Was das Fenster vom Kern hält (ADR 0012).
+///
+/// Nur noch das Modell und **eine** Naht: alles Plattformabhängige kommt über
+/// [`Schnittstelle`] – Geräte, Ablage, Betrieb, Band, Makros, Netz, MIDI-CC.
+/// Welcher Kern dahintersteht (heute der Linux-Kern, später Windows/macOS),
+/// weiß die Oberfläche nicht.
 pub struct Kern {
     pub params: Arc<Params>,
-    pub tape: Option<Arc<TapeControl>>,
-    pub makros: Option<Arc<MacroControl>>,
     pub tape_ordner: PathBuf,
     pub preset_ordner: PathBuf,
-    pub zuordner: Box<dyn Zuordner>,
-    pub vban: Option<(Arc<VbanControl>, Arc<VbanRecvControl>)>,
     pub sample_rate: u32,
     /// Ablage der MIDIMonster-Karte.
     pub midi_pfad: PathBuf,
+    pub schnittstelle: Arc<dyn Schnittstelle>,
+}
+
+impl Kern {
+    /// Band (Aufnahme/Wiedergabe), wenn der Kern eines hat.
+    pub fn band(&self) -> Option<&dyn Band> {
+        self.schnittstelle.band()
+    }
+    /// Makro-Engine, wenn vorhanden.
+    pub fn makros(&self) -> Option<&dyn Makros> {
+        self.schnittstelle.makros()
+    }
+    /// Netz-Audio (VBAN), wenn vorhanden.
+    pub fn netz(&self) -> Option<&dyn Netz> {
+        self.schnittstelle.netz()
+    }
+    /// Der Schreibpfad für Zuordnungen.
+    pub fn zuordner(&self) -> &dyn Zuordner {
+        self.schnittstelle.geraete().zuordner()
+    }
+    /// Dateien: Presets und Autostart.
+    pub fn ablage(&self) -> &dyn Ablage {
+        self.schnittstelle.ablage()
+    }
+    /// Läuft der Kern, will jemand das Fenster?
+    pub fn betrieb(&self) -> &dyn Betrieb {
+        self.schnittstelle.betrieb()
+    }
+    /// MIDI-CC-Kanal (MIDIMonster), wenn vorhanden.
+    pub fn cc(&self) -> Option<&dyn MidiCc> {
+        self.schnittstelle.cc()
+    }
 }
 
 /// Wie lange ein gedrücktes Makrofeld aufleuchtet.
@@ -100,9 +134,8 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
             false
         }
         Aktion::TapeStart => {
-            if let Some(t) = &k.tape {
-                t.recording.store(true, Relaxed);
-                t.set_status(format!("rec [{}]", k.tape_ordner.display()));
+            if let Some(t) = k.band() {
+                t.aufnahme(true, &format!("rec [{}]", k.tape_ordner.display()));
             }
             o.tape = Tape::Aufnahme {
                 seit: Instant::now(),
@@ -110,16 +143,15 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
             false
         }
         Aktion::TapeStop => {
-            if let Some(t) = &k.tape {
-                t.recording.store(false, Relaxed);
-                t.set_status("stop");
+            if let Some(t) = k.band() {
+                t.aufnahme(false, "stop");
             }
             o.tape = Tape::Bereit;
             false
         }
         Aktion::Makro(i) => {
-            if let Some(m) = &k.makros {
-                match m.press(i).and_then(|_| m.release(i)) {
+            if let Some(m) = k.makros() {
+                match m.druck(i) {
                     Ok(()) => o.meldung = Meldung::Hinweis(format!("Makro {} gesendet", i + 1)),
                     Err(e) => o.meldung = Meldung::Fehler(format!("Makro {}: {e}", i + 1)),
                 }
@@ -143,8 +175,8 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
         }
         Aktion::Geraet { ziel, name } => {
             let ergebnis = match ziel {
-                Ziel::Kanal(i) => k.zuordner.streifen(i + 1, name.as_deref()),
-                Ziel::Bus(i) => k.zuordner.bus(BUS_NAMES[i], name.as_deref()),
+                Ziel::Kanal(i) => k.zuordner().streifen(i + 1, name.as_deref()),
+                Ziel::Bus(i) => k.zuordner().bus(BUS_NAMES[i], name.as_deref()),
                 Ziel::Master => Ok(()),
             };
             o.meldung = match ergebnis {
@@ -166,7 +198,7 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
             if an {
                 liste.push(name.clone());
             }
-            o.meldung = match k.zuordner.echo(&liste) {
+            o.meldung = match k.zuordner().echo(&liste) {
                 Ok(()) => {
                     o.echo_geraete = liste;
                     Meldung::Hinweis(format!(
@@ -193,7 +225,7 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
                 Meldung::Fehler("Bitte einen Namen ohne / eingeben".into())
             } else {
                 let pfad = k.preset_ordner.join(format!("{n}.json"));
-                match crosspoint::restore::preset_speichern(&k.params, &pfad) {
+                match k.ablage().preset_speichern(&k.params, &pfad) {
                     Ok(()) => Meldung::Hinweis(format!("Preset '{n}' gespeichert")),
                     Err(e) => Meldung::Fehler(format!("Preset nicht gespeichert: {e}")),
                 }
@@ -205,7 +237,7 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            o.meldung = if crosspoint::restore::preset_laden(&k.params, &pfad) {
+            o.meldung = if k.ablage().preset_laden(&k.params, &pfad) {
                 Meldung::Hinweis(format!("Preset '{n}' geladen"))
             } else {
                 Meldung::Fehler(format!("Preset '{n}' nicht ladbar"))
@@ -217,16 +249,16 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
             false
         }
         Aktion::Autostart(an) => {
-            o.meldung = match crosspoint::autostart::set(an) {
+            o.meldung = match k.ablage().autostart_setzen(an) {
                 Ok(_) => Meldung::Hinweis(if an { "Autostart an" } else { "Autostart aus" }.into()),
                 Err(e) => Meldung::Fehler(format!("Autostart: {e}")),
             };
-            o.autostart = crosspoint::autostart::enabled();
+            o.autostart = k.ablage().autostart();
             false
         }
         Aktion::VbanAnwenden => {
-            if let (Some(form), Some((send, recv))) = (&o.vban, &k.vban) {
-                o.meldung = match form.anwenden(send, recv) {
+            if let (Some(form), Some(netz)) = (&o.vban, k.netz()) {
+                o.meldung = match form.anwenden(netz) {
                     Ok(()) => Meldung::Hinweis("VBAN übernommen".into()),
                     Err(e) => Meldung::Fehler(format!("VBAN: {e}")),
                 };
@@ -256,7 +288,9 @@ pub fn ausfuehren(a: Aktion, o: &mut Oberflaeche, k: &Kern) -> bool {
                     let _ = m.karte.speichern(&k.midi_pfad);
                 } else {
                     // Was vor dem Klick kam, gilt nicht.
-                    let _ = crosspoint::osc::cc_kanal().abholen();
+                    if let Some(cc) = k.cc() {
+                        let _ = cc.abholen();
+                    }
                     m.lernt = Some(ziel);
                     m.status = format!("{titel}: warte auf MIDI-CC …");
                 }
@@ -315,8 +349,8 @@ fn dialog_oeffnen(d: Option<crate::modell::Dialog>, o: &mut Oberflaeche, k: &Ker
     o.midi = None;
     match d {
         Some(Dialog::Vban) => {
-            if let Some((send, recv)) = &k.vban {
-                let s = crate::vban::stand(send, recv, k.sample_rate);
+            if let Some(netz) = k.netz() {
+                let s = crate::vban::stand(netz, k.sample_rate);
                 o.vban = Some(crate::vban::Formular {
                     senden_an: s.senden.an,
                     host: s.senden.host,
@@ -329,7 +363,7 @@ fn dialog_oeffnen(d: Option<crate::modell::Dialog>, o: &mut Oberflaeche, k: &Ker
             }
         }
         Some(Dialog::Darstellung) => {
-            o.autostart = crosspoint::autostart::enabled();
+            o.autostart = k.ablage().autostart();
         }
         Some(Dialog::Midi) => {
             let mut karte = crate::midimonster::Karte::laden(&k.midi_pfad);
@@ -360,7 +394,7 @@ pub fn takt(o: &mut Oberflaeche, k: &Kern, jetzt: Instant) {
     o.makro_leuchtet.retain(|(_, bis)| *bis > jetzt);
     let Some(m) = o.midi.as_mut() else { return };
     let Some(ziel) = m.lernt.clone() else { return };
-    if let Some(cc) = crosspoint::osc::cc_kanal().letzte() {
+    if let Some(cc) = k.cc().and_then(|c| c.abholen().pop()) {
         m.karte.binden(&ziel, cc.cc);
         let _ = m.karte.speichern(&k.midi_pfad);
         m.lernt = None;
@@ -671,7 +705,7 @@ pub const BUS_ANTEIL: f32 = 0.82;
 /// genau, ohne Untergrenze. Dass die Züge dabei nicht zu schmal werden, hält
 /// die Mindestbreite des Fensters ([`mindestfenster`]) fest.
 pub fn zugbreiten(verfuegbar: f32, luecken: f32) -> (f32, f32) {
-    let einheiten = crosspoint::STRIPS as f32 + (BUSES + 1) as f32 * BUS_ANTEIL;
+    let einheiten = crosspoint_modell::STRIPS as f32 + (BUSES + 1) as f32 * BUS_ANTEIL;
     let kanal = ((verfuegbar - luecken) / einheiten).max(1.0);
     (kanal, kanal * BUS_ANTEIL)
 }
@@ -949,7 +983,7 @@ pub fn makro_raster_im_fenster(
 pub fn mindestfenster() -> egui::Vec2 {
     let kanal = kanal_mindestbreite();
     egui::Vec2::new(
-        crosspoint::STRIPS as f32 * kanal
+        crosspoint_modell::STRIPS as f32 * kanal
             + (BUSES + 1) as f32 * kanal * BUS_ANTEIL
             + zugluecken()
             + 2.0 * thema::SPACE_2,
@@ -1056,7 +1090,7 @@ pub fn pegel_ticken(p: &mut crate::modell::Pegel, roh: &[[f32; 2]; crate::modell
 /// Rohpegel aller Anzeigen aus der Pegelbank (links, rechts); der Master
 /// zeigt seinen Bus.
 pub fn pegel_lesen(
-    bank: &crosspoint::pegel::Pegelbank,
+    bank: &crosspoint_modell::pegel::Pegelbank,
     master_bus: usize,
 ) -> [[f32; 2]; crate::modell::ANZEIGEN] {
     let mut r = [[0.0; 2]; crate::modell::ANZEIGEN];
@@ -1173,39 +1207,15 @@ pub fn presets(ordner: &Path) -> Vec<(String, PathBuf)> {
 mod tests {
     use super::*;
 
-    struct Merker(std::sync::Mutex<Vec<String>>);
-    impl Zuordner for Merker {
-        fn streifen(&self, strip: usize, q: Option<&str>) -> Result<(), String> {
-            self.0.lock().unwrap().push(format!("s{strip}={q:?}"));
-            Ok(())
-        }
-        fn bus(&self, bus: &str, s: Option<&str>) -> Result<(), String> {
-            self.0.lock().unwrap().push(format!("{bus}={s:?}"));
-            Ok(())
-        }
-        fn lautstaerke(&self, _: &str, _: Option<f32>, _: Option<bool>) -> Result<(), String> {
-            Ok(())
-        }
-        fn echo(&self, geraete: &[String]) -> Result<(), String> {
-            self.0
-                .lock()
-                .unwrap()
-                .push(format!("echo={}", geraete.join(",")));
-            Ok(())
-        }
-    }
-
     fn kern() -> Kern {
+        let params = Arc::new(Params::new(48_000.0, 512));
         Kern {
-            params: Arc::new(Params::new(48_000.0, 512)),
-            tape: None,
-            makros: None,
+            params: Arc::clone(&params),
             tape_ordner: PathBuf::from("/tmp"),
             preset_ordner: std::env::temp_dir().join(format!("cp-presets-{}", std::process::id())),
-            zuordner: Box::new(Merker(Default::default())),
-            vban: None,
             sample_rate: 48_000,
             midi_pfad: std::env::temp_dir().join(format!("cp-midi-{}.cfg", std::process::id())),
+            schnittstelle: Arc::new(crate::ohne_kern::OhneKern::neu(params)),
         }
     }
 
@@ -1297,8 +1307,11 @@ mod tests {
         ausfuehren(Aktion::PresetSpeichern, &mut o, &k);
         let liste = presets(&k.preset_ordner);
         assert_eq!(liste.len(), 1);
+        // Geladen wird über den Kern: hier der echte (Testabhängigkeit auf
+        // `crosspoint`), damit die geschriebene Datei auch geprüft wird.
+        assert!(crosspoint::restore::preset_laden(&k.params, &liste[0].1));
         k.params.set("strip", 2, "gain", 0.0);
-        ausfuehren(Aktion::PresetLaden(liste[0].1.clone()), &mut o, &k);
+        assert!(crosspoint::restore::preset_laden(&k.params, &liste[0].1));
         assert_eq!(zug_werte(&k.params, Ziel::Kanal(2), 0).gain, -4.5);
         let _ = std::fs::remove_dir_all(&k.preset_ordner);
     }

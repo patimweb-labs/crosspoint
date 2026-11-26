@@ -60,8 +60,9 @@ pub fn pult(
             let flaeche = ui.available_rect_before_wrap();
             let luecken = logik::zugluecken();
             let (kanal, bus) = logik::zugbreiten(flaeche.width(), luecken);
-            let gesamt =
-                crosspoint::STRIPS as f32 * kanal + (crosspoint::BUSES + 1) as f32 * bus + luecken;
+            let gesamt = crosspoint_modell::STRIPS as f32 * kanal
+                + (crosspoint_modell::BUSES + 1) as f32 * bus
+                + luecken;
             let (rect, _) = ui.allocate_exact_size(
                 Vec2::new(gesamt.max(flaeche.width()), flaeche.height()),
                 Sense::hover(),
@@ -80,11 +81,11 @@ pub fn pult(
                 zug::zug(ui, f, r, ziel, o, k, &mut a);
                 *x += breite + thema::SPACE_1;
             };
-            for i in 0..crosspoint::STRIPS {
+            for i in 0..crosspoint_modell::STRIPS {
                 setze(ui, Ziel::Kanal(i), &mut x);
             }
             x += logik::GRUPPE - thema::SPACE_1;
-            for i in 0..crosspoint::BUSES {
+            for i in 0..crosspoint_modell::BUSES {
                 setze(ui, Ziel::Bus(i), &mut x);
             }
             x += logik::GRUPPE - thema::SPACE_1;

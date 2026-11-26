@@ -54,9 +54,13 @@ Offen:
       `Params`, Filterkette, Pegelbank, JSON-Form und dB-Rechnung; der Kern
       re-exportiert, das Fenster baut unverändert. CI-Job `Schichten` wacht
       darüber. Dabei die toten Typen des Referenzprogramms entfernt.
-- [ ] **Kern und Fenster trennen, Stufe 2**: Traits für Geräte und Ablage,
-      `geraete.rs`/`tray.rs` als PipeWire-Implementierung in den Kern. Ziel:
-      `cargo tree -p crosspoint-fenster` enthält kein `pipewire` mehr.
+- [x] **Kern und Fenster trennen, Stufen 2 und 3** (ADR 0012): `crates/schnittstelle`
+      mit `Geraete`, `Ablage`, `Betrieb`, `Band`, `Makros`, `Netz`, `MidiCc`;
+      `crates/core/src/kern.rs` implementiert sie über dem laufenden `Lauf`; das
+      Fenster hängt nur an Modell und Naht. Nachgewiesen in der CI: der
+      Abhängigkeitsbaum des Fensters enthält kein `pipewire`/`jack`/`sonora`.
+- [ ] **Tray hinter die Naht** (ADR 0012, Rest): `ksni` (StatusNotifierItem)
+      steckt noch im Fenster-Crate; unter Windows/macOS gibt es das nicht.
 - [ ] **Web-Fernbedienung an die Kette anpassen**: `web/index.html` zeigt am
       Kanalzug noch EQ/COMP/GATE/NR, die Engine lehnt sie ab. Die Kette am Kanal
       (`/api/set` mit `ziel:strip`, `param:lc` …) ist dort noch nicht bedienbar.

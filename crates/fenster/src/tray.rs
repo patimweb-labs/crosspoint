@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crosspoint_schnittstelle::Schnittstelle;
 use ksni::blocking::TrayMethods;
 
 /// Was das Fenster tun soll.
@@ -35,7 +36,7 @@ pub fn argb(rgba: &[u8]) -> Vec<u8> {
 }
 
 struct Symbol {
-    lauf: Arc<crosspoint::lauf::Lauf>,
+    kern: Arc<dyn Schnittstelle>,
     befehle: Sender<Befehl>,
     wecker: Arc<Mutex<Option<egui::Context>>>,
     icon: ksni::Icon,
@@ -52,8 +53,8 @@ impl Symbol {
     }
 
     fn mutes(&self) -> Vec<bool> {
-        self.lauf
-            .params
+        self.kern
+            .params()
             .strips
             .iter()
             .map(|s| s.mute.load(Relaxed))
@@ -81,6 +82,7 @@ impl ksni::Tray for Symbol {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::{CheckmarkItem, StandardItem};
         let alle_stumm = !stumm_ziel(&self.mutes());
+        let autostart = self.kern.ablage().autostart();
         vec![
             StandardItem {
                 label: "Fenster zeigen".into(),
@@ -93,10 +95,9 @@ impl ksni::Tray for Symbol {
                 checked: alle_stumm,
                 activate: Box::new(|t: &mut Self| {
                     let ziel = stumm_ziel(&t.mutes());
-                    for i in 0..crosspoint::STRIPS {
-                        t.lauf
-                            .params
-                            .set("strip", i, "mute", if ziel { 1.0 } else { 0.0 });
+                    let params = Arc::clone(t.kern.params());
+                    for i in 0..crosspoint_modell::STRIPS {
+                        params.set("strip", i, "mute", if ziel { 1.0 } else { 0.0 });
                     }
                 }),
                 ..Default::default()
@@ -105,8 +106,10 @@ impl ksni::Tray for Symbol {
             StandardItem {
                 label: "Letztes Preset laden".into(),
                 activate: Box::new(|t: &mut Self| {
-                    if !crosspoint::restore::preset_laden(&t.lauf.params, &t.lauf.preset) {
-                        eprintln!("crosspoint: kein Preset unter {}", t.lauf.preset.display());
+                    let params = Arc::clone(t.kern.params());
+                    let pfad = t.kern.preset_pfad();
+                    if !t.kern.ablage().preset_laden(&params, &pfad) {
+                        eprintln!("crosspoint: kein Preset unter {}", pfad.display());
                     }
                 }),
                 ..Default::default()
@@ -114,10 +117,10 @@ impl ksni::Tray for Symbol {
             .into(),
             CheckmarkItem {
                 label: "Autostart".into(),
-                checked: crosspoint::autostart::enabled(),
-                activate: Box::new(|_: &mut Self| {
-                    let an = !crosspoint::autostart::enabled();
-                    if let Err(e) = crosspoint::autostart::set(an) {
+                checked: autostart,
+                activate: Box::new(|t: &mut Self| {
+                    let an = !t.kern.ablage().autostart();
+                    if let Err(e) = t.kern.ablage().autostart_setzen(an) {
                         eprintln!("crosspoint: Autostart: {e}");
                     }
                 }),
@@ -175,7 +178,7 @@ impl Tray {
 
 /// Symbol anmelden. Fehler (kein D-Bus, kein Watcher) kommen zurück; dann
 /// zeigt der Aufrufer das Fenster.
-pub fn starten(lauf: Arc<crosspoint::lauf::Lauf>) -> Result<Tray, String> {
+pub fn starten(kern: Arc<dyn Schnittstelle>) -> Result<Tray, String> {
     let bild = eframe::icon_data::from_png_bytes(include_bytes!(
         "../../../data/icons/hicolor/64x64/apps/de.weppelmann.Crosspoint.png"
     ))
@@ -183,7 +186,7 @@ pub fn starten(lauf: Arc<crosspoint::lauf::Lauf>) -> Result<Tray, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let wecker = Arc::new(Mutex::new(None));
     let symbol = Symbol {
-        lauf,
+        kern,
         befehle: tx,
         wecker: Arc::clone(&wecker),
         icon: ksni::Icon {

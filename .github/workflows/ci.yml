@@ -41,9 +41,17 @@ jobs:
             echo "::error::crosspoint-modell hängt an einer Plattform-Bibliothek (ADR 0012)"
             exit 1
           fi
-      # Solange das Fenster nur über den Kern ans Modell kommt, ist das die
-      # einzige Prüfung. Stufe 2 (Geräte hinter Traits) ergänzt hier
-      # `cargo tree -p crosspoint-fenster | grep -q pipewire` -> Fehler.
+      # ADR 0012, Stufe 2/3: das Fenster redet nur über die Naht mit dem Kern.
+      # Es darf deshalb keine Kern-Bibliothek im Baum haben - sonst wäre ein
+      # zweiter Kern (Windows/macOS) wieder Arbeit an der Oberfläche.
+      - name: Fenster kennt keinen Plattform-Kern
+        run: |
+          cargo tree -p crosspoint-fenster --edges normal --prefix none | sort -u
+          if cargo tree -p crosspoint-fenster --edges normal --prefix none \
+             | grep -qiE 'pipewire|libspa|jack-sys|sonora|rtrb|tiny_http'; then
+            echo "::error::crosspoint-fenster hängt an einer Kern-Bibliothek (ADR 0012)"
+            exit 1
+          fi
 
   test:
     name: Build und Tests

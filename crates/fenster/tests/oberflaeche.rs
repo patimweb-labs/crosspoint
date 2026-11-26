@@ -12,34 +12,25 @@ use std::sync::Arc;
 use crosspoint::engine::Params;
 use crosspoint::pegel::Pegelbank;
 use crosspoint_fenster::app::{Fenster, Umgebung};
-use crosspoint_fenster::geraete::{Bestand, Eintrag, Zuordner};
+use crosspoint_fenster::geraete::{Bestand, Eintrag};
 use crosspoint_fenster::logik::Kern;
 use crosspoint_fenster::modell::{Geraete, Oberflaeche};
+use crosspoint_fenster::ohne_kern::OhneKern;
 use crosspoint_fenster::thema::Thema;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 
-struct OhnePipeWire;
-impl Zuordner for OhnePipeWire {
-    fn streifen(&self, _: usize, _: Option<&str>) -> Result<(), String> {
-        Ok(())
-    }
-    fn bus(&self, _: &str, _: Option<&str>) -> Result<(), String> {
-        Ok(())
-    }
-    fn lautstaerke(&self, _: &str, _: Option<f32>, _: Option<bool>) -> Result<(), String> {
-        Ok(())
-    }
-    fn echo(&self, _: &[String]) -> Result<(), String> {
-        Ok(())
-    }
-}
-
+/// Ein Eintrag im Bestand. Ob er als Echo-Referenz taugt, entscheidet im
+/// Betrieb der Kern (`Eintrag::echo_kandidat`); hier bildet die Attrappe
+/// dieselbe Regel nach – Eigengeräte und Netzwerkziele fallen heraus.
 fn eintrag(name: &str, anzeige: &str) -> Eintrag {
+    let klein = name.to_ascii_lowercase();
+    let kein_kandidat = ["raop", "airplay", "crosspoint", "vban", "rtp"];
     Eintrag {
         name: name.into(),
         anzeige: anzeige.into(),
         fehlt: false,
+        echo_kandidat: !kein_kandidat.iter().any(|z| klein.contains(z)),
     }
 }
 
@@ -78,19 +69,14 @@ fn beispiel(thema: Thema) -> (Fenster, Arc<Params>) {
     for (b, w) in [(0, 0.3), (5, 0.25)] {
         pegel.schreibe_bus(b, w);
     }
+    let schnittstelle = Arc::new(OhneKern::neu(params.clone()));
     let kern = Kern {
         params: params.clone(),
-        tape: None,
-        makros: None,
         tape_ordner: PathBuf::from("~/Musik/crosspoint"),
         preset_ordner: std::env::temp_dir().join("cp-test-presets"),
-        zuordner: Box::new(OhnePipeWire),
-        vban: Some((
-            Arc::new(crosspoint::vban_io::VbanControl::new()),
-            Arc::new(crosspoint::vban_io::VbanRecvControl::new()),
-        )),
         sample_rate: 48_000,
         midi_pfad: std::env::temp_dir().join("cp-test-midi.cfg"),
+        schnittstelle,
     };
     let mut o = Oberflaeche {
         thema,
@@ -142,12 +128,7 @@ fn beispiel(thema: Thema) -> (Fenster, Arc<Params>) {
         busse_lautstaerke: vec![None; 5],
         ..Bestand::default()
     }));
-    let umgebung = Umgebung {
-        pegel: Some(pegel),
-        laeuft: Box::new(|| true),
-        geraete: None,
-        konfig_pfad: None,
-    };
+    let umgebung = Umgebung::default();
     (Fenster::neu(kern, o, umgebung), params)
 }
 

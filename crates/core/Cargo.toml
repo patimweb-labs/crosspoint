@@ -12,6 +12,8 @@ path = "src/lib.rs"
 # Das Modell (Params, Filter, Pegelbank, JSON-Form) liegt plattformfrei im
 # eigenen Crate (ADR 0012).
 crosspoint-modell = { path = "../modell" }
+# Die Naht zum Fenster (Traits, plattformneutral, ADR 0012).
+crosspoint-schnittstelle = { path = "../schnittstelle" }
 tape = { path = "../tape" }
 vban = { path = "../vban" }
 macros = { path = "../macros" }

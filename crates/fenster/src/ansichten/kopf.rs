@@ -184,7 +184,7 @@ pub fn tape(
                     );
                     bausteine::segmentleiste(ui, f, o.pegel.summe(8), 22);
                     let ziel = format!("Ziel: {}", k.tape_ordner.display());
-                    let status = k.tape.as_ref().map(|t| t.status()).unwrap_or_default();
+                    let status = k.band().map(|t| t.status()).unwrap_or_default();
                     let status = if status.is_empty() {
                         "idle".to_string()
                     } else {
