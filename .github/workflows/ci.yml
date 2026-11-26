@@ -24,6 +24,27 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  schichten:
+    name: Schichten
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # ADR 0012: `crosspoint-modell` ist die gemeinsame Schicht für alle
+      # Kerne. Es darf an nichts Plattformabhängiges hängen - kein PipeWire,
+      # kein JACK, kein HTTP-Server, keine Ereignisschleife.
+      - name: Modell bleibt plattformfrei
+        run: |
+          cargo tree -p crosspoint-modell --edges normal --prefix none | sort -u
+          if cargo tree -p crosspoint-modell --edges normal --prefix none \
+             | grep -qiE 'pipewire|libspa|jack|sonora|tiny_http|rtrb|ksni'; then
+            echo "::error::crosspoint-modell hängt an einer Plattform-Bibliothek (ADR 0012)"
+            exit 1
+          fi
+      # Solange das Fenster nur über den Kern ans Modell kommt, ist das die
+      # einzige Prüfung. Stufe 2 (Geräte hinter Traits) ergänzt hier
+      # `cargo tree -p crosspoint-fenster | grep -q pipewire` -> Fehler.
+
   test:
     name: Build und Tests
     runs-on: ubuntu-latest

@@ -31,4 +31,11 @@ path = "src/bin/crosspoint.rs"
 required-features = ["ui"]
 
 [workspace]
-members = ["crates/core", "crates/vban", "crates/tape", "crates/macros", "crates/fenster"]
+members = [
+    "crates/modell",
+    "crates/core",
+    "crates/vban",
+    "crates/tape",
+    "crates/macros",
+    "crates/fenster",
+]

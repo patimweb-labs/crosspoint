@@ -1,6 +1,6 @@
 # 0012 – Kern und Fenster trennen (Vorschlag)
 
-Stand: 2026-11-26 · **vorgeschlagen, nicht entschieden**
+Stand: 2026-11-26 · entschieden · **Stufe 1 umgesetzt**
 
 ## Kontext
 
@@ -60,11 +60,17 @@ sich später ebenfalls herausziehen, wenn der Windows-Kern ihn braucht).
 
 ### Stufen
 
-1. **`crates/modell` herausziehen.** `Params`, die Parameterstrukturen,
-   `bus_kind`, Namen, `FILTER_PARAMS`, `filter_get`, `to_json`. `engine.rs`
-   re-exportiert zunächst (`pub use`), damit der Diff klein bleibt und das
-   Fenster unverändert baut. Kein Verhalten ändert sich; Tests bleiben, wo sie
-   sind. **Nutzen:** ein Windows-Kern kann das Modell sofort mitbenutzen.
+1. **`crates/modell` herausziehen.** ✅ *umgesetzt*: `Params`, die
+   Parameterstrukturen, `bus_kind`, Namen, `FILTER_PARAMS`, `filter_get`,
+   `to_json`, die Pegelbank (`pegel.rs`), die JSON-Wertform (`json.rs`) und die
+   dB-Umrechnung. `engine.rs` und `lib.rs` re-exportieren (`pub use`), damit
+   Fenster, OSC, HTTP und Tests unverändert bauen. Kein Verhalten hat sich
+   geändert. Die CI hat dafür einen eigenen Job (`Schichten`): `crosspoint-modell`
+   darf an keiner Plattform-Bibliothek hängen.
+   **Nebenbei entfernt:** die toten Typen des Referenzprogramms
+   (`FilterType`, `EqCell`, `Compressor`, `Gate`, `Denoiser`, `Pitch`, `Strip`,
+   `Fader`, `Mixer`, `EngineConfig`, `EQ_CELLS`, `LAYERS`) – sie waren seit
+   ADR 0002 nirgends mehr in Gebrauch (0 Treffer außerhalb ihrer Definition).
 2. **Traits für Geräte und Ablage.** `geraete.rs` (PipeWire!) und `tray.rs`
    wandern als Implementierung in den Kern; das Fenster bekommt `dyn Geraete`
    und `dyn Ablage`. Das ist der größte Brocken, weil die Geräteliste heute

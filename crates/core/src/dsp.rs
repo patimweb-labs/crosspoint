@@ -7,19 +7,9 @@
 
 use std::f32::consts::PI;
 
-#[inline]
-pub fn db_to_lin(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
-}
-
-#[inline]
-pub fn lin_to_db(v: f32) -> f32 {
-    if v <= 1e-7 {
-        -140.0
-    } else {
-        20.0 * v.log10()
-    }
-}
+// Die Umrechnung steht im Modell (ADR 0012), weil auch der Zustand sie braucht
+// (Pegel als dB im JSON); hier wird sie nur wieder angeboten.
+pub use crosspoint_modell::einheiten::{db_to_lin, lin_to_db};
 
 #[inline]
 pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {

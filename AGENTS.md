@@ -44,8 +44,10 @@ Pult-Modell gewohnt sind, aber kein Windows mehr starten wollen.
 ## 3. Struktur
 
 ```
-crates/core      Parametermodell, DSP, Engine (JACK-Client), Adapter
-                 (PipeWire, HTTP, OSC, VBAN, Geräte)          → Unit-/Integrationstests
+crates/modell    Parametermodell (Params, Filterkette, Pegelbank, JSON-Form),
+                 plattformfrei: nur std + serde (ADR 0012)   → Unit-Tests
+crates/core      Linux-Kern: DSP, Engine (JACK-Client), Adapter (PipeWire, HTTP,
+                 OSC, VBAN, Geräte), Ablage                   → Unit-/Integrationstests
 crates/fenster   egui-Oberfläche: modell (Summentypen), logik (Aktionen),
                  ansichten (render), bausteine (Fader, Pegel, Schalter),
                  thema (drei Themes aus tokens/*.json)        → Oberflächentests
@@ -59,7 +61,7 @@ packaging/       Linux-Pakete (tar.gz, AppImage), Flatpak-Quellen
 docs/            architektur.md, datenfluss.md, adr/, bilder/
 ```
 
-Richtung der Abhängigkeiten: `vban · tape · macros ← core ← fenster ← src/`.
+Richtung der Abhängigkeiten: `vban · tape · macros ← modell ← core ← fenster ← src/`.
 Nie zurück. `fenster` kennt keine PipeWire-Aufrufe und kein JSON, nur `Params`
 (Atomics), den Befehlskanal und die Pegel; `core` kennt kein egui.
 

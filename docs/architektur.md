@@ -35,6 +35,14 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
    Fernbedienung/Tests       MIDI über MIDIMonster   Netzwerk-Audio
 ```
 
+Schichten (ADR 0012): das **Modell** (`crates/modell`: `Params`, Filterkette,
+Pegelbank, JSON-Form) hängt an nichts außer `std` und `serde`; der **Kern**
+(`crates/core`) bringt DSP und die Plattform (PipeWire/JACK, HTTP, OSC, VBAN,
+Ablage); das **Fenster** (`crates/fenster`) kennt Modell und eine schmale
+Schnittstelle. Ein Kern für Windows oder macOS braucht damit nur `modell` und
+die Traits, nicht PipeWire. Die CI prüft, dass `crosspoint-modell` plattformfrei
+bleibt.
+
 Signalweg (ADR 0002/0006/0011): Eingänge und Hardware-Busse tragen das
 Rohsignal, solange kein Filter eingeschaltet ist. Die Filterkette sitzt an jedem
 Kanalzug (vor dem Fader und damit vor dem Routing) und an den virtuellen Bussen

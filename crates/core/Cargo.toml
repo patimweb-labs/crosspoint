@@ -9,6 +9,9 @@ name = "crosspoint"
 path = "src/lib.rs"
 
 [dependencies]
+# Das Modell (Params, Filter, Pegelbank, JSON-Form) liegt plattformfrei im
+# eigenen Crate (ADR 0012).
+crosspoint-modell = { path = "../modell" }
 tape = { path = "../tape" }
 vban = { path = "../vban" }
 macros = { path = "../macros" }
