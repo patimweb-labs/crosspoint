@@ -853,6 +853,7 @@ dependencies = [
 name = "crosspoint-core"
 version = "2.2.0"
 dependencies = [
+ "crosspoint-modell",
  "hound",
  "jack",
  "macros",
@@ -879,6 +880,14 @@ dependencies = [
  "egui_kittest",
  "ksni",
  "macros",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "crosspoint-modell"
+version = "2.2.0"
+dependencies = [
  "serde",
  "serde_json",
 ]

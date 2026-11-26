@@ -1,0 +1,13 @@
+[package]
+name = "crosspoint-modell"
+version = "2.2.0"
+edition = "2021"
+description = "Crosspoint: Parametermodell (Params, Filterkette, Pegelbank) ohne Plattform – Grundlage für Kerne auf jeder Plattform (ADR 0012)"
+
+[lib]
+name = "crosspoint_modell"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

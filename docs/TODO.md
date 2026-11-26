@@ -50,10 +50,13 @@ Geprüft, mit Nachweis – keine Aufgaben, sondern Feststellungen:
 
 Offen:
 
-- [ ] **Kern und Fenster trennen** (ADR 0012, Vorschlag): Modell-Crate,
-      Traits für Geräte/Ablage/Betrieb. Ziel: `crates/fenster` hat kein
-      `pipewire`/`jack` mehr im Baum – prüfbar mit
-      `cargo tree -p crosspoint-fenster`.
+- [x] **Kern und Fenster trennen, Stufe 1** (ADR 0012): `crates/modell` mit
+      `Params`, Filterkette, Pegelbank, JSON-Form und dB-Rechnung; der Kern
+      re-exportiert, das Fenster baut unverändert. CI-Job `Schichten` wacht
+      darüber. Dabei die toten Typen des Referenzprogramms entfernt.
+- [ ] **Kern und Fenster trennen, Stufe 2**: Traits für Geräte und Ablage,
+      `geraete.rs`/`tray.rs` als PipeWire-Implementierung in den Kern. Ziel:
+      `cargo tree -p crosspoint-fenster` enthält kein `pipewire` mehr.
 - [ ] **Web-Fernbedienung an die Kette anpassen**: `web/index.html` zeigt am
       Kanalzug noch EQ/COMP/GATE/NR, die Engine lehnt sie ab. Die Kette am Kanal
       (`/api/set` mit `ziel:strip`, `param:lc` …) ist dort noch nicht bedienbar.
