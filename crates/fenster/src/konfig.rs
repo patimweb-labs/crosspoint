@@ -60,7 +60,7 @@ impl Datei {
     /// Werte ins Modell übernehmen (geklemmt).
     pub fn anwenden(&self, o: &mut Oberflaeche) {
         o.thema = Thema::aus_name(&self.thema);
-        o.master_bus = self.master_bus.min(crosspoint::BUSES - 1);
+        o.master_bus = self.master_bus.min(crosspoint_modell::BUSES - 1);
         o.makros_eingeklappt = self.makros_eingeklappt;
         o.makro_anzahl = crate::logik::makro_anzahl_pruefen(self.makro_anzahl);
     }
@@ -115,7 +115,7 @@ mod tests {
             ..Datei::default()
         }
         .anwenden(&mut o);
-        assert_eq!(o.master_bus, crosspoint::BUSES - 1);
+        assert_eq!(o.master_bus, crosspoint_modell::BUSES - 1);
         assert_eq!(o.makro_anzahl, 5);
     }
 }

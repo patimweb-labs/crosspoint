@@ -1,6 +1,6 @@
 # 0012 – Kern und Fenster trennen (Vorschlag)
 
-Stand: 2026-11-26 · entschieden · **Stufe 1 umgesetzt**
+Stand: 2026-11-26 · entschieden · **Stufen 1–3 umgesetzt**
 
 ## Kontext
 
@@ -71,13 +71,32 @@ sich später ebenfalls herausziehen, wenn der Windows-Kern ihn braucht).
    (`FilterType`, `EqCell`, `Compressor`, `Gate`, `Denoiser`, `Pitch`, `Strip`,
    `Fader`, `Mixer`, `EngineConfig`, `EQ_CELLS`, `LAYERS`) – sie waren seit
    ADR 0002 nirgends mehr in Gebrauch (0 Treffer außerhalb ihrer Definition).
-2. **Traits für Geräte und Ablage.** `geraete.rs` (PipeWire!) und `tray.rs`
-   wandern als Implementierung in den Kern; das Fenster bekommt `dyn Geraete`
-   und `dyn Ablage`. Das ist der größte Brocken, weil die Geräteliste heute
-   mit `pw::Node` arbeitet.
-3. **Band, Netz, Makros, Betrieb.** Die Control-Handles sind schon gekapselt
-   (`Arc<TapeControl>`, `Arc<VbanControl>` …); hier reicht ein Trait je
-   Bereich und ein `Betrieb` für `lauf`/`fenster_gewuenscht`.
+2. **Traits für Geräte und Ablage.** ✅ *umgesetzt*: `crates/schnittstelle`
+   hält `Eintrag`, `Bestand`, `Lautstaerke`, `Ziel`, `Zuordner` und den Trait
+   `Geraete`; die PipeWire-Seite (`bestand_aus`, Zuordnen, Echo, Lautstärke)
+   steht als `LinuxGeraete` in `crates/core/src/kern.rs`. Presets und Autostart
+   gehen über `dyn Ablage` (`LinuxAblage`).
+3. **Band, Netz, Makros, Betrieb.** ✅ *umgesetzt*: `Band` (Aufnahme/Status),
+   `Makros` (Druck), `Netz` (VBAN-Stand/Anwenden), `Betrieb` (läuft, beenden,
+   Fensterwunsch, Echo-Auswahl) und `MidiCc`. `Kern` im Fenster hält nur noch
+   `Arc<dyn Schnittstelle>` neben dem Modell.
+   Statt `pw::Lautstaerke` wandert die Echo-Eignung als Feld
+   (`Eintrag::echo_kandidat`) mit: der Kern kennt den Graphen, das Fenster
+   filtert nur noch.
+
+**Damit ist das Ziel erreicht:** `cargo tree -p crosspoint-fenster --edges
+normal` enthält kein `pipewire`, `libspa`, `jack-sys`, `sonora`, `rtrb` oder
+`tiny_http` mehr – der CI-Job `Schichten` bricht ab, wenn eines zurückkommt.
+Die Engine wird jetzt in `src/bin/crosspoint.rs` gebaut (Kompositionswurzel);
+das Fenster bekommt sie als `Arc<dyn Schnittstelle>`.
+
+**Was noch offen ist** (eigene Stufe, siehe `docs/TODO.md`):
+
+* das **Tray** (`ksni`, StatusNotifierItem) hängt noch im Fenster-Crate. Unter
+  Windows/macOS gibt es das nicht; es gehört hinter einen Trait im Kern oder
+  in ein eigenes, plattformabhängiges Crate.
+* `ebenso` das Icon des Tray und die `.desktop`-Pfade im Autostart – der zweite
+  Kern bringt seine eigenen mit.
 4. *(später)* `dsp.rs` aus dem Kern lösen, falls der Windows-Kern denselben DSP
    verwenden soll statt eines eigenen.
 

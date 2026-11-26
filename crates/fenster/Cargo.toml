@@ -9,9 +9,11 @@ name = "crosspoint_fenster"
 path = "src/lib.rs"
 
 [dependencies]
-# Der Fader schreibt in dieselben Atome, die der Audio-Thread liest - kein
-# HTTP, kein JSON (wie zuvor die GTK-Oberflaeche).
-crosspoint = { package = "crosspoint-core", path = "../core" }
+# Das Fenster kennt das Modell und die Naht - keinen Kern (ADR 0012).
+# Der Fader schreibt in dieselben Atome, die der Audio-Thread liest: kein HTTP,
+# kein JSON. Welcher Kern dahintersteht, entscheidet das Binary (`src/`).
+crosspoint-modell = { path = "../modell" }
+crosspoint-schnittstelle = { path = "../schnittstelle" }
 macros = { path = "../macros" }
 # egui wie in sprechwerk (ADR 0013 dort): Renderer glow, AccessKit an,
 # Wayland und X11 werden zur Laufzeit geladen - keine -devel-Pakete.
@@ -29,6 +31,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
+# Nur für Tests: dort wird der echte Kern für Presets und VBAN gebraucht.
+crosspoint = { package = "crosspoint-core", path = "../core" }
 egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"] }
 
 [build-dependencies]

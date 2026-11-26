@@ -16,6 +16,8 @@ pub mod konfig;
 pub mod logik;
 pub mod midimonster;
 pub mod modell;
+/// Ein Kern ohne Plattform für Oberflächentests (`cfg(test)`-Ersatz, ADR 0012).
+pub mod ohne_kern;
 pub mod state;
 pub mod thema;
 pub mod tray;

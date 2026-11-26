@@ -5,7 +5,7 @@
 //! auf A1). Ein Klick auf eine Zuordnungs-Taste setzt den Pegel auf 1.0 oder
 //! 0.0 - dasselbe Feld, das die Routing-Matrix im Audio-Thread liest.
 
-use crosspoint::engine::Params;
+use crosspoint_modell::params::Params;
 
 /// Sendepegel, der als "zugeordnet" gilt.
 pub const SEND_AN: f32 = 1.0;

@@ -16,6 +16,11 @@ use crate::einheiten::lin_to_db;
 use crate::json::Value;
 use crate::{bus_kind, BusKind, BUSES, BUS_NAMES, STRIPS, STRIP_NAMES};
 
+/// Erster virtueller Bus (B1). A1–A5 sind Hardware-Ausgänge.
+pub const ERSTER_VIRTUELLER: usize = 5;
+/// Anzahl der virtuellen Busse (B1..B3).
+pub const VIRTUELLE: usize = BUSES - ERSTER_VIRTUELLER;
+
 /// Ein f32 in einem Atom (die Steuerung schreibt, der Audio-Thread liest).
 #[inline]
 pub fn fget(a: &AtomicU32) -> f32 {

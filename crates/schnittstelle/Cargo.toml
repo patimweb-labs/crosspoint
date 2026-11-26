@@ -1,0 +1,13 @@
+[package]
+name = "crosspoint-schnittstelle"
+version = "2.2.0"
+edition = "2021"
+description = "Crosspoint: Naht zwischen Fenster und Kern (Geräte, Ablage, Betrieb, Bedienhände) – ADR 0012"
+
+[lib]
+name = "crosspoint_schnittstelle"
+path = "src/lib.rs"
+
+[dependencies]
+# Nur das Modell: keine Plattform, keine Dateien, kein Netz.
+crosspoint-modell = { path = "../modell" }

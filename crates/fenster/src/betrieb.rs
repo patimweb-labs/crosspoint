@@ -1,10 +1,12 @@
 //! Ein Prozess: Engine und Fenster zusammen.
 //!
-//! 1. Engine starten (`crosspoint::lauf::starte`) – eigene Threads für Audio,
-//!    HTTP, OSC, Tape, VBAN, Makros, Autosave.
-//! 2. Fenster (eframe) im Hauptthread auf denselben Handles.
-//! 3. Beenden in beide Richtungen: Fenster zu → `Lauf::abschalten` (mit Tray:
-//!    nur verbergen); Engine zu (Signal, Leerlauf) → Fenster zu.
+//! Den **Kern** baut, wer das Programm startet (`src/bin/crosspoint.rs`); er
+//! kommt hier als [`Schnittstelle`] an (ADR 0012). Das Fenster kennt danach
+//! kein PipeWire und keinen Kernel-Client mehr.
+//!
+//! 1. Fenster (eframe) im Hauptthread auf den Handles des Kerns.
+//! 2. Beenden in beide Richtungen: Fenster zu → [`Betrieb::beenden`] (mit Tray:
+//!    nur verbergen); Kern zu (Signal, Leerlauf) → Fenster zu.
 //!
 //! Scheitert der Audio-Client, zeigt das Fenster statt des Pults die
 //! Fehlermeldung – nie ein Pult, das nicht rechnet.
@@ -14,11 +16,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use crosspoint_schnittstelle::Schnittstelle;
+
 use crate::app::{Fenster, Umgebung};
 use crate::logik::Kern;
 use crate::modell::{Dialog, Oberflaeche};
 use crate::thema::{self, Thema};
-use crate::{geraete, konfig, tray};
+use crate::{konfig, tray};
 
 /// Kommandozeile (bewusst ohne zusätzliche Crate).
 #[derive(Clone, Debug)]
@@ -149,30 +153,17 @@ pub fn danach(
 /// und Symbol laufen weiter, „Fenster zeigen“ öffnet ein neues. So geht es
 /// unter Wayland und X11 gleich – ein Fenster *verstecken* kann winit unter
 /// Wayland nicht.
-pub fn starten(app_id: &str, version: &str, a: Args) {
+pub fn starten(app_id: &str, version: &str, a: Args, kern: Arc<dyn Schnittstelle>) {
     // Läuft schon eine Instanz, zeigt sie ihr Fenster – eine zweite Engine
     // gäbe es sonst doppelt (gleicher Port, gleiche virtuelle Geräte).
     if laufende_instanz_wecken(&a.listen, a.minimiert) {
         eprintln!("crosspoint: läuft schon – Fenster der laufenden Instanz");
         return;
     }
-    let mut lk = crosspoint::lauf::Konfig::vorgabe().dauerbetrieb();
-    lk.client_name = a.client.clone();
-    lk.listen = a.listen.clone();
-    let lauf = match crosspoint::lauf::starte(lk) {
-        Ok(l) => Arc::new(l),
-        Err(e) => {
-            eprintln!("crosspoint: {e}");
-            let thema = a.theme.as_deref().map(Thema::aus_name).unwrap_or_default();
-            fenster_laufen(app_id, &a, move |_| Box::new(Fehler { text: e, thema }));
-            return;
-        }
-    };
-
     // Tray nur beim minimierten Start (wie bisher). Nimmt niemand das Symbol
     // an, kommt das Fenster doch – sonst wäre das Pult unerreichbar.
     let tray = if a.minimiert {
-        match tray::starten(Arc::clone(&lauf)) {
+        match tray::starten(Arc::clone(&kern)) {
             Ok(t) => Some(Arc::new(t)),
             Err(e) => {
                 eprintln!("crosspoint: kein Tray ({e}) – Fenster wird gezeigt");
@@ -194,7 +185,7 @@ pub fn starten(app_id: &str, version: &str, a: Args) {
                 ..Oberflaeche::default()
             };
             konfig::Datei::laden(&konfig::pfad()).anwenden(&mut o);
-            o.echo_geraete = crosspoint::echo::auswahl();
+            o.echo_geraete = kern.betrieb().echo_auswahl();
             if let Some(t) = a.theme.as_deref() {
                 o.thema = Thema::aus_name(t);
             }
@@ -213,26 +204,36 @@ pub fn starten(app_id: &str, version: &str, a: Args) {
             // wieder geöffnetes) – so lässt sich der Tray-Weg prüfen.
             let schliessen = a.schliessen_nach;
             erstes = false;
-            let (l, t) = (Arc::clone(&lauf), tray.clone());
+            let (l, t) = (Arc::clone(&kern), tray.clone());
             fenster_laufen(app_id, &a, move |ctx| {
                 Box::new(Pult::neu(l, o, t, schliessen, start, ctx))
             });
         }
         let weiter = danach(
             tray.is_some(),
-            || lauf.beendet(),
+            || !kern.betrieb().laeuft(),
             || {
                 tray.as_ref()
                     .and_then(|t| t.warte(Duration::from_millis(200)))
             },
-            crosspoint::http::fenster_gewuenscht,
+            || kern.betrieb().fenster_gewuenscht(),
         );
         match weiter {
             Danach::Zeigen => zeigen = true,
             Danach::Ende => break,
         }
     }
-    lauf.abschalten();
+    kern.betrieb().beenden();
+}
+
+/// Zeigt das Fenster mit einer Fehlermeldung statt des Pults – wenn der Kern
+/// nicht startet (kein Audio-Client). Kehrt zurück, wenn das Fenster zu ist.
+pub fn ohne_engine(a: &Args, text: &str) {
+    let thema = a.theme.as_deref().map(Thema::aus_name).unwrap_or_default();
+    let text = text.to_string();
+    fenster_laufen("de.weppelmann.Crosspoint", a, move |_| {
+        Box::new(Fehler { text, thema })
+    });
 }
 
 /// Fragt die Steuer-API unter `adresse` an. Antwortet eine Instanz, bekommt
@@ -297,7 +298,7 @@ fn fenster_laufen(
 /// Das Pult mit Lebenszyklus (Tray-Befehle, Engine-Ende, Selbsttest).
 struct Pult {
     fenster: Fenster,
-    lauf: Arc<crosspoint::lauf::Lauf>,
+    kern: Arc<dyn Schnittstelle>,
     tray: Option<Arc<tray::Tray>>,
     schliessen_um: Option<Instant>,
     ende_gemeldet: bool,
@@ -305,56 +306,36 @@ struct Pult {
 
 impl Pult {
     fn neu(
-        lauf: Arc<crosspoint::lauf::Lauf>,
+        kern: Arc<dyn Schnittstelle>,
         o: Oberflaeche,
         tray: Option<Arc<tray::Tray>>,
         schliessen_nach: Option<f64>,
         start: Option<Dialog>,
         ctx: &egui::Context,
     ) -> Pult {
-        let kern = Kern {
-            params: lauf.params.clone(),
-            tape: Some(lauf.tape.clone()),
-            makros: Some(lauf.makros.clone()),
-            tape_ordner: lauf.tape_ordner.clone(),
-            preset_ordner: konfig::preset_ordner(),
-            zuordner: Box::new(geraete::KernZuordner),
-            vban: Some((lauf.vban.clone(), lauf.vban_recv.clone())),
-            sample_rate: lauf.sample_rate,
-            midi_pfad: crate::midimonster::pfad(),
-        };
-        let laeuft = {
-            let pegel = lauf.pegel.clone();
-            let stand = std::sync::Mutex::new((0u64, Instant::now()));
-            Box::new(move || {
-                // Läuft heißt: der Audio-Callback zählt Blöcke.
-                let b = pegel.bloecke();
-                let Ok(mut s) = stand.lock() else {
-                    return false;
-                };
-                if b != s.0 {
-                    *s = (b, Instant::now());
-                }
-                s.1.elapsed() < Duration::from_secs(1)
-            }) as Box<dyn Fn() -> bool>
+        let kern_fenster = Kern {
+            params: Arc::clone(kern.params()),
+            tape_ordner: kern.tape_ordner(),
+            preset_ordner: kern.preset_ordner(),
+            sample_rate: kern.sample_rate(),
+            midi_pfad: kern.midi_pfad(),
+            schnittstelle: Arc::clone(&kern),
         };
         let umgebung = Umgebung {
-            pegel: Some(lauf.pegel.clone()),
-            laeuft,
-            geraete: Some(geraete::laden),
+            geraete_lesen: true,
             konfig_pfad: Some(konfig::pfad()),
         };
         if let Some(t) = &tray {
             t.wecker(Some(ctx.clone()));
         }
-        let mut fenster = Fenster::neu(kern, o, umgebung);
+        let mut fenster = Fenster::neu(kern_fenster, o, umgebung);
         if start.is_some() {
             fenster.ausfuehren(crate::modell::Aktion::Dialog(start));
         }
         Pult {
             ende_gemeldet: false,
             fenster,
-            lauf,
+            kern,
             tray,
             schliessen_um: schliessen_nach
                 .filter(|s| *s > 0.0)
@@ -375,7 +356,7 @@ impl eframe::App for Pult {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Engine zu → Fenster zu (mit Grund im Protokoll).
-        if self.lauf.beendet() {
+        if !self.kern.betrieb().laeuft() {
             if !self.ende_gemeldet {
                 self.ende_gemeldet = true;
                 eprintln!("crosspoint: Engine beendet - Fenster schliesst");
@@ -387,7 +368,7 @@ impl eframe::App for Pult {
             self.schliessen_um = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        let mut nach_vorn = crosspoint::http::fenster_gewuenscht();
+        let mut nach_vorn = self.kern.betrieb().fenster_gewuenscht();
         if let Some(t) = &self.tray {
             while let Some(b) = t.warte(Duration::ZERO) {
                 match b {

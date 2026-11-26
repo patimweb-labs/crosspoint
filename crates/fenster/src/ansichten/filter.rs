@@ -17,8 +17,8 @@
 
 use egui::{Label, Layout, Pos2, Rect, RichText, Sense, Ui, UiBuilder, Vec2, WidgetInfo};
 
-use crosspoint::engine::NR_STUFEN;
-use crosspoint::BUS_NAMES;
+use crosspoint_modell::params::NR_STUFEN;
+use crosspoint_modell::BUS_NAMES;
 
 use crate::bausteine::{self, Art};
 use crate::geraete::{self, Eintrag};
@@ -1229,7 +1229,7 @@ fn ptt(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
 // ------------------------------------------------------------ Bestand ----
 
 /// Ausgabegeräte für die ECHO-Auswahl: nur lokale Sinks, die im Raum zu hören
-/// sind ([`geraete::ist_echo_kandidat`]), dazu gemerkte, die gerade fehlen.
+/// sind (`Eintrag::echo_kandidat`, vom Kern gesetzt), dazu gemerkte, die fehlen.
 ///
 /// Was schon gewählt ist, bleibt sichtbar – auch wenn es kein Kandidat mehr
 /// ist (eine ältere `echo.json` kann so etwas enthalten). Sonst ließe sich
@@ -1244,7 +1244,7 @@ fn ausgabegeraete(o: &Oberflaeche) -> Vec<Eintrag> {
         .map(|b| {
             b.senken
                 .iter()
-                .filter(|e| geraete::ist_echo_kandidat(&e.name) || gewaehlt(&e.name))
+                .filter(|e| e.echo_kandidat || gewaehlt(&e.name))
                 .cloned()
                 .collect()
         })
@@ -1257,6 +1257,7 @@ fn ausgabegeraete(o: &Oberflaeche) -> Vec<Eintrag> {
             name: name.clone(),
             anzeige: geraete::kurzname(name),
             fehlt: true,
+            echo_kandidat: true,
         });
     }
     liste

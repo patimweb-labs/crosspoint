@@ -36,12 +36,17 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
 ```
 
 Schichten (ADR 0012): das **Modell** (`crates/modell`: `Params`, Filterkette,
-Pegelbank, JSON-Form) hängt an nichts außer `std` und `serde`; der **Kern**
-(`crates/core`) bringt DSP und die Plattform (PipeWire/JACK, HTTP, OSC, VBAN,
-Ablage); das **Fenster** (`crates/fenster`) kennt Modell und eine schmale
-Schnittstelle. Ein Kern für Windows oder macOS braucht damit nur `modell` und
-die Traits, nicht PipeWire. Die CI prüft, dass `crosspoint-modell` plattformfrei
-bleibt.
+Pegelbank, JSON-Form) hängt an nichts außer `std` und `serde`. Die **Naht**
+(`crates/schnittstelle`) beschreibt, was das Fenster vom Kern verlangt:
+`Geraete`, `Ablage`, `Betrieb`, `Band`, `Makros`, `Netz`, `MidiCc` – ebenfalls
+plattformfrei. Der **Kern** (`crates/core`) bringt DSP und die Plattform
+(PipeWire/JACK, HTTP, OSC, VBAN) und implementiert die Naht in `kern.rs` über
+dem laufenden `Lauf`. Das **Fenster** (`crates/fenster`) hängt nur an Modell und
+Naht; welcher Kern darunter liegt, entscheidet `src/` (Kompositionswurzel).
+
+Die CI prüft beides: `crosspoint-modell` bleibt plattformfrei, und
+`crosspoint-fenster` hat keine Kern-Bibliothek (pipewire, jack, sonora, rtrb,
+tiny_http) im Baum.
 
 Signalweg (ADR 0002/0006/0011): Eingänge und Hardware-Busse tragen das
 Rohsignal, solange kein Filter eingeschaltet ist. Die Filterkette sitzt an jedem

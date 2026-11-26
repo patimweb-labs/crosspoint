@@ -18,15 +18,26 @@ pub const TAKT: Duration = Duration::from_millis(33);
 /// Der Gerätebestand wird so oft neu gelesen (PipeWire-Graph).
 pub const GERAETE_TAKT: Duration = Duration::from_secs(5);
 
-/// Was das Fenster vom laufenden Prozess außer dem Kern braucht.
+/// Was das Fenster außer dem Kern braucht (ADR 0012).
+///
+/// Alles Übrige – Pegel, Geräte, Lauf – kommt über
+/// [`crosspoint_schnittstelle::Schnittstelle`] aus dem Kern.
 pub struct Umgebung {
-    pub pegel: Option<Arc<crosspoint::pegel::Pegelbank>>,
-    /// Läuft die Engine? (`None`: Test ohne Engine)
-    pub laeuft: Box<dyn Fn() -> bool>,
-    /// Gerätebestand lesen (blockiert; läuft im Thread). `None`: nie lesen.
-    pub geraete: Option<fn() -> Bestand>,
+    /// Gerätebestand lesen? (Tests: nein – kein Thread, kein Graph)
+    pub geraete_lesen: bool,
     /// Fenstereinstellungen schreiben (`None` in Tests).
     pub konfig_pfad: Option<std::path::PathBuf>,
+}
+
+impl Default for Umgebung {
+    /// Vorgabe für Prüfstände: kein Thread, kein Graph. Der Betrieb setzt
+    /// `geraete_lesen` ausdrücklich auf `true` (siehe `betrieb::Pult::neu`).
+    fn default() -> Umgebung {
+        Umgebung {
+            geraete_lesen: false,
+            konfig_pfad: None,
+        }
+    }
 }
 
 pub struct Fenster {
@@ -65,9 +76,9 @@ impl Fenster {
                 self.o.geraete = Geraete::Fertig(Box::new(b));
             }
         }
-        let Some(lesen) = self.umgebung.geraete else {
+        if !self.umgebung.geraete_lesen {
             return;
-        };
+        }
         let faellig = matches!(self.o.geraete, Geraete::Laedt)
             || self
                 .geraete_zuletzt
@@ -79,8 +90,9 @@ impl Fenster {
             self.geraete_zuletzt = Some(jetzt);
             let tx = self.geraete_tx.clone();
             let ctx = ctx.clone();
+            let kern = Arc::clone(&self.kern.schnittstelle);
             std::thread::spawn(move || {
-                let _ = tx.send(lesen());
+                let _ = tx.send(kern.geraete().bestand());
                 ctx.request_repaint();
             });
         }
@@ -99,14 +111,15 @@ impl Fenster {
             self.angewandt = Some(self.o.thema);
         }
         let jetzt = Instant::now();
-        if let Some(bank) = &self.umgebung.pegel {
+        {
+            let bank = self.kern.schnittstelle.pegel();
             let roh = logik::pegel_lesen(bank, self.o.master_bus);
             logik::pegel_ticken(&mut self.o.pegel, &roh);
         }
         logik::takt(&mut self.o, &self.kern, jetzt);
         self.geraete(&ctx, jetzt);
 
-        let laeuft = (self.umgebung.laeuft)();
+        let laeuft = self.kern.betrieb().laeuft();
         let aktionen = crate::ansichten::pult(ui, &mut self.o, &self.kern, laeuft, jetzt);
         handzeiger(&ctx);
         let mut speichern = false;

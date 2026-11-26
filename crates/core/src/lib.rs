@@ -27,6 +27,8 @@ pub mod engine;
 pub mod http;
 pub mod inputs;
 pub mod jack;
+/// Der Linux-Kern als Schnittstelle fürs Fenster (ADR 0012).
+pub mod kern;
 /// Start des ganzen Prozesses (Engine, Adapter, Aufpasser) an einer Stelle.
 pub mod lauf;
 pub mod macros_io;
