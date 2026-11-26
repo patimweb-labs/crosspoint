@@ -134,7 +134,8 @@ fn inhalt(
         None
     };
     let schalter_y = y;
-    let lampen_y = schalter_y + 2.0 * (logik::ZUG_REIHE + pad);
+    let lampen_y = schalter_y
+        + logik::schalterreihen(filter.is_some(), ist_kanal) as f32 * (logik::ZUG_REIHE + pad);
 
     if let (Some(py), Some(pan)) = (pan_y, werte.pan) {
         let rp = Rect::from_min_size(
@@ -200,13 +201,17 @@ fn inhalt(
             if knopf(ui, platz(0, 1, 2), "S", solo, Art::Solo).clicked() {
                 a.push(setzen(ziel, "solo", schalter_wert(!solo)));
             }
-            // Seit ADR 0011 hat auch der Kanalzug eine Filterkette: FILTER links,
-            // MONO rechts daneben, darunter die Lämpchenreihe.
+            // Seit ADR 0011 hat auch der Kanalzug eine Filterkette. Der Knopf
+            // steht auf einer eigenen Reihe: „FILTER“ ist 54 px breit und passt
+            // in keinen halben Zug; MONO bleibt wie bisher volle Breite.
             if let Some(fw) = filter {
+                if knopf(ui, platz(1, 0, 1), "MONO", werte.mono, Art::Tief).clicked() {
+                    a.push(setzen(ziel, "mono", schalter_wert(!werte.mono)));
+                }
                 filter_knopf(
                     ui,
                     f,
-                    platz(1, 0, 2),
+                    platz(2, 0, 1),
                     Rect::from_min_size(Pos2::new(links, lampen_y), Vec2::new(breite, LAEMPCHEN)),
                     ziel,
                     o,
@@ -214,9 +219,6 @@ fn inhalt(
                     fw,
                     a,
                 );
-                if knopf(ui, platz(1, 1, 2), "MONO", werte.mono, Art::Tief).clicked() {
-                    a.push(setzen(ziel, "mono", schalter_wert(!werte.mono)));
-                }
             } else if knopf(ui, platz(1, 0, 1), "MONO", werte.mono, Art::Tief).clicked() {
                 a.push(setzen(ziel, "mono", schalter_wert(!werte.mono)));
             }

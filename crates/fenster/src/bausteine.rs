@@ -126,6 +126,35 @@ fn titelleiste(ui: &mut Ui, f: &Farben, titel: &str, schliessen: &mut bool) {
     ui.separator();
 }
 
+/// Wie ein Schalter beschriftet wird, wenn Platz knapp ist.
+///
+/// Der FILTER-Knopf trägt Bild und Wort. Im schmalsten Kanalzug (100 px Zug,
+/// also 44 px Knopf) passt beides nicht; dann fällt zuerst das Bild weg, und
+/// wenn auch das Wort nicht mehr passt, bleibt das Bild allein stehen. Der
+/// Name bleibt in beiden Fällen der zugängliche Name und der Tooltip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Beschriftung {
+    IconUndWort,
+    NurWort,
+    NurIcon,
+    /// Nicht einmal das Bild passt (kommt bei den Maßen des Pults nicht vor).
+    Nichts,
+}
+
+/// Was in `platz` passt: `wort` ist die gemessene Textbreite, `kante` die
+/// Kantenlänge des Bildes, `luecke` der Abstand dazwischen.
+pub fn beschriftung(platz: f32, wort: f32, kante: f32, luecke: f32) -> Beschriftung {
+    if kante + luecke + wort <= platz {
+        Beschriftung::IconUndWort
+    } else if wort <= platz {
+        Beschriftung::NurWort
+    } else if kante <= platz {
+        Beschriftung::NurIcon
+    } else {
+        Beschriftung::Nichts
+    }
+}
+
 /// Kürzt einen Text so, dass er einzeilig in `breite` passt (mit „…“).
 /// Gekürzt wird nur die Anzeige; der volle Text gehört in den Tooltip.
 /// `font` ist die Schrift, in der der Text wirklich gezeichnet wird – sonst
@@ -773,23 +802,49 @@ fn schalter_gross(
             let galley = p.layout_no_wrap(text.to_string(), font, schrift);
             let kante = schriftgroesse * 0.8;
             let luecke = thema::SPACE_1;
-            let gesamt = kante + luecke + galley.size().x;
-            let links = rect.center().x - gesamt * 0.5;
-            icon.bild(kante, schrift).paint_at(
-                ui,
-                Rect::from_center_size(
-                    Pos2::new(links + kante * 0.5, rect.center().y),
-                    Vec2::splat(kante),
-                ),
-            );
-            p.galley(
-                Pos2::new(
-                    links + kante + luecke,
-                    rect.center().y - galley.size().y * 0.5,
-                ),
-                galley,
-                schrift,
-            );
+            let platz = rect.width() - 2.0 * thema::SPACE_1;
+            match beschriftung(platz, galley.size().x, kante, luecke) {
+                // Beides: Icon und Wort mittig zusammen.
+                Beschriftung::IconUndWort => {
+                    let gesamt = kante + luecke + galley.size().x;
+                    let links = rect.center().x - gesamt * 0.5;
+                    icon.bild(kante, schrift).paint_at(
+                        ui,
+                        Rect::from_center_size(
+                            Pos2::new(links + kante * 0.5, rect.center().y),
+                            Vec2::splat(kante),
+                        ),
+                    );
+                    p.galley(
+                        Pos2::new(
+                            links + kante + luecke,
+                            rect.center().y - galley.size().y * 0.5,
+                        ),
+                        galley,
+                        schrift,
+                    );
+                }
+                // Das Wort allein (schmaler Kanalzug: „FILTER“ ohne Bild).
+                Beschriftung::NurWort => {
+                    p.galley(
+                        Pos2::new(
+                            rect.center().x - galley.size().x * 0.5,
+                            rect.center().y - galley.size().y * 0.5,
+                        ),
+                        galley,
+                        schrift,
+                    );
+                }
+                // Weder noch: nur das Bild. Der Name bleibt im Tooltip und im
+                // zugänglichen Namen.
+                Beschriftung::NurIcon => {
+                    icon.bild(kante, schrift).paint_at(
+                        ui,
+                        Rect::from_center_size(rect.center(), Vec2::splat(kante)),
+                    );
+                }
+                Beschriftung::Nichts => {}
+            }
         }
     }
     if response.has_focus() {
@@ -1318,5 +1373,38 @@ mod tests {
         assert_eq!(thema_icon(Thema::Hell), Icon::Sonne);
         assert_eq!(thema_icon(Thema::Dunkel), Icon::Mond);
         assert_eq!(thema_icon(Thema::Mono), Icon::Kontrast);
+    }
+
+    /// Der FILTER-Knopf im Kanalzug: bei 1920 px ist der Zug rund 122 px
+    /// breit, der halbe Knopf also 55 px – „FILTER“ passt ohne Bild. Im
+    /// schmalsten Zug (100 px, halber Knopf 44 px) passt nur noch das Bild,
+    /// aber nie beides. Nichts darf über den Rand laufen.
+    #[test]
+    fn beschriftung_folgt_dem_platz() {
+        let wort = 38.0; // „FILTER“ in 13 px fett, gemessen
+        let kante = 10.4; // 0,8 × Schriftgröße
+        let luecke = 4.0;
+        assert_eq!(
+            beschriftung(120.0, wort, kante, luecke),
+            Beschriftung::IconUndWort
+        );
+        assert_eq!(
+            beschriftung(47.0, wort, kante, luecke),
+            Beschriftung::NurWort
+        );
+        assert_eq!(
+            beschriftung(36.0, wort, kante, luecke),
+            Beschriftung::NurIcon
+        );
+        assert_eq!(beschriftung(8.0, wort, kante, luecke), Beschriftung::Nichts);
+        // Grenzen: genau passend ist noch „passt“.
+        assert_eq!(
+            beschriftung(wort + kante + luecke, wort, kante, luecke),
+            Beschriftung::IconUndWort
+        );
+        assert_eq!(
+            beschriftung(wort, wort, kante, luecke),
+            Beschriftung::NurWort
+        );
     }
 }
