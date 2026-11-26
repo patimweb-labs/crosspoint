@@ -31,8 +31,29 @@ Erledigt:
 - [x] **Filterkette am Kanalzug** (ADR 0011): dieselbe Kette wie an B1–B3, aber
       vor dem Fader; Presets tragen sie als `filter` am Streifen.
 
+## Stand 2026-11-26 (Härtung)
+
+Geprüft, mit Nachweis – keine Aufgaben, sondern Feststellungen:
+
+- [x] **Audio-Pfad panikfrei**: kein `unwrap`/`expect` in `process`,
+      `reconfigure`, `dsp.rs`, `aec.rs`, `agc.rs`. Keine Sperre im Callback:
+      die Anzeigenamen liegen in einem `Mutex`, der Audio-Thread liest ihn
+      nicht.
+- [x] **Keine Allokation im Callback**: `crates/core/tests/allokation.rs` grün,
+      auch mit den elf Filterblöcken aus ADR 0011.
+- [x] **Netz nur lokal als Vorgabe**: HTTP auf `127.0.0.1`, OSC auf
+      `127.0.0.1:9000`. VBAN-Empfang bindet `0.0.0.0` – Netzwerk-Audio von
+      einem anderen Rechner ist der Zweck; ab Werk aus, ohne Anmeldung (LAN).
+- [x] `unsafe` nur an den FFI-Rändern: `pw.rs`, `tape_io.rs`, `lauf.rs`,
+      `engine.rs` (Port-Zeiger im Callback), `lib.rs`.
+- [x] kein `TODO`/`FIXME` im Code; offene Punkte stehen in dieser Datei.
+
 Offen:
 
+- [ ] **Kern und Fenster trennen** (ADR 0012, Vorschlag): Modell-Crate,
+      Traits für Geräte/Ablage/Betrieb. Ziel: `crates/fenster` hat kein
+      `pipewire`/`jack` mehr im Baum – prüfbar mit
+      `cargo tree -p crosspoint-fenster`.
 - [ ] **Web-Fernbedienung an die Kette anpassen**: `web/index.html` zeigt am
       Kanalzug noch EQ/COMP/GATE/NR, die Engine lehnt sie ab. Die Kette am Kanal
       (`/api/set` mit `ziel:strip`, `param:lc` …) ist dort noch nicht bedienbar.
