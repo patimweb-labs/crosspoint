@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/patimweb-labs/crosspoint/compare/v2.1.0...v2.2.0) (2026-11-26)
+
+
+### Features
+
+* Filterkette am Kanalzug (ADR 0011) ([#27](https://github.com/patimweb-labs/crosspoint/issues/27)) ([776aef6](https://github.com/patimweb-labs/crosspoint/commit/776aef675a983d85c65ea263c1df282c7dce2f2f))
+
 ## [2.1.0](https://github.com/patimweb-labs/crosspoint/compare/v2.0.0...v2.1.0) (2026-11-24)
 
 

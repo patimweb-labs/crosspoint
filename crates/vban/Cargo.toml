@@ -1,6 +1,6 @@
 [package]
 name = "vban"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 description = "VBAN over UDP: Header, Audio-Frames und UDP-Sender/-Empfaenger (nur std)"
 license = "MIT"
