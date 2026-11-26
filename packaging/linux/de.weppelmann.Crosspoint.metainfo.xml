@@ -30,7 +30,7 @@
     <!-- release-please schreibt die Version des neuesten Eintrags
          (extra-files, xpath); das Datum setzt packaging/linux/metainfo.py
          aus CHANGELOG.md. Aeltere Eintraege bleiben stehen. -->
-    <release version="2.2.0" date="2026-11-21"/>
+    <release version="2.2.1" date="2026-11-21"/>
     <release version="0.1.0" date="2026-10-28"/>
   </releases>
 </component>

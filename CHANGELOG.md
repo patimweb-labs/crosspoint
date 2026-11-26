@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/patimweb-labs/crosspoint/compare/v2.2.0...v2.2.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **fenster:** FILTER-Knopf im Kanalzug läuft nicht mehr über ([#29](https://github.com/patimweb-labs/crosspoint/issues/29)) ([97b88ed](https://github.com/patimweb-labs/crosspoint/commit/97b88ed91c8d7a5146f35cd7a6920e93d7ffa69a))
+
 ## [2.2.0](https://github.com/patimweb-labs/crosspoint/compare/v2.1.0...v2.2.0) (2026-11-26)
 
 
