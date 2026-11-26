@@ -558,8 +558,14 @@ fn strip_get(s: &StripParam, param: &str) -> Option<f32> {
         "solo" => flag(s.solo.load(Relaxed)),
         "mono" => flag(s.mono.load(Relaxed)),
         _ => {
-            let bus: usize = param.strip_prefix("send")?.parse().ok()?;
-            return s.sends.get(bus).map(fget);
+            if let Some(bus) = param
+                .strip_prefix("send")
+                .and_then(|r| r.parse::<usize>().ok())
+            {
+                return s.sends.get(bus).map(fget);
+            }
+            // Filterkette des Kanalzugs (ADR 0011).
+            return crate::engine::filter_get(&s.filter, param);
         }
     })
 }

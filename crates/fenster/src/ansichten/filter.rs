@@ -23,7 +23,7 @@ use crosspoint::BUS_NAMES;
 use crate::bausteine::{self, Art};
 use crate::geraete::{self, Eintrag};
 use crate::logik::{self, Kern, PEGEL_SEGMENTE};
-use crate::modell::{Aktion, Aufklapp, Geraete, Oberflaeche, Ziel};
+use crate::modell::{Aktion, Aufklapp, Geraete, Oberflaeche, Pegel, Ziel};
 use crate::thema::{self, Farben};
 
 fn setzen(ziel: Ziel, param: &str, wert: f32) -> Aktion {
@@ -45,8 +45,13 @@ fn schalter_wert(an: bool) -> f32 {
 // ---------------------------------------------------------------- Maße ----
 
 /// Unter dem Titel: was gefiltert wird und in welcher Reihenfolge.
-const KETTE: &str = "Eingänge und A1–A5 tragen das Rohsignal · Kette: LC · ECHO · NR · GATE \
-· COMP · AGC · LIMITER · DUCK · PTT";
+const KETTE_BUS: &str = "Kette am Bus hinter der Summe: LC · ECHO · NR · GATE · COMP · AGC \
+· LIMITER · DUCK · PTT";
+
+/// Am Kanalzug steht dieselbe Kette, aber vor dem Fader und damit vor dem
+/// Routing (ADR 0011) – das ist der Unterschied, den man hören kann.
+const KETTE_KANAL: &str = "Kette am Kanalzug vor dem Fader: LC · ECHO · NR · GATE · COMP · AGC · \
+LIMITER · DUCK · PTT";
 
 /// Breite des Modals: höchstens vier Spalten. Schmaler wird es nicht, weil
 /// eine Reglerzeile (Beschriftung, Schieber, Wert) sonst nicht mehr lesbar ist.
@@ -176,10 +181,9 @@ fn spalten_masse(ui: &Ui) -> (f32, f32) {
 
 /// Das Modal zeichnen, wenn eines offen ist.
 pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut Vec<Aktion>) {
-    let Some(Aufklapp::Filter(bus)) = o.offen else {
+    let Some(Aufklapp::Filter(ziel)) = o.offen else {
         return;
     };
-    let ziel = Ziel::Bus(bus);
     let Some(fw) = logik::filter_von(&k.params, ziel, o.master_bus) else {
         // Ein Bus ohne Filter (A1–A5): es gibt nichts zu zeigen. Der Zustand
         // wird zurückgesetzt, damit das Modal nicht „offen, aber leer“ bleibt.
@@ -189,7 +193,6 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
     let karten = Karten {
         f,
         o,
-        bus,
         ziel,
         fw,
         // Kartenbreite, Spalten und die Zahl der gezeigten Geräte setzt
@@ -206,11 +209,16 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
     // Titel ohne Dopplung: „FILTER · B1“, mit eigenem Namen „FILTER · B1 · Discord“.
     let titel = format!(
         "FILTER · {}{}",
-        BUS_NAMES[bus],
+        logik::vorgabe_name(ziel, o.master_bus),
         logik::eigener_name(ziel, o, k)
             .map(|n| format!(" · {n}"))
             .unwrap_or_default()
     );
+    let kette = if matches!(ziel, Ziel::Kanal(_)) {
+        KETTE_KANAL
+    } else {
+        KETTE_BUS
+    };
     // Das Modal nutzt die Breite des Fensters, bleibt aber bei vier Spalten
     // stehen – sonst würden die Karten breiter als nötig.
     let breite = (ctx.content_rect().width() - 2.0 * thema::SPACE_4).min(MODAL_BREITE);
@@ -218,13 +226,13 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
     let antwort = bausteine::dialog_rahmen(
         ctx,
         f,
-        egui::Id::unique(("filter-modal", bus)),
+        egui::Id::unique(("filter-modal", Pegel::index(ziel))),
         &titel,
         breite,
         |ui| {
             ui.spacing_mut().interact_size.y = ZEILE;
             ui.add(
-                Label::new(bausteine::text(f, KETTE, false, true).size(thema::FONT_SIZE_SM))
+                Label::new(bausteine::text(f, kette, false, true).size(thema::FONT_SIZE_SM))
                     .truncate(),
             );
             // `breite` ist schon die Innenbreite des Rahmens (der Rand des
@@ -242,7 +250,7 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
                 },
                 ..karten
             };
-            pegelzeile(ui, f, k, bus, innen, karten.spalten);
+            pegelzeile(ui, f, k, ziel, o.master_bus, innen, karten.spalten);
             raster(ui, f, &karten, innen, fensterhoehe, a);
         },
     );
@@ -256,8 +264,16 @@ pub fn modal(ctx: &egui::Context, f: &Farben, o: &Oberflaeche, k: &Kern, a: &mut
 /// und Wert. Die Hälften tragen dieselben Spalten wie die Karten und stehen
 /// auf denselben Kanten – der Balken reicht von der Beschriftung bis an die
 /// Wertspalte, der Wert endet unter den Werten der Karten.
-fn pegelzeile(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize, breite: f32, spalten: Spalten) {
-    let (roh, nachher) = logik::filter_pegel(&k.params, bus);
+fn pegelzeile(
+    ui: &mut Ui,
+    f: &Farben,
+    k: &Kern,
+    ziel: Ziel,
+    master_bus: usize,
+    breite: f32,
+    spalten: Spalten,
+) {
+    let (roh, nachher) = logik::filter_pegel(&k.params, ziel, master_bus);
     // Die Zeile steht auf den Innenkanten der Karten: links und rechts ein
     // Kartenrand, dazwischen zwei Hälften und eine Lücke.
     let innen = (breite - 2.0 * thema::SPACE_2).max(spalten.label + spalten.wert);
@@ -312,7 +328,6 @@ fn pegelzeile(ui: &mut Ui, f: &Farben, k: &Kern, bus: usize, breite: f32, spalte
 struct Karten<'a> {
     f: &'a Farben,
     o: &'a Oberflaeche,
-    bus: usize,
     ziel: Ziel,
     fw: logik::FilterWerte,
     breite: f32,
@@ -1110,7 +1125,7 @@ fn duck(ui: &mut Ui, k: &Karten, a: &mut Vec<Aktion>) {
         let l = label_zelle(ui, f, spalten.label, wort::ZIELBUS);
         // Die Auswahl nimmt die ganze Reglerspalte ein – so breit wie die
         // Schieber darunter.
-        egui::ComboBox::from_id_salt(("duck_ziel", k.bus))
+        egui::ComboBox::from_id_salt(("duck_ziel", Pegel::index(k.ziel)))
             .width(spalten.regler)
             .selected_text(BUS_NAMES[fw.duck_ziel])
             .show_ui(ui, |ui| {

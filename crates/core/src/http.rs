@@ -624,6 +624,7 @@ fn route(zustand: &Zustand, method: &str, path: &str, body: &str) -> Antwort {
 ///
 /// Ältere Presets mit Filtern an den Streifen (EQ, Comp, Gate, NR …) laden
 /// weiter – diese Felder gibt es nicht mehr, `Params::set` lehnt sie ab.
+/// Die Filterkette selbst steht seit ADR 0011 auch am Streifen (`filter`).
 pub fn apply_preset(params: &Arc<Params>, v: &Value) {
     let zahl = |x: &Value| match x {
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
@@ -643,6 +644,15 @@ pub fn apply_preset(params: &Arc<Params>, v: &Value) {
                 for (b, sv) in sends.iter().enumerate() {
                     if let Some(x) = sv.as_f64() {
                         params.set("strip", i, &format!("send{b}"), x as f32);
+                    }
+                }
+            }
+            // Filter am Kanalzug (ADR 0011); alte Presets haben den Schlüssel
+            // nicht, dann bleibt die Kette aus.
+            if let Some(f) = s.get("filter") {
+                for key in crate::engine::FILTER_PARAMS {
+                    if let Some(x) = f.get(key).and_then(zahl) {
+                        params.set("strip", i, key, x);
                     }
                 }
             }

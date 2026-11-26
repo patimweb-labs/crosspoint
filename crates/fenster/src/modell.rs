@@ -70,8 +70,9 @@ impl Dialog {
 pub enum Aufklapp {
     /// Trim und Delay des Master-Busses (Popup am Knopf).
     TrimDelay,
-    /// Modal „FILTER“ eines virtuellen Busses (B1–B3).
-    Filter(usize),
+    /// Modal „FILTER“ eines Zugs: Kanalzug (seit ADR 0011) oder virtueller
+    /// Bus (B1–B3). Der Master zeigt die Kette seines gewählten Busses.
+    Filter(Ziel),
 }
 
 /// Laufende Umbenennung eines Zugs.

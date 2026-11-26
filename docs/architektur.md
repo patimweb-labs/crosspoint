@@ -35,8 +35,10 @@ Zustand doppelt geführt wird. Gezählt am aktuellen Stand:
    Fernbedienung/Tests       MIDI über MIDIMonster   Netzwerk-Audio
 ```
 
-Signalweg (ADR 0002/0006): Eingänge und Hardware-Busse tragen das Rohsignal;
-die Filterkette sitzt nur an den virtuellen Bussen B1–B3 – Low-Cut,
+Signalweg (ADR 0002/0006/0011): Eingänge und Hardware-Busse tragen das
+Rohsignal, solange kein Filter eingeschaltet ist. Die Filterkette sitzt an jedem
+Kanalzug (vor dem Fader und damit vor dem Routing) und an den virtuellen Bussen
+B1–B3 (hinter der Summe) – Low-Cut,
 Echounterdrückung (`crates/core/src/aec.rs`, AEC3 aus `sonora`),
 Rauschunterdrückung (dieselbe Instanz), Noise Gate, Kompressor und Limiter
 (`crates/core/src/dsp.rs`), AGC (`crates/core/src/agc.rs`, AGC2 aus `sonora`),
