@@ -1,6 +1,6 @@
 [package]
 name = "crosspoint-schnittstelle"
-version = "2.2.0"
+version = "2.2.2"
 edition = "2021"
 description = "Crosspoint: Naht zwischen Fenster und Kern (Geräte, Ablage, Betrieb, Bedienhände) – ADR 0012"
 

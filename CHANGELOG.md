@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.2](https://github.com/patimweb-labs/crosspoint/compare/v2.2.1...v2.2.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* **fenster:** Start neben der eigenen Steuer-API (Pult blieb zu) ([#34](https://github.com/patimweb-labs/crosspoint/issues/34)) ([2679eb4](https://github.com/patimweb-labs/crosspoint/commit/2679eb475d133dd45709c18c52c021e70b750232))
+
 ## [2.2.1](https://github.com/patimweb-labs/crosspoint/compare/v2.2.0...v2.2.1) (2026-11-26)
 
 
