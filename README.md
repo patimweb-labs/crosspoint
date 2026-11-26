@@ -37,13 +37,14 @@ Programme als Mikrofon auswählen – Discord, OBS, Zoom.
 *und* B1 ist der Normalfall: auf A1 hört man es selbst, auf B1 geht es in die
 bearbeitete Fassung.
 
-**Filter.** Sie sitzen an den virtuellen Bussen B1–B3, also dort, wo das Signal
-zu anderen Programmen oder in eine Aufnahme geht. Eingänge und A1–A5 tragen das
-Rohsignal. Zur Verfügung stehen Low-Cut, Echounterdrückung (rechnet den Ton
-heraus, den die Boxen spielen und das Mikrofon wieder aufnimmt),
-Rauschunterdrückung, Noise Gate, Kompressor mit Limiter, AGC, Ducking und
-Push-to-Talk. Der Knopf **FILTER** am Bus öffnet sie; acht Lämpchen zeigen, was
-gerade an ist.
+**Filter.** Es gibt sie an zwei Stellen, mit denselben Reglern: am **Kanalzug**,
+also direkt hinter dem Eingang und vor dem Fader, und am **virtuellen Bus**
+B1–B3, also dort, wo das Signal zu anderen Programmen oder in eine Aufnahme
+geht. Ohne eingeschalteten Filter ist beides das Rohsignal, und A1–A5 tragen es
+immer. Zur Verfügung stehen Low-Cut, Echounterdrückung (rechnet den Ton heraus,
+den die Boxen spielen und das Mikrofon wieder aufnimmt), Rauschunterdrückung,
+Noise Gate, Kompressor mit Limiter, AGC, Ducking und Push-to-Talk. Der Knopf
+**FILTER** im Zug öffnet sie; acht Lämpchen zeigen, was gerade an ist.
 
 Fader, Pan, Mono und Stummschaltung gibt es wie an einem Pult, inklusive einer
 Master-Reihe, die einen der acht Busse bedient.

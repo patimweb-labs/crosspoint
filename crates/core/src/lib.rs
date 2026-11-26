@@ -7,6 +7,10 @@
 //! Aufbau, wie im Original belegt:
 //!   Streifen 1..8  ->  Gate -> Denoiser -> 6-Band-EQ -> Compressor -> Pitch
 //!                  ->  Sends (R, D, FX1, FX2) + Routing-Matrix auf 8 Busse
+//!
+//! Was davon heute gilt, steht in den ADRs: das Rohsignal an den Eingängen
+//! (0002), die Filterkette an den virtuellen Bussen (0006) und seit 0011 auch
+//! am Kanalzug.
 //!   Busse A1..A5 (Hardware) / B1..B3 (virtuell)
 //!                  ->  EQ -> Trim/Delay pro Kanal -> Limiter -> Ausgang
 //!

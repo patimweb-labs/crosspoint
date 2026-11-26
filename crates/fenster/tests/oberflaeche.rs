@@ -197,19 +197,26 @@ fn mute_und_routing_schreiben_in_den_kern() {
     // Full HD: alles muss ohne Scrollen erreichbar sein (B3 ganz rechts).
     let mut h = harness(f, (1920.0, 1080.0));
     h.run_steps(4);
-    // Kein Kanal hat Filterknöpfe; FILTER gibt es nur an B1..B3, die alten
-    // Popups für GATE und ECHO nicht mehr.
+    // Jeder Zug hat einen FILTER-Knopf: acht Kanäle, drei virtuelle Busse,
+    // dazu der Master. Die alten Popups für GATE und ECHO gibt es nicht mehr.
     assert!(h.query_by_label("EQ").is_none());
     assert!(h.query_by_label("NR").is_none());
     assert!(h.query_by_label("GATE").is_none());
     assert!(h.query_by_label("ECHO").is_none());
-    assert_eq!(h.get_all_by_label("FILTER").count(), 3);
+    // (Der Master zeigt den Knopf seines Busses – bei A1 gibt es keinen Filter.)
+    for ziel in ["FILTER HW In 1", "FILTER B1"] {
+        assert_eq!(
+            h.get_all_by_label(ziel).count(),
+            1,
+            "{ziel} fehlt oder doppelt"
+        );
+    }
     // Erstes M = Kanal 1.
     h.get_all_by_label("M").next().expect("M").click();
     h.run_steps(2);
     assert!(params.strips[0].mute.load(Relaxed));
     // FILTER an B1 öffnet das Modal; dort schaltet das Kürzel GATE den Filter.
-    h.get_all_by_label("FILTER").next().expect("FILTER").click();
+    h.get_by_label("FILTER B1").click();
     h.run_steps(3);
     assert!(
         h.query_by_label("FILTER · B1 · Discord").is_some(),
@@ -236,6 +243,37 @@ fn mute_und_routing_schreiben_in_den_kern() {
 }
 
 #[test]
+fn filter_knopf_am_kanal_oeffnet_das_modal() {
+    use crosspoint_fenster::modell::{Aufklapp, Ziel};
+    let (f, p) = beispiel(Thema::Dunkel);
+    let mut h = harness(f, (1920.0, 1080.0));
+    h.run_steps(4);
+    // Jeder Kanalzug hat seinen eigenen FILTER-Knopf (ADR 0011); der
+    // zugängliche Name nennt den Zug, sonst wären es acht gleiche.
+    assert!(h.query_by_label_contains("FILTER · HW In 1").is_none());
+    h.get_by_label("FILTER HW In 1").click();
+    h.run_steps(3);
+    assert_eq!(h.state().o.offen, Some(Aufklapp::Filter(Ziel::Kanal(0))));
+    assert!(
+        h.query_by_label("FILTER · HW In 1 · Mikro").is_some(),
+        "Modal des Kanalzugs fehlt"
+    );
+    // Der Schalter im Modal schreibt in den Kanalzug – nicht in einen Bus.
+    h.get_by_label("LC").click();
+    h.run_steps(2);
+    assert!(p.strips[0].filter.lc.on.load(Relaxed), "LC am Kanal aus");
+    for b in 0..crosspoint::BUSES {
+        assert!(
+            !p.buses[b]
+                .filter
+                .as_ref()
+                .is_some_and(|f| f.lc.on.load(Relaxed)),
+            "LC an Bus {b} mitgeschaltet"
+        );
+    }
+}
+
+#[test]
 fn hand_ueber_klickbarem_pfeil_sonst() {
     let (f, _) = beispiel(Thema::Dunkel);
     let mut h = harness(f, (1920.0, 1080.0));
@@ -244,7 +282,7 @@ fn hand_ueber_klickbarem_pfeil_sonst() {
         h.run_steps(2);
         h.output().platform_output.cursor_icon
     };
-    for name in ["M", "FILTER", "PRESETS", "A1"] {
+    for name in ["M", "FILTER B1", "PRESETS", "A1"] {
         h.get_all_by_label(name).next().expect(name).hover();
         assert_eq!(zeiger(&mut h), egui::CursorIcon::PointingHand, "{name}");
     }
@@ -255,17 +293,18 @@ fn hand_ueber_klickbarem_pfeil_sonst() {
 #[test]
 fn filter_modal_waehlt_echo_geraete_und_schaltet_filter() {
     use crosspoint_fenster::logik::filter_werte;
-    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    use crosspoint_fenster::modell::{Aktion, Aufklapp, Ziel};
     let (f, p) = beispiel(Thema::Dunkel);
     let mut h = harness(f, (1920.0, 1800.0));
     h.run_steps(4);
     // Rechtsklick auf FILTER öffnet dasselbe Modal wie der Linksklick.
-    h.get_all_by_label("FILTER")
-        .next()
-        .expect("FILTER")
-        .click_secondary();
+    h.get_by_label("FILTER B1").click_secondary();
     h.run_steps(3);
-    assert_eq!(h.state().o.offen, Some(Aufklapp::Filter(5)));
+    assert_eq!(
+        h.state().o.offen,
+        Some(Aufklapp::Filter(Ziel::Bus(5))),
+        "Rechtsklick öffnet das Modal von B1"
+    );
     assert!(h.query_by_label("FILTER · B1 · Discord").is_some());
     assert!(h.query_by_label("ECHO · ECHOUNTERDRÜCKUNG").is_some());
     assert!(h
@@ -365,7 +404,7 @@ fn keine_scrollleisten_bei_mindestgroesse() {
         "Mikro Fader dB",
         "MAS A1 Fader dB",
         "Filteranzeige B1",
-        "FILTER",
+        "FILTER B1",
         "A1",
         "B3",
         "PRESETS",
@@ -468,7 +507,9 @@ fn bilder_in_allen_themes() {
             params.buses[5].roh.store(0.4f32.to_bits(), Relaxed);
             params.buses[5].level.store(0.12f32.to_bits(), Relaxed);
             f.ausfuehren(crosspoint_fenster::modell::Aktion::Aufklappen(Some(
-                crosspoint_fenster::modell::Aufklapp::Filter(5),
+                crosspoint_fenster::modell::Aufklapp::Filter(
+                    crosspoint_fenster::modell::Ziel::Bus(5),
+                ),
             )));
             let mut h = harness(f, (breite, hoehe));
             h.run_steps(6);
@@ -754,7 +795,7 @@ fn dialoge_passen_ins_fenster() {
 /// Öffnet das FILTER-Modal an B1 (mit ein paar Filtern an) und gibt das
 /// Fenster samt Kern zurück.
 fn filter_offen(thema: Thema) -> (Fenster, Arc<Params>) {
-    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    use crosspoint_fenster::modell::{Aktion, Aufklapp, Ziel};
     let (mut f, params) = beispiel(thema);
     for (k, v) in [
         ("lc", 1.0),
@@ -767,7 +808,7 @@ fn filter_offen(thema: Thema) -> (Fenster, Arc<Params>) {
     ] {
         params.set("bus", 5, k, v);
     }
-    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(5))));
+    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(Ziel::Bus(5)))));
     (f, params)
 }
 
@@ -799,7 +840,9 @@ fn jeder_dialog_hat_dasselbe_schliessen_x() {
         }),
         ("FILTER · B1 · Discord", |f| {
             f.ausfuehren(Aktion::Aufklappen(Some(
-                crosspoint_fenster::modell::Aufklapp::Filter(5),
+                crosspoint_fenster::modell::Aufklapp::Filter(
+                    crosspoint_fenster::modell::Ziel::Bus(5),
+                ),
             )))
         }),
     ];
@@ -1158,11 +1201,11 @@ fn filter_karten_haben_buendige_spalten() {
 /// gefüllt wird der Schalter nach demselben Wert.)
 #[test]
 fn filter_schalter_melden_an_und_aus() {
-    use crosspoint_fenster::modell::{Aktion, Aufklapp};
+    use crosspoint_fenster::modell::{Aktion, Aufklapp, Ziel};
     use egui::accesskit::Toggled;
     use egui_kittest::kittest::NodeT;
     let (mut f, _) = beispiel(Thema::Dunkel);
-    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(5))));
+    f.ausfuehren(Aktion::Aufklappen(Some(Aufklapp::Filter(Ziel::Bus(5)))));
     let mut h = harness(f, (1920.0, 1080.0));
     h.run_steps(6);
     for name in [

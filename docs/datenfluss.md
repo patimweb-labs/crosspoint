@@ -65,7 +65,12 @@ flowchart LR
    später (10 ms Rahmen + 9 ms AEC3); ist die Referenz still, geht das Mikrofon
    unverändert und nur verzögert durch.
 
-## „Die Filterkette an B1“ (ADR 0006)
+## „Die Filterkette am Kanal und an B1“ (ADR 0006, ADR 0011)
+
+Dieselbe Kette, zwei Orte: am Kanalzug zwischen Mono und Fader, am virtuellen
+Bus hinter der Summe. Am Kanal stehen davor nur Eingang und Mono, danach
+Fader/Pan und die Sends; der Spitzenwert davor ist `StripParam::roh` („ROH“ im
+Modal). Die Schritte unten gelten für beide.
 
 Ein Block, ein Sample, ein Bus – in dieser Reihenfolge
 (`EngineDsp::process`, Nummern im Code):

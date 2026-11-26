@@ -1,6 +1,7 @@
 # 0002 – Rohsignal an den Eingängen, Filter nur an den virtuellen Ausgängen
 
 Stand: 2026-11-21 · entschieden · **teilweise abgelöst durch [ADR 0005](0005-echounterdrueckung-mit-aec3.md)**
+und [ADR 0011](0011-filter-am-kanalzug.md)
 (Punkte 3 und 4: nicht mehr der eigene Filter, und die Referenz kommt vom
 Ausgabegerät statt vom Ausgang eines Hardware-Busses)
 
@@ -24,6 +25,9 @@ Noise Gate und einen Filter, der den Systemsound rausrechnet."
 2. **B1–B3 haben einen `AusgangsFilter`** (`Option` im `BusParam`, nur virtuelle
    Busse): Echounterdrückung, dann Noise Gate. `Params::set` lehnt `gate`/`aec`
    an A1–A5 ab.
+   → *erweitert*: seit ADR 0011 hat auch jeder Kanalzug diese Kette – als
+   zuschaltbarer Weg vor dem Fader. Rohsignal bleibt die Vorgabe; A1–A5 bleiben
+   filterlos.
 3. **Echounterdrückung in Rust** (`crates/core/src/aec.rs`): partitionierter
    adaptiver Filter im Frequenzbereich (Block 128, FFT 256, 96 Partitionen =
    256 ms), NLMS je Bin, zwei Filter (Hintergrund lernt, Vordergrund gibt aus)

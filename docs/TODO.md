@@ -28,8 +28,14 @@ Erledigt:
       COMP + Limiter, AGC, DUCK, PTT, in einem FILTER-Modal statt acht Knöpfen
       (ADR 0006). `aec_ns` schaltet jetzt NR, alte Presets laden weiter.
 
+- [x] **Filterkette am Kanalzug** (ADR 0011): dieselbe Kette wie an B1–B3, aber
+      vor dem Fader; Presets tragen sie als `filter` am Streifen.
+
 Offen:
 
+- [ ] **Web-Fernbedienung an die Kette anpassen**: `web/index.html` zeigt am
+      Kanalzug noch EQ/COMP/GATE/NR, die Engine lehnt sie ab. Die Kette am Kanal
+      (`/api/set` mit `ziel:strip`, `param:lc` …) ist dort noch nicht bedienbar.
 - [ ] **Cheat aus ADR 0009, abzubauen:** die ECHO-Karte im FILTER-Modal zeigt
       höchstens sieben lokale Ausgabegeräte und darunter „… n weitere Geräte“
       (der Rest nur im Tooltip). Grund: kein Scrollen (ADR 0007) und eine

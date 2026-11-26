@@ -200,7 +200,24 @@ fn inhalt(
             if knopf(ui, platz(0, 1, 2), "S", solo, Art::Solo).clicked() {
                 a.push(setzen(ziel, "solo", schalter_wert(!solo)));
             }
-            if knopf(ui, platz(1, 0, 1), "MONO", werte.mono, Art::Tief).clicked() {
+            // Seit ADR 0011 hat auch der Kanalzug eine Filterkette: FILTER links,
+            // MONO rechts daneben, darunter die Lämpchenreihe.
+            if let Some(fw) = filter {
+                filter_knopf(
+                    ui,
+                    f,
+                    platz(1, 0, 2),
+                    Rect::from_min_size(Pos2::new(links, lampen_y), Vec2::new(breite, LAEMPCHEN)),
+                    ziel,
+                    o,
+                    k,
+                    fw,
+                    a,
+                );
+                if knopf(ui, platz(1, 1, 2), "MONO", werte.mono, Art::Tief).clicked() {
+                    a.push(setzen(ziel, "mono", schalter_wert(!werte.mono)));
+                }
+            } else if knopf(ui, platz(1, 0, 1), "MONO", werte.mono, Art::Tief).clicked() {
                 a.push(setzen(ziel, "mono", schalter_wert(!werte.mono)));
             }
         }
@@ -216,6 +233,7 @@ fn inhalt(
                     Rect::from_min_size(Pos2::new(links, lampen_y), Vec2::new(breite, LAEMPCHEN)),
                     ziel,
                     o,
+                    k,
                     fw,
                     a,
                 );
@@ -247,6 +265,7 @@ fn inhalt(
                         ),
                         ziel,
                         o,
+                        k,
                         fw,
                         a,
                     );
@@ -264,7 +283,8 @@ fn inhalt(
     }
 }
 
-/// FILTER-Knopf und Lämpchenreihe eines virtuellen Busses.
+/// FILTER-Knopf und Lämpchenreihe eines Zugs (Kanalzug, virtueller Bus oder
+/// Master daran).
 ///
 /// Links- wie Rechtsklick öffnen das FILTER-Modal; dort stehen Schalter und
 /// Regler. Der Knopf selbst schaltet nichts – er zeigt nur, ob etwas an ist.
@@ -276,10 +296,12 @@ fn filter_knopf(
     lampen: Rect,
     ziel: Ziel,
     o: &Oberflaeche,
+    k: &Kern,
     fw: FilterWerte,
     a: &mut Vec<Aktion>,
 ) {
-    let bus = logik::bus_von(ziel, o.master_bus).unwrap_or(ERSTER_VIRTUELLER);
+    let name = logik::vorgabe_name(ziel, o.master_bus);
+    let anzeige = logik::name(ziel, o, k);
     let stand = fw.stand();
     let antwort = ui
         .scope_builder(UiBuilder::new().max_rect(knopf), |ui| {
@@ -294,19 +316,23 @@ fn filter_knopf(
             )
         })
         .inner
-        .on_hover_text(format!("Filter von {} · {stand}", BUS_NAMES[bus]));
+        .on_hover_text(format!("Filter von {} · {stand}", anzeige));
+    // Der zugängliche Name nennt den Zug: „FILTER“ allein stünde an acht
+    // Kanalzügen und drei Bussen und wäre am Screenreader nicht zu
+    // unterscheiden. Der sichtbare Text bleibt „FILTER“.
+    antwort.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::Button,
+            true,
+            fw.irgendwas_an(),
+            format!("FILTER {name}"),
+        )
+    });
     if antwort.clicked() || antwort.secondary_clicked() {
-        a.push(Aktion::Aufklappen(Some(Aufklapp::Filter(bus))));
+        a.push(Aktion::Aufklappen(Some(Aufklapp::Filter(ziel))));
     }
     ui.scope_builder(UiBuilder::new().max_rect(lampen), |ui| {
-        bausteine::laempchen(
-            ui,
-            f,
-            lampen.size(),
-            BUS_NAMES[bus],
-            &fw.laempchen(),
-            &stand,
-        );
+        bausteine::laempchen(ui, f, lampen.size(), &name, &fw.laempchen(), &stand);
     });
 }
 

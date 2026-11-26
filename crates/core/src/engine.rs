@@ -427,6 +427,11 @@ pub struct StripParam {
     pub solo: AtomicBool,
     pub mono: AtomicBool,
     pub sends: [AtomicU32; BUSES],
+    /// Filter des Kanalzugs (ADR 0011): dieselbe Kette wie an B1–B3, aber
+    /// zwischen Eingang und Fader – also **vor** dem Routing.
+    pub filter: AusgangsFilter,
+    /// Pegel nach Mono und **vor** der Filterkette („roh“ im FILTER-Modal).
+    pub roh: AtomicU32,
     pub level: AtomicU32,
     /// Frei wählbarer Name (`/api/set` mit `param:label`); leer = Vorgabename.
     pub label: Mutex<String>,
@@ -443,6 +448,8 @@ impl StripParam {
             solo: AtomicBool::new(false),
             mono: AtomicBool::new(false),
             sends,
+            filter: AusgangsFilter::new(),
+            roh: AtomicU32::new(0f32.to_bits()),
             level: AtomicU32::new(0f32.to_bits()),
             label: Mutex::new(String::new()),
         }
@@ -624,6 +631,7 @@ impl Params {
                     ("solo", Value::Bool(s.solo.load(Relaxed))),
                     ("mono", Value::Bool(s.mono.load(Relaxed))),
                     ("sends", Value::Arr(sends)),
+                    ("filter", s.filter.to_json()),
                 ])
             })
             .collect();
@@ -713,8 +721,9 @@ fn set_strip(s: &StripParam, param: &str, v: f32) -> bool {
                     fset(a, v.clamp(0.0, 2.0));
                     true
                 }
-                None => false,
-            }
+                // Kein `send`: die Filterkette des Kanalzugs (ADR 0011).
+                None => s.filter.set(param, v),
+            };
         }
     }
     true
@@ -738,7 +747,7 @@ fn set_bus(b: &BusParam, param: &str, v: f32) -> bool {
             fset(&b.delay_ms[0], v.clamp(0.0, 2000.0));
             fset(&b.delay_ms[1], v.clamp(0.0, 2000.0));
         }
-        // Filter gibt es nur an virtuellen Bussen.
+        // Filter gibt es an den virtuellen Bussen; A1–A5 nicht (ADR 0002).
         _ => return b.filter.as_ref().is_some_and(|f| f.set(param, v)),
     }
     true
@@ -792,7 +801,7 @@ pub struct Io {
     pub echo_ref: [*const f32; 2],
 }
 
-/// Filterzustand eines virtuellen Busses (beide Kanäle).
+/// Filterzustand eines Zugs – Kanalzug oder virtueller Bus (beide Kanäle).
 struct FilterDsp {
     gate: [Gate; 2],
     aec: [Echounterdruecker; 2],
@@ -828,15 +837,198 @@ struct FilterDsp {
     duck_tiefe: f32,
     /// Ist der Bus durch PTT stumm (`ptt` an, `ptt_offen` aus)?
     ptt_stumm: bool,
-    /// Pegel dieses Busses **nach den Filtern**: laufender und voriger Block.
+    /// Pegel dieses Zuges **nach den Filtern**: laufender und voriger Block.
     pegel_jetzt: f32,
     pegel_alt: f32,
+}
+
+impl FilterDsp {
+    /// Die Puffer entstehen hier, außerhalb des Callbacks (AEC3 und AGC2
+    /// allokieren beim Bauen).
+    fn neu(abtastrate: u32) -> FilterDsp {
+        FilterDsp {
+            gate: [Gate::default(); 2],
+            aec: [
+                Echounterdruecker::neu(abtastrate),
+                Echounterdruecker::neu(abtastrate),
+            ],
+            lc: [Biquad::default(); 2],
+            comp: [Kompressor::default(); 2],
+            agc: [Pegelregler::neu(abtastrate), Pegelregler::neu(abtastrate)],
+            limiter: [Limiter::default(); 2],
+            duck: Ducker::default(),
+            aec_war_an: false,
+            echo_an: false,
+            nr_an: false,
+            filter_war: (false, false, 0),
+            agc_war_an: false,
+            lc_freq: 0.0,
+            duck_on: false,
+            duck_ziel: 0,
+            duck_schwelle: -30.0,
+            duck_tiefe: db_to_lin(-12.0),
+            ptt_stumm: false,
+            pegel_jetzt: 0.0,
+            pegel_alt: 0.0,
+        }
+    }
+
+    /// Schalter und Werte eines Filterblocks übernehmen. Wird je Block einmal
+    /// gerufen: exp/sin in den Reglern kosten so nur einmal je Block.
+    fn reconfigure(&mut self, fp: &AusgangsFilter, sr: f32) {
+        let g = &fp.gate;
+        for gate in self.gate.iter_mut() {
+            gate.enabled = g.on.load(Relaxed);
+            gate.set_tiefe(fget(&g.tiefe));
+            gate.set_times(fget(&g.attack), fget(&g.hold), fget(&g.release), sr);
+        }
+        // Low-Cut: die Koeffizienten nur neu rechnen, wenn sich die Frequenz
+        // (oder der Filter) geändert hat.
+        let lc_an = fp.lc.on.load(Relaxed);
+        let lc_freq = fget(&fp.lc.freq);
+        if lc_an && (lc_freq != self.lc_freq || self.lc_freq == 0.0) {
+            for ch in self.lc.iter_mut() {
+                ch.setze_hochpass(lc_freq, sr);
+            }
+            self.lc_freq = lc_freq;
+        }
+        // Kompressor und Limiter: Werte je Block setzen (exp/sin kosten hier
+        // nur einmal je Block, nicht je Sample).
+        let c = &fp.comp;
+        for ch in self.comp.iter_mut() {
+            ch.enabled = c.on.load(Relaxed);
+            ch.set_werte(
+                fget(&c.schwelle),
+                fget(&c.ratio),
+                fget(&c.attack),
+                fget(&c.release),
+                fget(&c.makeup),
+                sr,
+            );
+        }
+        let limiter_an = c.limiter.load(Relaxed);
+        for ch in self.limiter.iter_mut() {
+            ch.enabled = limiter_an;
+            ch.set_werte(fget(&c.decke), 50.0, sr);
+        }
+        // AGC: Zielpegel je Block, Sammler beim Einschalten leeren.
+        let agc_an = fp.agc.on.load(Relaxed);
+        let ziel = fget(&fp.agc.ziel);
+        for ch in self.agc.iter_mut() {
+            ch.set_ziel(ziel);
+            if agc_an && !self.agc_war_an {
+                ch.reset();
+            }
+        }
+        self.agc_war_an = agc_an;
+        // Ducking: Schalter und Werte je Block in den Zustand.
+        let d = &fp.duck;
+        self.duck_on = d.on.load(Relaxed);
+        self.duck_ziel = (d.ziel.load(Relaxed) as usize).min(BUSES - 1);
+        self.duck_schwelle = fget(&d.schwelle);
+        self.duck_tiefe = db_to_lin(-fget(&d.tiefe));
+        self.duck.set_times(fget(&d.attack), fget(&d.release), sr);
+        if !self.duck_on {
+            self.duck.reset();
+        }
+        // PTT: stumm, solange nicht gedrückt.
+        self.ptt_stumm = fp.ptt.on.load(Relaxed) && !fp.ptt.offen.load(Relaxed);
+        // ECHO und NR teilen sich eine `sonora`-Instanz; nur bei Änderung
+        // umschalten (das allokiert, siehe `Echounterdruecker::set_filter`).
+        let echo = fp.aec.load(Relaxed);
+        let nr = fp.nr.on.load(Relaxed);
+        let stufe = fp.nr.stufe.load(Relaxed);
+        let stand = (echo, nr, stufe);
+        if stand != self.filter_war {
+            self.aec
+                .iter_mut()
+                .for_each(|a| a.set_filter(echo, nr, stufe as u8));
+            self.filter_war = stand;
+        }
+        if echo && !self.aec_war_an {
+            self.aec.iter_mut().for_each(Echounterdruecker::reset);
+        }
+        self.aec_war_an = echo;
+        self.echo_an = echo;
+        self.nr_an = nr;
+    }
+
+    /// Die Kette (1)–(7) auf ein Stereopaar.
+    ///
+    /// Reihenfolge und Begründung: ADR 0006. Sie ist für Kanalzüge und
+    /// virtuelle Busse dieselbe (ADR 0011); nur der Ort in der Signalkette
+    /// unterscheidet sich – am Kanalzug steht sie vor dem Fader, am Bus hinter
+    /// der Summe.
+    // Der Audio-Pfad liest je Index zwei parallele Felder (Signal und
+    // Filterzustand); Iteratoren ueber eines davon machen ihn nicht lesbarer.
+    #[allow(clippy::needless_range_loop)]
+    fn kette(&mut self, fp: &AusgangsFilter, mut v: [f32; 2], referenz: f32) -> [f32; 2] {
+        // (1) Low-Cut vor der Echounterdrückung.
+        if fp.lc.on.load(Relaxed) {
+            for ch in 0..2 {
+                v[ch] = self.lc[ch].process(v[ch]);
+            }
+        }
+        // (2) ECHO und NR (eine `sonora`-Instanz, beide Schalter).
+        if self.echo_an || self.nr_an {
+            for ch in 0..2 {
+                v[ch] = self.aec[ch].process(v[ch], referenz);
+            }
+        }
+        // (3) Gate: gekoppelter Detektor, beide Kanäle öffnen gemeinsam.
+        let key = v[0].abs().max(v[1].abs());
+        let schwelle = fget(&fp.gate.threshold);
+        for ch in 0..2 {
+            v[ch] = self.gate[ch].process_key(v[ch], key, schwelle);
+        }
+        // (4) Kompressor, gleicher gekoppelter Detektor.
+        let key = v[0].abs().max(v[1].abs());
+        for ch in 0..2 {
+            v[ch] = self.comp[ch].process_key(v[ch], key);
+        }
+        // (5) AGC2 (nur wenn an: der Sammler kostet 10 ms Latenz).
+        if self.agc_war_an {
+            for ch in 0..2 {
+                v[ch] = self.agc[ch].process(v[ch]);
+            }
+        }
+        // (6) Limiter mit Decke.
+        let key = v[0].abs().max(v[1].abs());
+        for ch in 0..2 {
+            v[ch] = self.limiter[ch].process_key(v[ch], key);
+        }
+        // Pegel nach den Filtern: Grundlage fürs Ducking im nächsten Block.
+        self.pegel_jetzt = self.pegel_jetzt.max(v[0].abs().max(v[1].abs()));
+        // (7) PTT: stumm, solange die Taste nicht gedrückt ist.
+        if self.ptt_stumm {
+            v = [0.0, 0.0];
+        }
+        v
+    }
+
+    /// Beitrag dieses Zuges zum Ducking: der Pegel aus dem **vorigen** Block
+    /// (eine Blocklänge Verzögerung, siehe ADR 0006) entscheidet, wie weit der
+    /// Zielbus abgesenkt wird.
+    fn duckung(&mut self, att: &mut [f32; BUSES]) {
+        if !self.duck_on {
+            return;
+        }
+        let ueber = lin_to_db(self.pegel_alt) > self.duck_schwelle;
+        let g = self.duck.step(ueber, self.duck_tiefe);
+        let ziel = &mut att[self.duck_ziel];
+        if g < *ziel {
+            *ziel = g;
+        }
+    }
 }
 
 /// DSP-Zustand, ausschließlich vom Audio-Thread benutzt.
 pub struct EngineDsp {
     bus_delay: [[DelayLine; 2]; BUSES],
+    /// Filter der virtuellen Busse (Index `bi - ERSTER_VIRTUELLER`).
     filter: Vec<FilterDsp>,
+    /// Filter der Kanalzüge (Index = Streifen).
+    kanal_filter: Vec<FilterDsp>,
     pub blocks: u64,
 }
 
@@ -850,33 +1042,8 @@ impl EngineDsp {
             }),
             // Die Filter bringen ihre Puffer mit; sie entstehen hier,
             // außerhalb des Callbacks (AEC3 und AGC2 allokieren beim Bauen).
-            filter: (0..VIRTUELLE)
-                .map(|_| FilterDsp {
-                    gate: [Gate::default(); 2],
-                    aec: [
-                        Echounterdruecker::neu(abtastrate),
-                        Echounterdruecker::neu(abtastrate),
-                    ],
-                    lc: [Biquad::default(); 2],
-                    comp: [Kompressor::default(); 2],
-                    agc: [Pegelregler::neu(abtastrate), Pegelregler::neu(abtastrate)],
-                    limiter: [Limiter::default(); 2],
-                    duck: Ducker::default(),
-                    aec_war_an: false,
-                    echo_an: false,
-                    nr_an: false,
-                    filter_war: (false, false, 0),
-                    agc_war_an: false,
-                    lc_freq: 0.0,
-                    duck_on: false,
-                    duck_ziel: 0,
-                    duck_schwelle: -30.0,
-                    duck_tiefe: db_to_lin(-12.0),
-                    ptt_stumm: false,
-                    pegel_jetzt: 0.0,
-                    pegel_alt: 0.0,
-                })
-                .collect(),
+            filter: (0..VIRTUELLE).map(|_| FilterDsp::neu(abtastrate)).collect(),
+            kanal_filter: (0..STRIPS).map(|_| FilterDsp::neu(abtastrate)).collect(),
             blocks: 0,
         }
     }
@@ -891,81 +1058,11 @@ impl EngineDsp {
             let Some(fp) = p.buses[ERSTER_VIRTUELLER + v].filter.as_ref() else {
                 continue;
             };
-            let g = &fp.gate;
-            for gate in f.gate.iter_mut() {
-                gate.enabled = g.on.load(Relaxed);
-                gate.set_tiefe(fget(&g.tiefe));
-                gate.set_times(fget(&g.attack), fget(&g.hold), fget(&g.release), sr);
-            }
-            // Low-Cut: die Koeffizienten nur neu rechnen, wenn sich die
-            // Frequenz (oder der Filter) geändert hat.
-            let lc_an = fp.lc.on.load(Relaxed);
-            let lc_freq = fget(&fp.lc.freq);
-            if lc_an && (lc_freq != f.lc_freq || f.lc_freq == 0.0) {
-                for ch in f.lc.iter_mut() {
-                    ch.setze_hochpass(lc_freq, sr);
-                }
-                f.lc_freq = lc_freq;
-            }
-            // Kompressor und Limiter: Werte je Block setzen (exp/sin kosten
-            // hier nur einmal je Block, nicht je Sample).
-            let c = &fp.comp;
-            for ch in f.comp.iter_mut() {
-                ch.enabled = c.on.load(Relaxed);
-                ch.set_werte(
-                    fget(&c.schwelle),
-                    fget(&c.ratio),
-                    fget(&c.attack),
-                    fget(&c.release),
-                    fget(&c.makeup),
-                    sr,
-                );
-            }
-            let limiter_an = c.limiter.load(Relaxed);
-            for ch in f.limiter.iter_mut() {
-                ch.enabled = limiter_an;
-                ch.set_werte(fget(&c.decke), 50.0, sr);
-            }
-            // AGC: Zielpegel je Block, Sammler beim Einschalten leeren.
-            let agc_an = fp.agc.on.load(Relaxed);
-            let ziel = fget(&fp.agc.ziel);
-            for ch in f.agc.iter_mut() {
-                ch.set_ziel(ziel);
-                if agc_an && !f.agc_war_an {
-                    ch.reset();
-                }
-            }
-            f.agc_war_an = agc_an;
-            // Ducking: Schalter und Werte je Block in den Zustand.
-            let d = &fp.duck;
-            f.duck_on = d.on.load(Relaxed);
-            f.duck_ziel = (d.ziel.load(Relaxed) as usize).min(BUSES - 1);
-            f.duck_schwelle = fget(&d.schwelle);
-            f.duck_tiefe = db_to_lin(-fget(&d.tiefe));
-            f.duck.set_times(fget(&d.attack), fget(&d.release), sr);
-            if !f.duck_on {
-                f.duck.reset();
-            }
-            // PTT: stumm, solange nicht gedrückt.
-            f.ptt_stumm = fp.ptt.on.load(Relaxed) && !fp.ptt.offen.load(Relaxed);
-            // ECHO und NR teilen sich eine `sonora`-Instanz; nur bei Änderung
-            // umschalten (das allokiert, siehe `Echounterdruecker::set_filter`).
-            let echo = fp.aec.load(Relaxed);
-            let nr = fp.nr.on.load(Relaxed);
-            let stufe = fp.nr.stufe.load(Relaxed);
-            let stand = (echo, nr, stufe);
-            if stand != f.filter_war {
-                f.aec
-                    .iter_mut()
-                    .for_each(|a| a.set_filter(echo, nr, stufe as u8));
-                f.filter_war = stand;
-            }
-            if echo && !f.aec_war_an {
-                f.aec.iter_mut().for_each(Echounterdruecker::reset);
-            }
-            f.aec_war_an = echo;
-            f.echo_an = echo;
-            f.nr_an = nr;
+            f.reconfigure(fp, sr);
+        }
+        // Dieselbe Kette für die Kanalzüge (ADR 0011).
+        for (i, f) in self.kanal_filter.iter_mut().enumerate() {
+            f.reconfigure(&p.strips[i].filter, sr);
         }
     }
 
@@ -991,28 +1088,48 @@ impl EngineDsp {
             f.pegel_alt = f.pegel_jetzt;
             f.pegel_jetzt = 0.0;
         }
+        for f in self.kanal_filter.iter_mut() {
+            f.pegel_alt = f.pegel_jetzt;
+            f.pegel_jetzt = 0.0;
+        }
 
         let any_solo = p.strips.iter().any(|s| s.solo.load(Relaxed));
         let mut peak_s = [0f32; STRIPS];
+        let mut peak_roh_s = [0f32; STRIPS];
         let mut peak_b = [0f32; BUSES];
         let mut peak_roh = [0f32; BUSES];
 
         for n in 0..frames {
             // Absenkung je Bus für dieses Sample: der stärkste Ducking-Wunsch
             // gilt. Die Hüllkurve läuft je Sample, damit die Absenkung weich
-            // kommt und geht (Attack/Release aus den Parametern).
+            // kommt und geht (Attack/Release aus den Parametern). Quellen sind
+            // die virtuellen Busse und – seit ADR 0011 – die Kanalzüge.
             let mut duck_att = [1.0f32; BUSES];
             for f in self.filter.iter_mut() {
-                if !f.duck_on {
-                    continue;
-                }
-                let ueber = lin_to_db(f.pegel_alt) > f.duck_schwelle;
-                let g = f.duck.step(ueber, f.duck_tiefe);
-                let ziel = &mut duck_att[f.duck_ziel];
-                if g < *ziel {
-                    *ziel = g;
-                }
+                f.duckung(&mut duck_att);
             }
+            for f in self.kanal_filter.iter_mut() {
+                f.duckung(&mut duck_att);
+            }
+
+            // Die Referenz der Echounterdrückung kommt von den Ports
+            // `echo_ref_L/R` – dort hängen die Monitore der gewählten
+            // Ausgabegeräte, unabhängig davon, welcher Bus sie spielt. Sie
+            // steht vor beiden Schleifen, weil Kanalzüge sie seit ADR 0011
+            // ebenso brauchen wie die Busse.
+            let referenz = if io.echo_ref[0].is_null() {
+                0.0
+            } else {
+                // SAFETY: wie oben, `frames` Samples je Port. Ein Kanal reicht
+                // als Referenz; bei Stereo wird gemittelt.
+                unsafe {
+                    if io.echo_ref[1].is_null() {
+                        *io.echo_ref[0].add(n)
+                    } else {
+                        0.5 * (*io.echo_ref[0].add(n) + *io.echo_ref[1].add(n))
+                    }
+                }
+            };
 
             let mut acc = [[0f32; 2]; BUSES];
             for si in 0..STRIPS {
@@ -1030,6 +1147,12 @@ impl EngineDsp {
                     let m = 0.5 * (s[0] + s[1]);
                     s = [m, m];
                 }
+                // „Roh“ fürs FILTER-Modal: nach Mono, vor der Kette.
+                peak_roh_s[si] = peak_roh_s[si].max(s[0].abs().max(s[1].abs()));
+                // Die Kette des Kanalzugs (ADR 0011): vor dem Fader, damit der
+                // Fader die Limiter-Decke nicht aushebelt – dieselbe
+                // Begründung wie beim Bus.
+                s = self.kanal_filter[si].kette(&sp.filter, s, referenz);
                 let g = [1.0 - pan, 1.0 + pan];
                 let l = s[0] * gain * g[0].min(1.0);
                 let r = s[1] * gain * g[1].min(1.0);
@@ -1043,22 +1166,7 @@ impl EngineDsp {
                 }
             }
 
-            // Alle Busse in einer Reihe; die Referenz der Echounterdrückung
-            // kommt von den Ports `echo_ref_L/R` – dort hängen die Monitore der
-            // gewählten Ausgabegeräte, unabhängig davon, welcher Bus sie spielt.
-            let referenz = if io.echo_ref[0].is_null() {
-                0.0
-            } else {
-                // SAFETY: wie oben, `frames` Samples je Port. Ein Kanal reicht
-                // als Referenz; bei Stereo wird gemittelt.
-                unsafe {
-                    if io.echo_ref[1].is_null() {
-                        *io.echo_ref[0].add(n)
-                    } else {
-                        0.5 * (*io.echo_ref[0].add(n) + *io.echo_ref[1].add(n))
-                    }
-                }
-            };
+            // Alle Busse in einer Reihe.
             for bi in 0..BUSES {
                 let bp = &p.buses[bi];
                 let mut v = acc[bi];
@@ -1072,47 +1180,7 @@ impl EngineDsp {
                 peak_roh[bi] = peak_roh[bi].max(v[0].abs().max(v[1].abs()));
                 if let Some(fp) = bp.filter.as_ref() {
                     let f = &mut self.filter[bi - ERSTER_VIRTUELLER];
-                    // (1) Low-Cut vor der Echounterdrückung.
-                    if fp.lc.on.load(Relaxed) {
-                        for ch in 0..2 {
-                            v[ch] = f.lc[ch].process(v[ch]);
-                        }
-                    }
-                    // (2) ECHO und NR (eine `sonora`-Instanz, beide Schalter).
-                    if f.echo_an || f.nr_an {
-                        for ch in 0..2 {
-                            v[ch] = f.aec[ch].process(v[ch], referenz);
-                        }
-                    }
-                    // (3) Gate: gekoppelter Detektor, beide Kanäle öffnen gemeinsam.
-                    let key = v[0].abs().max(v[1].abs());
-                    let schwelle = fget(&fp.gate.threshold);
-                    for ch in 0..2 {
-                        v[ch] = f.gate[ch].process_key(v[ch], key, schwelle);
-                    }
-                    // (4) Kompressor, gleicher gekoppelter Detektor.
-                    let key = v[0].abs().max(v[1].abs());
-                    for ch in 0..2 {
-                        v[ch] = f.comp[ch].process_key(v[ch], key);
-                    }
-                    // (5) AGC2 (nur wenn an: der Sammler kostet 10 ms Latenz).
-                    if f.agc_war_an {
-                        for ch in 0..2 {
-                            v[ch] = f.agc[ch].process(v[ch]);
-                        }
-                    }
-                    // (6) Limiter mit Decke.
-                    let key = v[0].abs().max(v[1].abs());
-                    for ch in 0..2 {
-                        v[ch] = f.limiter[ch].process_key(v[ch], key);
-                    }
-                    // Pegel nach den Filtern: Grundlage fürs Ducking im
-                    // nächsten Block.
-                    f.pegel_jetzt = f.pegel_jetzt.max(v[0].abs().max(v[1].abs()));
-                    // (7) PTT: stumm, solange die Taste nicht gedrückt ist.
-                    if f.ptt_stumm {
-                        v = [0.0, 0.0];
-                    }
+                    v = f.kette(fp, v, referenz);
                 }
                 // (8) Ducking: dieser Bus wird von einem anderen abgesenkt.
                 let att = duck_att[bi];
@@ -1143,6 +1211,8 @@ impl EngineDsp {
         for si in 0..STRIPS {
             let old = fget(&p.strips[si].level);
             fset(&p.strips[si].level, peak_s[si].max(old * 0.72));
+            let old = fget(&p.strips[si].roh);
+            fset(&p.strips[si].roh, peak_roh_s[si].max(old * 0.72));
         }
         for bi in 0..BUSES {
             let old = fget(&p.buses[bi].level);
@@ -1558,11 +1628,82 @@ mod tests {
     }
 
     #[test]
-    fn streifen_kennen_keine_bearbeitung_mehr() {
+    fn streifen_nehmen_die_kette_sind_aber_keine_alte_bearbeitung() {
         let p = params();
-        for name in ["eq", "comp", "gate", "nr", "lowcut", "tk", "denoiser"] {
+        // Die Kette des alten Kanalzugs (EQ, Lowcut, TK, Denoiser) gibt es nicht
+        // mehr (ADR 0002, Punkt 5).
+        for name in ["eq", "lowcut", "tk", "denoiser"] {
             assert!(!p.set("strip", 0, name, 1.0), "{name} noch am Streifen");
         }
+        // `aec_ref` bleibt ein alter Name, der stillschweigend durchgeht
+        // (alte Presets), aber nichts mehr bewirkt.
+        assert!(p.set("strip", 0, "aec_ref", 4.0));
+        assert_eq!(filter_get(&p.strips[0].filter, "aec_ref"), None);
+        // Die Filterkette aus ADR 0006 hängt seit ADR 0011 auch am Kanalzug.
+        for name in FILTER_PARAMS {
+            assert!(p.set("strip", 0, name, 1.0), "{name} am Streifen");
+        }
+    }
+
+    #[test]
+    fn kette_am_kanal_wirkt_vor_dem_routing() {
+        let p = params();
+        let mut dsp = dsp_neu();
+        // Gate an HW In 1, Schwelle über dem Signal: der Zug ist zu, und weil
+        // die Kette vor dem Routing sitzt, kommt auch an A1 nichts an.
+        assert!(p.set("strip", 0, "gate", 1.0));
+        assert!(p.set("strip", 0, "gate_schwelle", -10.0));
+        assert!(p.set("strip", 0, "gate_tiefe", 60.0));
+        let mut buf = Buf::new(0.05, 64);
+        for _ in 0..200 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        assert!(buf.bus(0).abs() < 0.05 * 0.01, "A1 war {}", buf.bus(0));
+        // Der Pegel vor der Kette zeigt das Rohsignal weiter an.
+        let roh = fget(&p.strips[0].roh);
+        assert!(roh > 0.03, "roh war {roh}");
+        assert!(fget(&p.strips[0].level) < 0.01);
+    }
+
+    #[test]
+    fn kette_am_kanal_laesst_ohne_schalter_alles_durch() {
+        // Rohsignal ist die Vorgabe: ohne eingeschalteten Filter klingt der
+        // Kanalzug wie vor ADR 0011.
+        let p = params();
+        let mut dsp = dsp_neu();
+        let mut buf = Buf::new(0.2, 64);
+        for _ in 0..20 {
+            let io = buf.io();
+            dsp.process(&p, &io, 64);
+        }
+        assert!((buf.bus(0) - 0.2).abs() < 1e-6, "A1 war {}", buf.bus(0));
+    }
+
+    #[test]
+    fn filter_des_kanals_steht_im_preset_und_kommt_zurueck() {
+        let p = params();
+        assert!(p.set("strip", 2, "lc", 1.0));
+        assert!(p.set("strip", 2, "lc_freq", 120.0));
+        assert!(p.set("strip", 2, "comp", 1.0));
+        assert!(p.set("strip", 2, "comp_ratio", 4.0));
+        let bild = p.to_json();
+        let q = std::sync::Arc::new(params());
+        crate::http::apply_preset(&q, &bild);
+        let f = &q.strips[2].filter;
+        assert_eq!(filter_get(f, "lc"), Some(1.0));
+        assert_eq!(filter_get(f, "lc_freq"), Some(120.0));
+        assert_eq!(filter_get(f, "comp"), Some(1.0));
+        assert_eq!(filter_get(f, "comp_ratio"), Some(4.0));
+        // Ein Preset ohne Filterkette am Streifen schaltet sie nicht ein.
+        let r = std::sync::Arc::new(params());
+        crate::http::apply_preset(&r, &bild);
+        let alt =
+            crate::json::parse(r#"{"strips":[{"gain":-3,"eq":true,"comp":true}],"buses":[]}"#)
+                .expect("JSON");
+        crate::http::apply_preset(&r, &alt);
+        assert_eq!(filter_get(&r.strips[0].filter, "comp"), Some(0.0));
+        assert_eq!(fget(&r.strips[0].gain), -3.0);
     }
 
     #[test]

@@ -498,8 +498,8 @@ pub fn zug_werte(p: &Params, ziel: Ziel, master_bus: usize) -> ZugWerte {
     }
 }
 
-/// Filterstand eines virtuellen Busses – alles, was das FILTER-Modal zeigt
-/// und die Lämpchenreihe am Knopf zusammenfasst.
+/// Filterstand eines Zugs (Kanalzug oder virtueller Bus) – alles, was das
+/// FILTER-Modal zeigt und die Lämpchenreihe am Knopf zusammenfasst.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FilterWerte {
     pub gate: bool,
@@ -612,19 +612,35 @@ pub fn filter_werte(f: &AusgangsFilter) -> FilterWerte {
     }
 }
 
-/// Pegel der Bus-Summe **vor** den Filtern (linear) und der Bus-Pegel
-/// **nachher** (aus `Params`, wie die Pegelanzeige im Pult).
-pub fn filter_pegel(p: &Params, bus: usize) -> (f32, f32) {
-    match p.buses.get(bus) {
-        Some(b) => (fget(&b.roh), fget(&b.level)),
-        None => (0.0, 0.0),
+/// Pegel des Zugs **vor** den Filtern (linear) und danach (aus `Params`, wie
+/// die Pegelanzeige im Pult).
+///
+/// Am Kanalzug ist „vorher“ der Pegel nach Mono und vor der Kette, am Bus die
+/// Summe am Bus-Eingang.
+pub fn filter_pegel(p: &Params, ziel: Ziel, master_bus: usize) -> (f32, f32) {
+    match ziel {
+        Ziel::Kanal(i) => match p.strips.get(i) {
+            Some(s) => (fget(&s.roh), fget(&s.level)),
+            None => (0.0, 0.0),
+        },
+        Ziel::Bus(_) | Ziel::Master => match bus_von(ziel, master_bus).and_then(|b| p.buses.get(b))
+        {
+            Some(b) => (fget(&b.roh), fget(&b.level)),
+            None => (0.0, 0.0),
+        },
     }
 }
 
-/// Filter des Busses hinter einem Zug (nur virtuelle Busse haben einen).
+/// Filter des Zugs hinter einem Zug: jeder Kanalzug hat eine Kette, von den
+/// Bussen nur die virtuellen B1–B3 (ADR 0002, ADR 0011).
 pub fn filter_von(p: &Params, ziel: Ziel, master_bus: usize) -> Option<FilterWerte> {
-    let b = bus_von(ziel, master_bus)?;
-    p.buses[b].filter.as_ref().map(filter_werte)
+    match ziel {
+        Ziel::Kanal(i) => p.strips.get(i).map(|s| filter_werte(&s.filter)),
+        Ziel::Bus(_) | Ziel::Master => {
+            let b = bus_von(ziel, master_bus)?;
+            p.buses[b].filter.as_ref().map(filter_werte)
+        }
+    }
 }
 
 pub fn trim_delay(p: &Params, bus: usize) -> (f32, f32) {
@@ -810,7 +826,8 @@ pub fn kanal_mindestbreite() -> f32 {
 /// Mindesthöhe des Pults: der höchste Zug, bei dem die Skala noch lesbar ist.
 pub fn pult_mindesthoehe() -> f32 {
     let varianten = [
-        ZugMass::fuer(false, true),  // Kanal
+        ZugMass::fuer(true, true),   // Kanal mit Filterkette (ADR 0011)
+        ZugMass::fuer(false, true),  // Kanal ohne Filter (alter Stand)
         ZugMass::fuer(true, false),  // virtueller Bus (Lämpchen am FILTER)
         ZugMass::fuer(false, false), // Bus ohne Filter (Master an A1..A5)
     ];

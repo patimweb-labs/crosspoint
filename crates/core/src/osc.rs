@@ -509,8 +509,15 @@ pub fn lies(params: &Params, target: &str, index: usize, param: &str) -> Option<
                 "solo" => schalter(&s.solo),
                 "mono" => schalter(&s.mono),
                 anderes => {
-                    let n = anderes.strip_prefix("send")?.parse::<usize>().ok()?;
-                    zahl(s.sends.get(n)?)
+                    if let Some(n) = anderes
+                        .strip_prefix("send")
+                        .and_then(|r| r.parse::<usize>().ok())
+                    {
+                        zahl(s.sends.get(n)?)
+                    } else {
+                        // Filterkette des Kanalzugs (ADR 0011).
+                        crate::engine::filter_get(&s.filter, anderes)?
+                    }
                 }
             })
         }
