@@ -709,6 +709,18 @@ pub const ZUG_LAEMPCHEN: f32 = thema::FONT_SIZE_SM + thema::SPACE_2;
 /// Rahmenlinie eines Zugs (oben und unten je einmal).
 pub const ZUG_RAHMEN: f32 = thema::SIZE_BORDER;
 
+/// Wie viele Reihen Schalter ein Zug hat. Ein Kanalzug mit Filterkette hat
+/// eine mehr als die übrigen: M/S, MONO, FILTER (ADR 0011). „FILTER“ allein
+/// ist 54 px breit und passt in keinen halben Zug, also steht der Knopf auf
+/// einer eigenen Reihe.
+pub fn schalterreihen(filterbus: bool, kanal: bool) -> usize {
+    if filterbus && kanal {
+        3
+    } else {
+        2
+    }
+}
+
 /// Was ein Zug über und unter dem Fader braucht; den Rest der Höhe bekommt
 /// der Fader. `ansichten::zug` setzt die Zeilen damit untereinander, und
 /// [`pult_mindesthoehe`] rechnet daraus die Mindesthöhe des Fensters.
@@ -716,7 +728,7 @@ pub const ZUG_RAHMEN: f32 = thema::SIZE_BORDER;
 pub struct ZugMass {
     /// Pan (nur Kanäle, sonst 0); die Zuordnung steht neben dem Fader.
     pub kanal_teil: f32,
-    /// Zwei Reihen Schalter mit ihren Lücken.
+    /// Reihen Schalter mit ihren Lücken.
     pub schalter: f32,
     /// Lämpchenzeile der Filterbusse und des Masters daran (sonst 0).
     pub lampen: f32,
@@ -732,7 +744,7 @@ impl ZugMass {
             } else {
                 0.0
             },
-            schalter: 2.0 * (ZUG_REIHE + ZUG_RAND),
+            schalter: schalterreihen(filterbus, kanal) as f32 * (ZUG_REIHE + ZUG_RAND),
             lampen: if filterbus { ZUG_LAEMPCHEN } else { 0.0 },
         }
     }
