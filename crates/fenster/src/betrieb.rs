@@ -154,12 +154,11 @@ pub fn danach(
 /// unter Wayland und X11 gleich – ein Fenster *verstecken* kann winit unter
 /// Wayland nicht.
 pub fn starten(app_id: &str, version: &str, a: Args, kern: Arc<dyn Schnittstelle>) {
-    // Läuft schon eine Instanz, zeigt sie ihr Fenster – eine zweite Engine
-    // gäbe es sonst doppelt (gleicher Port, gleiche virtuelle Geräte).
-    if laufende_instanz_wecken(&a.listen, a.minimiert) {
-        eprintln!("crosspoint: läuft schon – Fenster der laufenden Instanz");
-        return;
-    }
+    // Hier **keine** Instanzprüfung: der Kern läuft bereits (ADR 0012, der
+    // Aufrufer baut ihn) und beantwortet `POST /api/fenster` auf `a.listen`
+    // selbst. [`laufende_instanz_wecken`] fände also die eigene Steuer-API,
+    // hielte sie für eine zweite Instanz und das Pult bliebe für immer zu.
+    // Die Prüfung gehört vor den Kern, nach `src/bin/crosspoint.rs`.
     // Tray nur beim minimierten Start (wie bisher). Nimmt niemand das Symbol
     // an, kommt das Fenster doch – sonst wäre das Pult unerreichbar.
     let tray = if a.minimiert {
